@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "bundle_id": "CONTROL_ENGINE_BUNDLE_V1",
+  "engine_repository": "market-predictions/control-engine",
+  "files": [
+    {
+      "module_id": "dashboard_timeline_v1",
+      "role": "implementation",
+      "path": "control_engine/timeline.py",
+      "git_blob_sha": "1a45a7581ad647be604497a4f4051f55580a8d5a"
+    },
+    {
+      "module_id": "dashboard_timeline_v1",
+      "role": "schema",
+      "path": "schemas/control_project_progress_event_v1.schema.json",
+      "git_blob_sha": "e09fc2b9046b47667fbeb16277113e4ceaeee6d2"
+    }
+  ],
+  "private_data_policy": "NO_PRIVATE_RUNTIME_STATE",
+  "consumer_ref_policy": "EXACT_COMMIT_SHA_ONLY"
+}
