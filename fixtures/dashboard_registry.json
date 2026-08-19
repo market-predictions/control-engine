@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "projects": [
+    {"project_id":"alpha","display_name":"Alpha","repository":"example/alpha","aliases":["a"],"color":"#112233"},
+    {"project_id":"beta","display_name":"Beta","repository":"example/beta","aliases":["b"],"color":"#445566"}
+  ]
+}
