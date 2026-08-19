@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -23,11 +25,32 @@ jobs:
       - name: Validate JSON contracts and fixtures
         run: |
           python -m json.tool ENGINE_MANIFEST.json >/dev/null
+          python -m json.tool ENGINE_BUNDLE_V1.json >/dev/null
           python -m json.tool schemas/control_project_progress_event_v1.schema.json >/dev/null
           python -m json.tool fixtures/dashboard_registry.json >/dev/null
           python -m json.tool fixtures/dashboard_events.json >/dev/null
+      - name: Validate manifest paths and bundle coverage
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('ENGINE_MANIFEST.json').read_text())
+          bundle = json.loads(Path(manifest['consumer_bundle']).read_text())
+          assert manifest['repository'] == 'market-predictions/control-engine'
+          assert manifest['consumer_binding'] == 'EXACT_40_CHAR_COMMIT_SHA_ONLY'
+          assert manifest['private_data_policy'] == 'NO_PRIVATE_RUNTIME_STATE'
+          bundled = {entry['path'] for entry in bundle['files']}
+          for module in manifest['modules']:
+              for key in ('implementation', 'schema'):
+                  path = module[key]
+                  assert Path(path).is_file(), path
+                  assert path in bundled, path
+          print('CONTROL_ENGINE_MANIFEST_BINDING=PASS')
+          PY
       - name: Compile engine
-        run: python -m py_compile control_engine/__init__.py control_engine/timeline.py
+        run: python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py
+      - name: Verify immutable consumer bundle
+        run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
       - name: Run regressions
         run: python -m pytest -q
       - name: Synthetic engine smoke

@@ -1,13 +1,14 @@
 {
   "schema_version": "1.0",
   "engine_id": "CONTROL_ENGINE",
-  "engine_version": "1.0.0",
+  "engine_version": "1.1.0",
   "repository": "market-predictions/control-engine",
   "public_boundary": "docs/PUBLIC_PRIVATE_BOUNDARY_V1.md",
+  "consumer_bundle": "ENGINE_BUNDLE_V1.json",
   "modules": [
     {
       "module_id": "dashboard_timeline_v1",
-      "implementation": "control_engine/dashboard_timeline_v1.py",
+      "implementation": "control_engine/timeline.py",
       "schema": "schemas/control_project_progress_event_v1.schema.json",
       "source_lineage": {
         "repository": "market-predictions/control-plane",
