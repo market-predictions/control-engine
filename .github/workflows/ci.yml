@@ -47,8 +47,10 @@ jobs:
                   assert path in bundled, path
           print('CONTROL_ENGINE_MANIFEST_BINDING=PASS')
           PY
-      - name: Compile engine
-        run: python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py
+      - name: Compile engine and actuator
+        run: |
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/scheduled_worker_a.py
+          bash -n scripts/scheduled_worker_a_v2.sh
       - name: Verify immutable consumer bundle
         run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
       - name: Run regressions
