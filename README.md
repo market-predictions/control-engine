@@ -2,6 +2,13 @@
 
 Public deterministic execution and CI engine for Control.
 
-This repository intentionally contains **no private Control runtime state**. Its purpose is to host generic deterministic compilers, validators, schemas, synthetic fixtures, and public GitHub Actions CI that can be consumed by the private `market-predictions/control-plane` through immutable commit-SHA pinning.
+This repository intentionally contains **no persisted private Control runtime state**. It hosts generic deterministic compilers, validators, schemas, synthetic fixtures and public GitHub Actions compute. The private `market-predictions/control-plane` remains the sole authoritative governance/state plane.
 
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V1.md` for the trust boundary.
+Two governed execution modes exist:
+
+1. deterministic public modules consumed through immutable commit-SHA pinning; and
+2. trusted default-branch actuator workflows that may transiently process private Control state in an ephemeral runner using least-privilege secrets, while persisting every authoritative transition only in the private Control state plane.
+
+Scheduled Worker A V2 is the first actuator of the second class. It restores lease/intake/claim liveness and executes at most one canonical A1 implementation/repair task per invocation. It never stores private state in this repository, public logs, artifacts or caches.
+
+See `docs/PUBLIC_PRIVATE_BOUNDARY_V1.md` and `docs/PRIVATE_RUNTIME_ACTUATOR_V1.md` for the trust and actuator contracts.
