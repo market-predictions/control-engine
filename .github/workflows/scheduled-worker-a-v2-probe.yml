@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - control/scheduled-worker-a-v2
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
