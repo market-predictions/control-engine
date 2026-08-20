@@ -8,7 +8,7 @@ CONTROL_RUNTIME_REF="control-runtime-state"
 CONTROL_CODE_REF="control/171-intake-queue-reconciliation-v1"
 CONTROL_CODE_SHA="ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"
 MAX_CAS_ATTEMPTS=3
-LEASE_MINUTES=60
+LEASE_MINUTES=75
 
 status() {
   printf 'SCHEDULED_WORKER_A_V2=%s\n' "$1"
@@ -121,8 +121,9 @@ persist_state_if_changed() {
   private_git -C "$STATE_DIR" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}" >/dev/null 2>&1
 }
 
-# Phase 1: recover expired leases, then reconcile all managed project intake.
-# This is the #171 liveness repair and deliberately occurs before A1 selection.
+# Phase 1: recover expired leases, resume stranded A-unavailable work, then
+# reconcile all managed project intake. This is the #171 liveness repair and
+# deliberately occurs before A1 selection.
 reconciled=false
 for cas_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
   reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
@@ -133,6 +134,13 @@ for cas_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
       --runs "$STATE_DIR/control/DISPATCH_RUNS.json" \
       >"$PRIVATE_TMP/reconcile.log" 2>&1; then
     fail_closed "FAIL_CLOSED_LEASE_RECONCILIATION"
+  fi
+  if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_a.py" resume-a-unavailable \
+      --code-dir "$CODE_DIR" \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      --output "$PRIVATE_TMP/resume-a.json" \
+      >"$PRIVATE_TMP/resume-a.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_A_UNAVAILABLE_RECONCILIATION"
   fi
   if ! python "$CODE_DIR/tools/control_project_intake_reconcile_v1.py" \
       --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
