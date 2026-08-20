@@ -1,0 +1,34 @@
+name: Scheduled Worker A V2 credential probe
+
+on:
+  push:
+    branches:
+      - control/scheduled-worker-a-v2
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report non-sensitive capability presence
+        env:
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ secrets.CONTROL_GITHUB_WRITE_TOKEN }}
+          CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
+          CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
+          CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          present() {
+            if [ -n "$2" ]; then
+              echo "$1=true"
+            else
+              echo "$1=false"
+            fi
+          }
+          present CONTROL_GITHUB_WRITE_TOKEN_PRESENT "${CONTROL_GITHUB_WRITE_TOKEN:-}"
+          present CONTROL_CLOUDFLARE_API_TOKEN_PRESENT "${CONTROL_CLOUDFLARE_API_TOKEN:-}"
+          present CONTROL_CLOUDFLARE_ACCOUNT_ID_PRESENT "${CONTROL_CLOUDFLARE_ACCOUNT_ID:-}"
+          present CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED_PRESENT "${CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED:-}"
