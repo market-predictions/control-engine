@@ -29,7 +29,8 @@ def _private_modules(code_dir: str | Path):
         sys.path.insert(0, root)
     parallel = importlib.import_module("tools.control_parallel_execution_v1")
     queue_mod = importlib.import_module("tools.control_queue_v1")
-    return parallel, queue_mod
+    dispatcher_state = importlib.import_module("dispatcher.state")
+    return parallel, queue_mod, dispatcher_state
 
 
 def _task(queue: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -39,8 +40,63 @@ def _task(queue: dict[str, Any], task_id: str) -> dict[str, Any]:
     return matches[0]
 
 
+def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> None:
+    """Resume only inactive A-role EXECUTION_UNAVAILABLE records.
+
+    This closes the historical liveness hole where unavailable A work remained
+    stranded forever because the planner did not invoke resume_unavailable().
+    Attempt-exhausted tasks deterministically become BLOCKED through the
+    canonical state helper rather than being retried indefinitely.
+    """
+    parallel, _, dispatcher_state = _private_modules(code_dir)
+    queue = _load(queue_path)
+    parallel.validate_parallel_queue(queue)
+    resumed: list[str] = []
+    blocked: list[str] = []
+
+    for task in queue.get("tasks", []):
+        if task.get("state") != "EXECUTION_UNAVAILABLE":
+            continue
+        if task.get("resume_state") not in {"IMPLEMENTATION_QUEUED", "REPAIR_QUEUED"}:
+            continue
+        if any(
+            task.get(field) is not None
+            for field in (
+                "active_run_id",
+                "active_role",
+                "active_worker_instance",
+                "claim_started_at",
+                "claim_expires_at",
+            )
+        ):
+            raise ActuatorContractError("unavailable A task still has active ownership")
+
+        before_state = task["state"]
+        updated = dispatcher_state.resume_unavailable(task)
+        if updated.get("state", "").endswith("_EXECUTING"):
+            raise ActuatorContractError("resume unexpectedly created an executing claim")
+        updated["active_run_id"] = None
+        updated["active_role"] = None
+        updated["active_worker_instance"] = None
+        updated["claim_started_at"] = None
+        updated["claim_expires_at"] = None
+        updated["resume_state"] = None
+        task.clear()
+        task.update(updated)
+        if task["state"] == "BLOCKED":
+            blocked.append(task["task_id"])
+        elif task["state"] != before_state:
+            resumed.append(task["task_id"])
+
+    parallel.validate_parallel_queue(queue)
+    if resumed or blocked:
+        Path(queue_path).write_text(json.dumps(queue, indent=2) + "\n", encoding="utf-8")
+    if output:
+        _write_private(output, {"resumed": resumed, "blocked": blocked})
+
+
 def select_a1(code_dir: str, queue_path: str, output: str) -> None:
-    parallel, queue_mod = _private_modules(code_dir)
+    parallel, queue_mod, _ = _private_modules(code_dir)
     queue = _load(queue_path)
     selected = parallel.select_task_for_instance(
         queue,
@@ -68,7 +124,7 @@ def assert_current_claim(
     task_id: str,
     output: str | None,
 ) -> None:
-    parallel, queue_mod = _private_modules(code_dir)
+    parallel, queue_mod, _ = _private_modules(code_dir)
     queue = _load(queue_path)
     task = _task(queue, task_id)
     if task.get("active_role") != queue_mod.ROLE_A:
@@ -104,7 +160,7 @@ def assert_current_claim(
 
 
 def assert_finalized(code_dir: str, queue_path: str, task_id: str, run_id: str) -> None:
-    parallel, _ = _private_modules(code_dir)
+    parallel, _, _ = _private_modules(code_dir)
     queue = _load(queue_path)
     parallel.validate_parallel_queue(queue)
     task = _task(queue, task_id)
@@ -116,7 +172,6 @@ def assert_finalized(code_dir: str, queue_path: str, task_id: str, run_id: str) 
         raise ActuatorContractError("finalized task still has active_worker_instance")
     if queue.get("principal_manual_relay_count") != 0 or task.get("principal_manual_relay_count") != 0:
         raise ActuatorContractError("principal_manual_relay_count changed from zero")
-    # The closed run is private evidence; only require exact identity to remain in the run ledger elsewhere.
     if not isinstance(run_id, str) or not run_id:
         raise ActuatorContractError("finalization run id missing")
 
@@ -134,6 +189,11 @@ def read_private_field(path: str, field: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Private-state helper for Scheduled Worker A V2")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    resume = sub.add_parser("resume-a-unavailable")
+    resume.add_argument("--code-dir", required=True)
+    resume.add_argument("--queue", required=True)
+    resume.add_argument("--output")
 
     select = sub.add_parser("select-a1")
     select.add_argument("--code-dir", required=True)
@@ -162,7 +222,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        if args.command == "select-a1":
+        if args.command == "resume-a-unavailable":
+            resume_a_unavailable(args.code_dir, args.queue, args.output)
+        elif args.command == "select-a1":
             select_a1(args.code_dir, args.queue, args.output)
         elif args.command == "assert-claim":
             assert_current_claim(args.code_dir, args.queue, args.task_id, args.output)
