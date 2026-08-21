@@ -5,8 +5,8 @@ umask 077
 PUBLIC_REPOSITORY="market-predictions/control-engine"
 CONTROL_PLANE_REPOSITORY="market-predictions/control-plane"
 CONTROL_RUNTIME_REF="control-runtime-state"
-CONTROL_CODE_REF="control/171-intake-queue-reconciliation-v1"
-CONTROL_CODE_SHA="ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"
+CONTROL_CODE_REF="recovery/187-policy-metadata-r1"
+CONTROL_CODE_SHA="62cf2a88edd8700c073e51274d331210c7a36900"
 MAX_CAS_ATTEMPTS=3
 LEASE_MINUTES=75
 
@@ -48,8 +48,6 @@ private_api() {
   GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" gh api "$@"
 }
 
-# Fetch private code at one immutable recovery SHA. The ref is transport only;
-# the exact SHA is authoritative and is verified before any private state read/write.
 mkdir -p "$CODE_DIR"
 git -C "$CODE_DIR" init -q
 git -C "$CODE_DIR" remote add origin "https://github.com/${CONTROL_PLANE_REPOSITORY}.git"
@@ -121,9 +119,6 @@ persist_state_if_changed() {
   private_git -C "$STATE_DIR" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}" >/dev/null 2>&1
 }
 
-# Phase 1: recover expired leases, resume stranded A-unavailable work, then
-# reconcile all managed project intake. This is the #171 liveness repair and
-# deliberately occurs before A1 selection.
 reconciled=false
 for cas_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
   reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
@@ -177,7 +172,6 @@ if [ "$reconciled" != true ]; then
   fail_closed "RUNTIME_CAS_CONFLICT_RECONCILE" 75
 fi
 
-# Phase 2: choose A1 by the canonical parallel resource/priority selector.
 reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
 SELECTION="$PRIVATE_TMP/selection.json"
 if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_a.py" select-a1 \
@@ -193,8 +187,6 @@ if [ "$selected" != "True" ]; then
   exit 0
 fi
 
-# Do not create an executing claim when the inference backend cannot run.
-# Reconciliation/materialization above is still useful and remains durable.
 if [ -z "${CONTROL_CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CONTROL_CLOUDFLARE_ACCOUNT_ID:-}" ]; then
   fail_closed "EXECUTION_UNAVAILABLE_IMPLEMENTATION_PROVIDER_CREDENTIAL" 78
 fi
@@ -211,15 +203,12 @@ if [ -z "$task_id" ] || [ -z "$target_repository" ] || [ -z "$work_branch" ] || 
   fail_closed "FAIL_CLOSED_A1_EXECUTION_BINDING_INVALID"
 fi
 if [ "$operation" = "PROJECT_INTEGRATION" ]; then
-  # Integration is deliberately not conflated with model-driven implementation.
-  # A separate exact-head deterministic integration executor remains required.
   fail_closed "EXECUTION_UNAVAILABLE_PROJECT_INTEGRATION_EXECUTOR" 78
 fi
 if [ "$operation" != "IMPLEMENTATION" ] && [ "$operation" != "REPAIR" ]; then
   fail_closed "FAIL_CLOSED_UNSUPPORTED_A1_OPERATION"
 fi
 
-# Phase 3: claim the exact preferred A1 item under a second exact CAS cycle.
 claimed=false
 CLAIM_BINDING="$PRIVATE_TMP/claim-binding.json"
 for cas_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
@@ -272,8 +261,6 @@ if [ "$claimed" != true ]; then
 fi
 run_id="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_a.py" field --file "$CLAIM_BINDING" --name run_id)"
 
-# Phase 4: prepare a credential-free target workspace. Branch creation and
-# publication use the private GitHub token only outside the model process.
 branch_head=""
 if branch_head="$(private_api "repos/${target_repository}/git/ref/heads/${work_branch}" --jq .object.sha 2>/dev/null)"; then
   :
@@ -308,7 +295,6 @@ cp "$CODE_DIR/dispatcher/inference_worker.py" "$PRIVATE_TMP/inference_worker.py"
 cp "$CODE_DIR/dispatcher/provider_policy.py" "$PRIVATE_TMP/provider_policy.py"
 cp "$CODE_DIR/control/INFERENCE_PROVIDER_POLICY_V1.md" "$PRIVATE_TMP/provider-policy.md"
 
-# The model process receives provider credentials but never the GitHub write token.
 set +e
 env -i \
   PATH="$PATH" \
@@ -366,9 +352,6 @@ if [ "$model_rc" -eq 0 ]; then
   fi
 fi
 
-# Phase 5: record/finalize against the exact still-current claim using a fresh
-# runtime snapshot and exact ref+queue-blob CAS. No private model output is sent
-# to public artifacts/logs.
 if [ "$model_rc" -eq 0 ] && [ "$publish_outcome" = "success" ] && [ -n "$candidate_sha" ]; then
   outcome="COMPLETED"
   finding=""
