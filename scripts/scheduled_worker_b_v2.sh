@@ -51,6 +51,13 @@ private_git() {
 private_api() {
   GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" gh api "$@"
 }
+connected_runtime() {
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+  GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
+  GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" \
+    python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" "$@"
+}
 
 fetch_code() {
   rm -rf "$CODE_DIR"
@@ -71,7 +78,6 @@ fetch_state() {
   git -C "$STATE_DIR" remote add origin "https://github.com/${CONTROL_PLANE_REPOSITORY}.git"
   git -C "$STATE_DIR" config user.name "control-scheduled-b-v2[bot]"
   git -C "$STATE_DIR" config user.email "control-scheduled-b-v2[bot]@users.noreply.github.com"
-  git -C "$STATE_DIR" config http.https://github.com/.extraheader "$AUTH_HEADER"
   private_git -C "$STATE_DIR" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}" >/dev/null 2>&1 || return 1
   git -C "$STATE_DIR" checkout --detach --quiet FETCH_HEAD
 }
@@ -197,7 +203,7 @@ selected_now="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" 
 task_now="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$SELECTION" --name task_id)"
 [ "$task_now" = "$task_id" ] || { status "IDLE_B1_SELECTION_MOVED"; exit 0; }
 
-if ! python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" claim \
+if ! connected_runtime claim \
     --runtime-root "$STATE_DIR" \
     --runtime-ref "$CONTROL_RUNTIME_REF" \
     --task-id "$task_id" \
@@ -355,7 +361,7 @@ if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-clai
   fail_closed "FAIL_CLOSED_B1_CLAIM_NOT_CURRENT_BEFORE_COMPLETE"
 fi
 
-if ! GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+if ! connected_runtime complete \
     --runtime-root "$STATE_DIR" \
     --runtime-ref "$CONTROL_RUNTIME_REF" \
     --github-repository "$CONTROL_PLANE_REPOSITORY" \
