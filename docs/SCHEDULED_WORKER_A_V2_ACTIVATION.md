@@ -4,70 +4,77 @@
 
 Scheduled Worker A V2 is integrated on public `main` and runs every ten minutes plus manual `workflow_dispatch`.
 
-The workflow is intentionally fail-closed until its private bridge/provider configuration exists in **`market-predictions/control-engine` → Settings → Secrets and variables → Actions**.
+The private GitHub bridge uses a dedicated GitHub App rather than a personal access token. The workflow creates a short-lived installation token on every trusted `main` run and GitHub revokes that token automatically at job completion.
 
 Do not place secret values in issues, pull requests, chat, repository files or workflow YAML.
 
-## Required Actions secrets
+## Required GitHub App configuration
 
-Create or expose these existing authorized credentials to `market-predictions/control-engine`:
+The GitHub App must be installed on every `market-predictions` repository Scheduled Worker A is authorized to access. For the initial #171 recovery this requires at minimum:
 
 ```text
-CONTROL_GITHUB_WRITE_TOKEN
-CONTROL_CLOUDFLARE_API_TOKEN
-CONTROL_CLOUDFLARE_ACCOUNT_ID
+control-engine
+control-plane
 ```
 
-### CONTROL_GITHUB_WRITE_TOKEN
-
-Use the existing Control cross-repository credential when it already has the intended least-privilege repository access. Otherwise create a dedicated fine-grained credential for the managed repositories Scheduled Worker A is allowed to mutate.
-
-It must be able to:
-
-- read/write the private `market-predictions/control-plane` repository, including `control-runtime-state`;
-- read/write target work branches only in repositories that are already within Control's implementation authority.
-
-Do not grant repository administration, Actions-secret administration, billing or organization administration merely for this worker.
-
-If the credential is an organization Actions secret already used by private Control, prefer adding `market-predictions/control-engine` to that secret's allowed repository set rather than duplicating the value.
-
-### Cloudflare provider credentials
-
-Expose the already-authorized FREE_FAIL_CLOSED implementation credentials under:
+The App installation must grant only the repository permissions needed by the actuator. The initial bridge requests:
 
 ```text
-CONTROL_CLOUDFLARE_API_TOKEN
-CONTROL_CLOUDFLARE_ACCOUNT_ID
+Contents: read/write
+Workflows: write
 ```
 
-No paid fallback or provider switch is implied by activation.
+The public repository's built-in `GITHUB_TOKEN` remains `contents: read` and is not private Control authority.
 
-## Required Actions variable
+## Required Actions variable and secret
 
-Create:
+In **`market-predictions/control-engine` → Settings → Secrets and variables → Actions** configure:
 
 ```text
+Repository variable:
+CONTROL_GITHUB_APP_ID=<numeric GitHub App ID>
+
+Repository secret:
+CONTROL_GITHUB_APP_PRIVATE_KEY=<complete PEM private key>
+```
+
+The pinned `actions/create-github-app-token` action accepts `app-id` for compatibility. Current upstream also supports and prefers Client ID; migration from App ID to Client ID is non-blocking and may be done separately after live recovery is proven.
+
+No personal access token is required. The legacy environment variable name `CONTROL_GITHUB_WRITE_TOKEN` remains only as an internal compatibility input to the existing shell actuator; at runtime its value is the one-hour GitHub App installation token.
+
+## Cloudflare provider configuration
+
+To proceed beyond deterministic queue reconciliation into actual IMPLEMENTATION/REPAIR execution, expose the already-authorized FREE_FAIL_CLOSED provider configuration:
+
+```text
+Repository secrets:
+CONTROL_CLOUDFLARE_API_TOKEN
+CONTROL_CLOUDFLARE_ACCOUNT_ID
+
+Repository variable:
 CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED=true
 ```
 
-Only set this to `true` while the configured account/provider route is actually authorized to operate under the existing FREE_FAIL_CLOSED policy.
+No paid fallback, new paid capacity or provider switch is implied by activation.
+
+The GitHub App bridge alone is sufficient for the initial deterministic #171 liveness repair because reconciliation/materialization occurs before the provider credential gate.
 
 ## Activation behavior
 
 No queue edit is required.
 
-After the configuration exists, either wait for the normal schedule or use **Actions → Scheduled Worker A V2 → Run workflow** once as acceleration.
+After the GitHub App configuration exists, either wait for the normal schedule or use **Actions → Scheduled Worker A V2 → Run workflow** once as acceleration.
 
 The first successful private-state cycle must produce canonical evidence, not just a green public job:
 
 1. expired `CONTROL-171-PR181-ADOPT` ownership is reconciled;
 2. valid H2/R3 intake materializes to exact `ASSURANCE_QUEUED`;
 3. no A ownership remains on #171;
-4. the preferred eligible A implementation/repair task is selected;
+4. if provider credentials are present, the preferred eligible A implementation/repair task is selected;
 5. a fresh canonical A1 claim is persisted/read back before inference;
 6. result/finalization is persisted ghost-free when execution completes.
 
-If provider credentials are absent but the GitHub bridge exists, the worker may still complete the deterministic reconcile/materialization phase, then stops before creating an A1 claim.
+If provider credentials are absent but the GitHub App bridge works, the worker must still complete deterministic reconcile/materialization, then stop before creating an A1 claim.
 
 ## Public-log expectations
 
@@ -84,4 +91,4 @@ Private queue/task payloads, prompts, model responses, credential values and run
 
 ## Verification
 
-Activation is not considered complete until the private canonical readback proves the expected state transition. Public Actions success alone is never Control authority.
+Activation is not considered complete until private canonical readback proves the expected state transition. Public Actions success alone is never Control authority.
