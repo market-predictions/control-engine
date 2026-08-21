@@ -207,19 +207,19 @@ def _select_integration(code_dir: Path, state_dir: Path) -> dict[str, Any] | Non
     return copy.deepcopy(selected)
 
 
-def _reconcile_once(token: str, code_dir: Path, state_dir: Path, workspace: Path, private_tmp: Path) -> None:
+def _reconcile_once(token: str, code_dir: Path, state_dir: Path, private_tmp: Path) -> None:
     from control_engine.scheduled_worker_a import resume_a_unavailable
-
-    allowed = {
-        "control/DISPATCH_QUEUE.json",
-        "control/DISPATCH_RUNS.json",
-    }
-    for path in (state_dir / "control" / "project-intake").glob("*.json"):
-        allowed.add(path.relative_to(state_dir).as_posix())
 
     for _ in range(MAX_CAS_ATTEMPTS):
         _reset_state(token, state_dir)
         observed = _identity(state_dir)
+        allowed = {
+            "control/DISPATCH_QUEUE.json",
+            "control/DISPATCH_RUNS.json",
+        }
+        for path in (state_dir / "control" / "project-intake").glob("*.json"):
+            allowed.add(path.relative_to(state_dir).as_posix())
+
         _run(
             [
                 sys.executable,
@@ -265,12 +265,11 @@ def _reconcile_once(token: str, code_dir: Path, state_dir: Path, workspace: Path
         current = _remote_identity(token, state_dir)
         if current != observed:
             continue
-        paths = ["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json", "control/project-intake"]
         if _persist(
             token,
             state_dir,
             message="runtime: Scheduled Worker A integration reconcile before selection",
-            paths=paths,
+            paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json", "control/project-intake"],
             allowed=allowed,
         ):
             return
@@ -385,15 +384,15 @@ def _ci_run_ids(repository: str, candidate_sha: str, handover: dict[str, Any]) -
     return sorted(set(run_ids))
 
 
-def _pr_snapshot(token: str, repository: str, pr_number: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def _pr_snapshot(token: str, repository: str, pr_number: int) -> dict[str, Any]:
     raw: dict[str, Any] | None = None
     for _ in range(5):
         raw = _api(token, "GET", f"repos/{repository}/pulls/{pr_number}")
-        if raw.get("mergeable") is not None:
+        if raw.get("mergeable") is not None or raw.get("merged") is True:
             break
         time.sleep(1)
     assert raw is not None
-    snapshot = {
+    return {
         "number": raw.get("number"),
         "head_sha": (raw.get("head") or {}).get("sha"),
         "base_sha": (raw.get("base") or {}).get("sha"),
@@ -404,7 +403,6 @@ def _pr_snapshot(token: str, repository: str, pr_number: int) -> tuple[dict[str,
         "draft": bool(raw.get("draft")),
         "merge_commit_sha": raw.get("merge_commit_sha"),
     }
-    return snapshot, raw
 
 
 def _ci_green(token: str, repository: str, candidate_sha: str, handover: dict[str, Any]) -> bool:
@@ -542,7 +540,10 @@ def _finalize_claim(
         final_task = _find_task(readback, task_id)
         if final_task.get("state") != next_state:
             raise IntegrationBlocked("integration finalization readback state mismatch")
-        if any(final_task.get(key) is not None for key in ("active_run_id", "active_role", "active_worker_instance", "claim_started_at", "claim_expires_at")):
+        if any(
+            final_task.get(key) is not None
+            for key in ("active_run_id", "active_role", "active_worker_instance", "claim_started_at", "claim_expires_at")
+        ):
             raise IntegrationBlocked("integration finalization left ghost ownership")
         if merge_sha is not None and final_task.get("merge_sha") != merge_sha:
             raise IntegrationBlocked("integration merge SHA readback mismatch")
@@ -550,14 +551,7 @@ def _finalize_claim(
     raise IntegrationUnavailable("runtime CAS conflict finalizing integration")
 
 
-def _merge_and_validate(
-    token: str,
-    repository: str,
-    pr_number: int,
-    candidate_sha: str,
-    trusted_base_sha: str,
-    target_branch: str,
-) -> str:
+def _perform_expected_head_merge(token: str, repository: str, pr_number: int, candidate_sha: str) -> str:
     repo = _api(token, "GET", f"repos/{repository}")
     if repo.get("allow_merge_commit") is not True:
         raise IntegrationBlocked("repository does not allow exact merge-commit integration")
@@ -570,8 +564,19 @@ def _merge_and_validate(
     merge_sha = response.get("sha")
     if response.get("merged") is not True or not isinstance(merge_sha, str) or not SHA_RE.fullmatch(merge_sha):
         raise IntegrationBlocked("expected-head merge was not accepted")
+    return merge_sha
 
-    post, _ = _pr_snapshot(token, repository, pr_number)
+
+def _validate_merged_state(
+    token: str,
+    repository: str,
+    pr_number: int,
+    candidate_sha: str,
+    trusted_base_sha: str,
+    target_branch: str,
+    merge_sha: str,
+) -> None:
+    post = _pr_snapshot(token, repository, pr_number)
     if post.get("merged") is not True or post.get("head_sha") != candidate_sha:
         raise IntegrationBlocked("post-merge PR identity mismatch")
     if post.get("merge_commit_sha") != merge_sha:
@@ -585,7 +590,29 @@ def _merge_and_validate(
     compare = _api(token, "GET", f"repos/{repository}/compare/{merge_sha}...{target_branch}")
     if compare.get("status") not in {"identical", "ahead"}:
         raise IntegrationBlocked("target branch does not contain exact merge commit")
-    return merge_sha
+
+
+def _detect_completed_merge(
+    token: str,
+    repository: str | None,
+    pr_number: int | None,
+    candidate_sha: str | None,
+) -> str | None:
+    if not isinstance(repository, str) or not isinstance(pr_number, int) or not isinstance(candidate_sha, str):
+        return None
+    try:
+        snapshot = _pr_snapshot(token, repository, pr_number)
+    except Exception:
+        return None
+    merge_sha = snapshot.get("merge_commit_sha")
+    if (
+        snapshot.get("merged") is True
+        and snapshot.get("head_sha") == candidate_sha
+        and isinstance(merge_sha, str)
+        and SHA_RE.fullmatch(merge_sha)
+    ):
+        return merge_sha
+    return None
 
 
 def main() -> int:
@@ -594,7 +621,6 @@ def main() -> int:
         _status("EXECUTION_UNAVAILABLE_PRIVATE_GITHUB_CREDENTIAL", handled=False)
         return 78
 
-    workspace = Path(os.environ.get("GITHUB_WORKSPACE", Path.cwd())).resolve()
     if os.environ.get("GITHUB_REPOSITORY") != "market-predictions/control-engine" or os.environ.get("GITHUB_REF") != "refs/heads/main":
         _status("FAIL_CLOSED_PUBLIC_EXECUTION_IDENTITY", handled=False)
         return 2
@@ -606,6 +632,10 @@ def main() -> int:
     private_tmp = root / "private"
     private_tmp.mkdir(mode=0o700)
     claimed: tuple[str, str] | None = None
+    repository: str | None = None
+    pr_number: int | None = None
+    candidate_sha: str | None = None
+    merge_sha: str | None = None
 
     try:
         _fetch_code(token, code_dir)
@@ -613,10 +643,9 @@ def main() -> int:
         _run(["git", "config", "user.name", "control-scheduled-a-v2[bot]"], cwd=state_dir)
         _run(["git", "config", "user.email", "control-scheduled-a-v2[bot]@users.noreply.github.com"], cwd=state_dir)
 
-        # Use the same canonical lease/intake ordering before considering integration.
-        if str(workspace) not in sys.path:
-            sys.path.insert(0, str(workspace))
-        _reconcile_once(token, code_dir, state_dir, workspace, private_tmp)
+        if str(Path.cwd()) not in sys.path:
+            sys.path.insert(0, str(Path.cwd()))
+        _reconcile_once(token, code_dir, state_dir, private_tmp)
         _reset_state(token, state_dir)
         selected = _select_integration(code_dir, state_dir)
         if selected is None:
@@ -648,7 +677,7 @@ def main() -> int:
             raise IntegrationBlocked("integration target branch binding invalid")
 
         trusted_base_sha = _trusted_base_sha(repository, handover)
-        snapshot, _ = _pr_snapshot(token, repository, pr_number)
+        snapshot = _pr_snapshot(token, repository, pr_number)
         if snapshot.get("base_ref") != target_branch or snapshot.get("base_sha") != trusted_base_sha:
             raise IntegrationBlocked("live PR base moved from trusted assurance base")
         ci_green = _ci_green(token, repository, candidate_sha, handover)
@@ -666,7 +695,7 @@ def main() -> int:
         # Re-read both canonical claim and live PR/CI immediately before mutation.
         _reset_state(token, state_dir)
         current_task = _assert_claim_still_current(code_dir, state_dir, task_id, run_id)
-        snapshot, _ = _pr_snapshot(token, repository, pr_number)
+        snapshot = _pr_snapshot(token, repository, pr_number)
         if snapshot.get("base_ref") != target_branch or snapshot.get("base_sha") != trusted_base_sha:
             raise IntegrationBlocked("live PR base moved before merge")
         if not _ci_green(token, repository, candidate_sha, handover):
@@ -681,13 +710,15 @@ def main() -> int:
         if not decision.allowed:
             raise IntegrationBlocked("final claim-backed integration gate rejected live state")
 
-        merge_sha = _merge_and_validate(
+        merge_sha = _perform_expected_head_merge(token, repository, pr_number, candidate_sha)
+        _validate_merged_state(
             token,
             repository,
             pr_number,
             candidate_sha,
             trusted_base_sha,
             target_branch,
+            merge_sha,
         )
         _finalize_claim(
             token,
@@ -704,6 +735,15 @@ def main() -> int:
         return 0
 
     except IntegrationUnavailable:
+        # A merge API timeout can be ambiguous. Before any lifecycle mutation,
+        # independently re-read the PR. If the assured head is already merged,
+        # keep the exact A1 claim intact for deterministic recovery/finalization;
+        # never resume into a path that could attempt a second merge.
+        if merge_sha is None:
+            merge_sha = _detect_completed_merge(token, repository, pr_number, candidate_sha)
+        if merge_sha is not None:
+            _status("EXECUTION_UNAVAILABLE_POST_MERGE_FINALIZATION", handled=True)
+            return 78
         if claimed is not None:
             try:
                 _finalize_claim(
@@ -713,7 +753,7 @@ def main() -> int:
                     task_id=claimed[0],
                     run_id=claimed[1],
                     next_state="EXECUTION_UNAVAILABLE",
-                    findings=["Deterministic project integration execution unavailable; no merge was attempted or completed."],
+                    findings=["Deterministic project integration execution unavailable; no completed merge could be proven."],
                 )
                 claimed = None
             except Exception:
@@ -721,6 +761,14 @@ def main() -> int:
         _status("EXECUTION_UNAVAILABLE_PROJECT_INTEGRATION", handled=True)
         return 78
     except Exception:
+        # Once a merge is known to have completed, never rewrite the same task as
+        # pre-merge BLOCKED. Preserve claim/history for the canonical missed-
+        # finalization recovery path instead of risking a second integration.
+        if merge_sha is None:
+            merge_sha = _detect_completed_merge(token, repository, pr_number, candidate_sha)
+        if merge_sha is not None:
+            _status("FAIL_CLOSED_POST_MERGE_VALIDATION_OR_FINALIZATION", handled=True)
+            return 2
         if claimed is not None:
             try:
                 _finalize_claim(
@@ -730,7 +778,7 @@ def main() -> int:
                     task_id=claimed[0],
                     run_id=claimed[1],
                     next_state="BLOCKED",
-                    findings=["Deterministic project integration failed closed before successful finalization."],
+                    findings=["Deterministic project integration failed closed before any completed merge could be proven."],
                 )
                 claimed = None
             except Exception:
