@@ -271,6 +271,7 @@ if [ "$claimed" != true ]; then
 fi
 
 run_id="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name run_id)"
+handover_id="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name handover_id)"
 target_repository="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name repository)"
 candidate_sha="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name candidate_sha)"
 candidate_pr="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name candidate_pr)"
@@ -398,28 +399,56 @@ PY
 )"
 
 fetch_code || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_CODE_REFETCH" 78
-fetch_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_REFETCH" 78
-if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-claim \
-    --code-dir "$CODE_DIR" \
-    --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
-    --task-id "$task_id" \
-    >"$PRIVATE_TMP/precomplete-claim.log" 2>&1; then
-  fail_closed "FAIL_CLOSED_B1_CLAIM_NOT_CURRENT_BEFORE_COMPLETE"
-fi
+result_token="${handover_id:-$run_id}"
+result_rel="control/worker-results/${result_token}.json"
+completion_rel="control/claim-completions/${task_id}--${run_id}.json"
+completion_done=false
 
-if ! connected_complete \
-    --runtime-root "$STATE_DIR" \
-    --runtime-ref "$CONTROL_RUNTIME_REF" \
-    --github-repository "$CONTROL_PLANE_REPOSITORY" \
-    --task-id "$task_id" \
-    --worker-instance B1 \
-    --active-run-id "$run_id" \
-    --result "$FINAL_RESULT" \
-    >"$PRIVATE_TMP/complete.log" 2>&1; then
+for completion_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
+  fetch_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_REFETCH" 78
+
+  if python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-finalized \
+      --code-dir "$CODE_DIR" \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      --task-id "$task_id" \
+      --run-id "$run_id" \
+      >"$PRIVATE_TMP/finalized-before-retry.log" 2>&1; then
+    completion_done=true
+    break
+  fi
+
+  if [ -f "$STATE_DIR/$completion_rel" ]; then
+    fail_closed "FAIL_CLOSED_B1_FINALIZATION_RECOVERY_REQUIRED"
+  fi
+
+  if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-claim \
+      --code-dir "$CODE_DIR" \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      --task-id "$task_id" \
+      >"$PRIVATE_TMP/precomplete-claim-${completion_attempt}.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_B1_CLAIM_NOT_CURRENT_BEFORE_COMPLETE"
+  fi
+
+  if connected_complete \
+      --runtime-root "$STATE_DIR" \
+      --runtime-ref "$CONTROL_RUNTIME_REF" \
+      --github-repository "$CONTROL_PLANE_REPOSITORY" \
+      --task-id "$task_id" \
+      --worker-instance B1 \
+      --active-run-id "$run_id" \
+      --result "$FINAL_RESULT" \
+      >"$PRIVATE_TMP/complete-${completion_attempt}.log" 2>&1; then
+    completion_done=true
+    break
+  fi
+
+done
+
+if [ "$completion_done" != true ]; then
   fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
 fi
 
-reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
+fetch_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
 if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-finalized \
     --code-dir "$CODE_DIR" \
     --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
