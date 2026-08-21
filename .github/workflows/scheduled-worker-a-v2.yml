@@ -13,6 +13,7 @@ on:
       - 'scripts/scheduled_worker_a_v2.sh'
       - 'scripts/github_app_preflight.sh'
       - 'scripts/private_intake_diagnostic.py'
+      - 'scripts/quarantine_zta_legacy_repair.py'
       - 'control_engine/scheduled_worker_a.py'
 
 permissions:
@@ -67,7 +68,16 @@ jobs:
           set -euo pipefail
           bash -n scripts/scheduled_worker_a_v2.sh
           bash -n scripts/github_app_preflight.sh
-          python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py
+          python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py scripts/quarantine_zta_legacy_repair.py
+
+      - name: Quarantine exact legacy ZTA PR7 repair intake
+        id: legacy-zta-migration
+        if: steps.app-token.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python scripts/quarantine_zta_legacy_repair.py
 
       - name: Publish private intake diagnostic receipt
         if: steps.app-token.outcome == 'success'
@@ -79,7 +89,7 @@ jobs:
 
       - name: Reconcile, claim and execute one A1 task
         id: runtime
-        if: steps.app-preflight.outcome == 'success' && steps.app-token.outcome == 'success'
+        if: steps.app-preflight.outcome == 'success' && steps.app-token.outcome == 'success' && steps.legacy-zta-migration.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
@@ -108,6 +118,7 @@ jobs:
           PREFLIGHT_OUTCOME: ${{ steps.app-preflight.outcome }}
           PREFLIGHT_CLASS: ${{ steps.app-preflight.outputs.status_class }}
           APP_OUTCOME: ${{ steps.app-token.outcome }}
+          MIGRATION_OUTCOME: ${{ steps.legacy-zta-migration.outcome }}
           RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
           RUNTIME_CLASS: ${{ steps.runtime.outputs.status_class }}
         run: |
@@ -117,6 +128,8 @@ jobs:
             description="${PREFLIGHT_CLASS:-APP_PREFLIGHT_FAILED}"
           elif [ "$APP_OUTCOME" != "success" ]; then
             description=APP_TOKEN_CREATION_FAILED
+          elif [ "$MIGRATION_OUTCOME" != "success" ]; then
+            description=LEGACY_ZTA_MIGRATION_FAILED
           elif [ -n "${RUNTIME_CLASS:-}" ]; then
             description="$RUNTIME_CLASS"
             if [ "$RUNTIME_OUTCOME" = "success" ]; then state=success; fi
@@ -127,6 +140,6 @@ jobs:
             -f state="$state" \
             -f context="control/swa-v2/${description}" \
             -f description="$description" >/dev/null
-          if [ "$PREFLIGHT_OUTCOME" != "success" ] || [ "$APP_OUTCOME" != "success" ] || [ "$RUNTIME_OUTCOME" != "success" ]; then
+          if [ "$PREFLIGHT_OUTCOME" != "success" ] || [ "$APP_OUTCOME" != "success" ] || [ "$MIGRATION_OUTCOME" != "success" ] || [ "$RUNTIME_OUTCOME" != "success" ]; then
             exit 1
           fi
