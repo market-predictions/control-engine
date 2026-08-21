@@ -51,6 +51,7 @@ jobs:
         env:
           # Compatibility env name: the value is now a one-hour GitHub App installation token,
           # not a personal access token or long-lived repository credential.
+          # Retired executable source marker: secrets.CONTROL_GITHUB_WRITE_TOKEN is intentionally not used.
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
           CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
           CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
