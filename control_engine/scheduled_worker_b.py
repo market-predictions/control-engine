@@ -138,6 +138,8 @@ def assert_finalized(code_dir: str, queue_path: str, task_id: str, run_id: str) 
     queue = _load(queue_path)
     parallel.validate_parallel_queue(queue)
     task = _task(queue, task_id)
+    if not isinstance(run_id, str) or not run_id:
+        raise ActuatorContractError("finalization run id missing")
     for field in (
         "active_run_id",
         "active_role",
@@ -147,10 +149,16 @@ def assert_finalized(code_dir: str, queue_path: str, task_id: str, run_id: str) 
     ):
         if task.get(field) is not None:
             raise ActuatorContractError(f"finalized task still has {field}")
+    if task.get("last_terminal_completion_run_id") != run_id:
+        raise ActuatorContractError("task is inactive but exact terminal completion was not consumed")
+    result_ref = task.get("last_terminal_completion_result_ref")
+    if not isinstance(result_ref, str) or not result_ref.startswith("control/worker-results/") or not result_ref.endswith(".json"):
+        raise ActuatorContractError("exact terminal completion result reference is missing")
+    assurance_ref = task.get("assurance_result_ref")
+    if assurance_ref != f"control-runtime-state:{result_ref}":
+        raise ActuatorContractError("assurance result reference differs from terminal completion provenance")
     if queue.get("principal_manual_relay_count") != 0 or task.get("principal_manual_relay_count") != 0:
         raise ActuatorContractError("principal_manual_relay_count changed from zero")
-    if not isinstance(run_id, str) or not run_id:
-        raise ActuatorContractError("finalization run id missing")
 
 
 def read_private_field(path: str, field: str) -> str:
