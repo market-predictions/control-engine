@@ -34,13 +34,17 @@ def test_workflow_is_main_only_scheduled_liveness_backstop() -> None:
 def test_workflow_uses_only_named_private_bridge_and_provider_secrets() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     for name in (
-        "secrets.CONTROL_GITHUB_WRITE_TOKEN",
+        "vars.CONTROL_GITHUB_APP_ID",
+        "secrets.CONTROL_GITHUB_APP_PRIVATE_KEY",
         "secrets.CONTROL_CLOUDFLARE_API_TOKEN",
         "secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID",
         "vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED",
     ):
         assert name in text
+    assert "secrets.CONTROL_GITHUB_WRITE_TOKEN" not in text
+    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}" in text
     assert "bash -n scripts/scheduled_worker_a_v2.sh" in text
+    assert "bash -n scripts/github_app_preflight.sh" in text
     assert "python -m py_compile control_engine/scheduled_worker_a.py" in text
 
 
