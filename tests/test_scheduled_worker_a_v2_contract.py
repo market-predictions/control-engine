@@ -50,7 +50,8 @@ def test_workflow_uses_only_named_private_bridge_and_provider_secrets() -> None:
 
 def test_actuator_pins_private_state_machine_and_forbids_stale_replay() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
-    assert 'CONTROL_CODE_SHA="ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"' in text
+    assert 'CONTROL_CODE_REF="recovery/187-policy-metadata-r1"' in text
+    assert 'CONTROL_CODE_SHA="62cf2a88edd8700c073e51274d331210c7a36900"' in text
     assert 'GITHUB_REF:-}" != "refs/heads/main"' in text
     assert 'GITHUB_REPOSITORY:-}" != "$PUBLIC_REPOSITORY"' in text
     assert "observed_ref" in text and "observed_blob" in text
