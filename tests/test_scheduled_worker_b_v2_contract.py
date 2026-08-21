@@ -38,23 +38,26 @@ def test_actuator_reuses_existing_control_primitives() -> None:
     assert 'CONTROL_RUNTIME_REF="control-runtime-state"' in text
     assert 'CONTROL_CODE_REF="runtime/public-b-v2-code-r1"' in text
     assert 'CONTROL_CODE_SHA="728117701e20ba3762e984ef779a74effb3bcc55"' in text
-    assert 'LEASE_SECONDS=900' in text
+    assert 'LEASE_MINUTES=15' in text
     assert 'dispatcher/cli.py\" resume' in text
-    assert "connected_runtime claim" in text
-    assert "connected_runtime complete" in text
+    assert 'dispatcher/cli.py\" claim' in text
+    assert "connected_complete" in text
     assert "--worker-instance B1" in text
     assert "pull --rebase" not in text
     assert "--force" not in text
     assert "set -x" not in text
 
 
-def test_preferred_selection_is_rechecked_before_claim() -> None:
+def test_claim_matches_proven_worker_a_cas_shape() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     first = text.index("select-b1")
     second = text.index("select-b1", first + 1)
-    claim = text.index("connected_runtime claim")
-    assert first < second < claim
-    assert "IDLE_B1_SELECTION_MOVED" in text
+    claim = text.index('dispatcher/cli.py\" claim')
+    persist = text.index('"runtime: Scheduled Worker B V2 claim B1"', claim)
+    readback = text.index("assert-claim", persist)
+    assert first < second < claim < persist < readback
+    assert "assert_claim_write_scope" in text
+    assert "RUNTIME_CAS_CONFLICT_CLAIM" in text
 
 
 def test_inference_isolated_from_private_github_credential() -> None:

@@ -8,7 +8,7 @@ CONTROL_RUNTIME_REF="control-runtime-state"
 CONTROL_CODE_REF="runtime/public-b-v2-code-r1"
 CONTROL_CODE_SHA="728117701e20ba3762e984ef779a74effb3bcc55"
 MAX_CAS_ATTEMPTS=3
-LEASE_SECONDS=900
+LEASE_MINUTES=15
 
 status() {
   printf 'SCHEDULED_WORKER_B_V2=%s\n' "$1"
@@ -51,12 +51,12 @@ private_git() {
 private_api() {
   GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" gh api "$@"
 }
-connected_runtime() {
+connected_complete() {
   GIT_CONFIG_COUNT=1 \
   GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
   GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
   GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" \
-    python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" "$@"
+    python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete "$@"
 }
 
 fetch_code() {
@@ -104,6 +104,17 @@ remote_runtime_identity() {
 }
 
 assert_reconcile_write_scope() {
+  local path
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    case "$path" in
+      control/DISPATCH_QUEUE.json|control/DISPATCH_RUNS.json) ;;
+      *) return 1 ;;
+    esac
+  done < <({ git -C "$STATE_DIR" diff --name-only; git -C "$STATE_DIR" ls-files --others --exclude-standard; } | sort -u)
+}
+
+assert_claim_write_scope() {
   local path
   while IFS= read -r path; do
     [ -z "$path" ] && continue
@@ -202,40 +213,63 @@ if [ -z "$task_id" ] || [ -z "$selected_repository" ] || ! [[ "$selected_candida
   fail_closed "FAIL_CLOSED_B1_EXECUTION_BINDING_INVALID"
 fi
 
-# Re-select immediately before claim so a stale scheduled invocation cannot bypass
-# deterministic preferred-B ordering.
-reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
-python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" select-b1 \
-  --code-dir "$CODE_DIR" \
-  --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
-  --output "$SELECTION" \
-  >"$PRIVATE_TMP/select-claim.log" 2>&1 || fail_closed "FAIL_CLOSED_B1_SELECTION"
-selected_now="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$SELECTION" --name selected)"
-[ "$selected_now" = "True" ] || { status "IDLE_B1_SELECTION_MOVED"; exit 0; }
-task_now="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$SELECTION" --name task_id)"
-[ "$task_now" = "$task_id" ] || { status "IDLE_B1_SELECTION_MOVED"; exit 0; }
-
-if ! connected_runtime claim \
-    --runtime-root "$STATE_DIR" \
-    --runtime-ref "$CONTROL_RUNTIME_REF" \
-    --task-id "$task_id" \
-    --worker-instance B1 \
-    --backend github-actions/public-control-engine-scheduled-b-v2 \
-    --lease-seconds "$LEASE_SECONDS" \
-    >"$PRIVATE_TMP/claim.log" 2>&1; then
-  fail_closed "FAIL_CLOSED_B1_CLAIM"
-fi
-
 CLAIM_BINDING="$PRIVATE_TMP/claim-binding.json"
-reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
-if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-claim \
-    --code-dir "$CODE_DIR" \
-    --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
-    --task-id "$task_id" \
-    --output "$CLAIM_BINDING" \
-    >"$PRIVATE_TMP/claim-readback.log" 2>&1; then
-  fail_closed "FAIL_CLOSED_START_PROVEN_READBACK"
+claimed=false
+for cas_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
+  reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
+  if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" select-b1 \
+      --code-dir "$CODE_DIR" \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      --output "$SELECTION" \
+      >"$PRIVATE_TMP/select-claim.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_B1_SELECTION"
+  fi
+  selected_now="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$SELECTION" --name selected)"
+  [ "$selected_now" = "True" ] || { status "IDLE_B1_SELECTION_MOVED"; exit 0; }
+  task_now="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$SELECTION" --name task_id)"
+  [ "$task_now" = "$task_id" ] || { status "IDLE_B1_SELECTION_MOVED"; exit 0; }
+
+  read -r observed_ref observed_blob < <(runtime_identity)
+  if ! python "$CODE_DIR/dispatcher/cli.py" claim \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      --runs "$STATE_DIR/control/DISPATCH_RUNS.json" \
+      --task-id "$task_id" \
+      --backend github-actions/public-control-engine-scheduled-b-v2 \
+      --lease-minutes "$LEASE_MINUTES" \
+      >"$PRIVATE_TMP/claim.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_B1_CLAIM"
+  fi
+  if ! python "$CODE_DIR/dispatcher/cli.py" validate \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      >"$PRIVATE_TMP/claim-validate.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_CLAIMED_QUEUE_INVALID"
+  fi
+  assert_claim_write_scope || fail_closed "FAIL_CLOSED_CLAIM_WRITE_SCOPE"
+
+  read -r current_ref current_blob < <(remote_runtime_identity)
+  if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+    continue
+  fi
+  if persist_state_if_changed \
+      "runtime: Scheduled Worker B V2 claim B1" \
+      control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json; then
+    reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
+    if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-claim \
+        --code-dir "$CODE_DIR" \
+        --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+        --task-id "$task_id" \
+        --output "$CLAIM_BINDING" \
+        >"$PRIVATE_TMP/claim-readback.log" 2>&1; then
+      fail_closed "FAIL_CLOSED_START_PROVEN_READBACK"
+    fi
+    claimed=true
+    break
+  fi
+done
+if [ "$claimed" != true ]; then
+  fail_closed "RUNTIME_CAS_CONFLICT_CLAIM" 75
 fi
+
 run_id="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name run_id)"
 target_repository="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name repository)"
 candidate_sha="$(python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" field --file "$CLAIM_BINDING" --name candidate_sha)"
@@ -373,7 +407,7 @@ if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-clai
   fail_closed "FAIL_CLOSED_B1_CLAIM_NOT_CURRENT_BEFORE_COMPLETE"
 fi
 
-if ! connected_runtime complete \
+if ! connected_complete \
     --runtime-root "$STATE_DIR" \
     --runtime-ref "$CONTROL_RUNTIME_REF" \
     --github-repository "$CONTROL_PLANE_REPOSITORY" \
