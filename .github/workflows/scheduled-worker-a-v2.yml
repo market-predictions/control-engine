@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: control-scheduled-worker-a-v2
@@ -33,6 +34,7 @@ jobs:
 
       - name: Create short-lived Control GitHub App token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 exact release commit
         with:
           app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
@@ -54,6 +56,9 @@ jobs:
           python -m py_compile control_engine/scheduled_worker_a.py
 
       - name: Reconcile, claim and execute one A1 task
+        id: runtime
+        if: steps.app-token.outcome == 'success'
+        continue-on-error: true
         shell: bash
         env:
           # Compatibility env name: the value is now a one-hour GitHub App installation token,
@@ -63,4 +68,40 @@ jobs:
           CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
           CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
           CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED }}
-        run: bash scripts/scheduled_worker_a_v2.sh
+        run: |
+          set +e
+          output="$(bash scripts/scheduled_worker_a_v2.sh 2>&1)"
+          rc=$?
+          status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_V2=//p' | tail -n 1)"
+          if [ -z "$status_class" ]; then
+            status_class=RUNTIME_FAILED_NO_STATUS
+          fi
+          printf 'status_class=%s\n' "$status_class" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Publish non-sensitive liveness status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_OUTCOME: ${{ steps.app-token.outcome }}
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+          RUNTIME_CLASS: ${{ steps.runtime.outputs.status_class }}
+        run: |
+          set -euo pipefail
+          state=failure
+          if [ "$APP_OUTCOME" != "success" ]; then
+            description=APP_TOKEN_CREATION_FAILED
+          elif [ -n "${RUNTIME_CLASS:-}" ]; then
+            description="$RUNTIME_CLASS"
+            if [ "$RUNTIME_OUTCOME" = "success" ]; then state=success; fi
+          else
+            description=RUNTIME_SKIPPED_OR_UNCLASSIFIED
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/scheduled-worker-a-v2" \
+            -f description="$description" >/dev/null
+          if [ "$APP_OUTCOME" != "success" ] || [ "$RUNTIME_OUTCOME" != "success" ]; then
+            exit 1
+          fi
