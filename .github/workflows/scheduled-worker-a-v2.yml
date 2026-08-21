@@ -100,7 +100,7 @@ jobs:
           fi
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
-            -f context="control/scheduled-worker-a-v2" \
+            -f context="control/swa-v2/${description}" \
             -f description="$description" >/dev/null
           if [ "$APP_OUTCOME" != "success" ] || [ "$RUNTIME_OUTCOME" != "success" ]; then
             exit 1
