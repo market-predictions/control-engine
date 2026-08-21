@@ -11,8 +11,9 @@ on:
     paths:
       - '.github/workflows/scheduled-worker-a-v2.yml'
       - 'scripts/scheduled_worker_a_v2.sh'
-      - 'scripts/project_integration_executor.py'
       - 'scripts/github_app_preflight.sh'
+      - 'scripts/github_app_target_token.sh'
+      - 'scripts/project_integration_executor.py'
       - 'scripts/private_intake_diagnostic.py'
       - 'scripts/quarantine_zta_legacy_repair.py'
       - 'control_engine/scheduled_worker_a.py'
@@ -71,6 +72,7 @@ jobs:
           set -euo pipefail
           bash -n scripts/scheduled_worker_a_v2.sh
           bash -n scripts/github_app_preflight.sh
+          bash -n scripts/github_app_target_token.sh
           python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py scripts/quarantine_zta_legacy_repair.py scripts/project_integration_executor.py
 
       - name: Quarantine exact legacy ZTA PR7 repair intake
@@ -115,9 +117,9 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          # Compatibility env name: the value is now a one-hour GitHub App installation token,
-          # not a personal access token or long-lived repository credential.
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
           CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
           CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
           CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED }}
