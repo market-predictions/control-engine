@@ -139,13 +139,25 @@ for cas_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
       >"$PRIVATE_TMP/reconcile.log" 2>&1; then
     fail_closed "FAIL_CLOSED_LEASE_RECONCILIATION"
   fi
-  if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" resume-b-unavailable \
+
+  RESUMABLE_B="$PRIVATE_TMP/resumable-b.txt"
+  if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" list-resumable-b \
       --code-dir "$CODE_DIR" \
       --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
-      --output "$PRIVATE_TMP/resume-b.json" \
-      >"$PRIVATE_TMP/resume-b.log" 2>&1; then
-    fail_closed "FAIL_CLOSED_B_UNAVAILABLE_RECONCILIATION"
+      --output "$RESUMABLE_B" \
+      >"$PRIVATE_TMP/list-resumable-b.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_B_UNAVAILABLE_INSPECTION"
   fi
+  while IFS= read -r resumable_task; do
+    [ -z "$resumable_task" ] && continue
+    if ! python "$CODE_DIR/dispatcher/cli.py" resume \
+        --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+        --task-id "$resumable_task" \
+        >>"$PRIVATE_TMP/resume-b.log" 2>&1; then
+      fail_closed "FAIL_CLOSED_B_UNAVAILABLE_RECONCILIATION"
+    fi
+  done < "$RESUMABLE_B"
+
   if ! python "$CODE_DIR/dispatcher/cli.py" validate \
       --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
       >"$PRIVATE_TMP/validate.log" 2>&1; then
