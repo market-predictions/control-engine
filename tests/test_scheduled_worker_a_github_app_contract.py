@@ -46,7 +46,7 @@ def test_deployment_wake_is_main_only_and_actuator_path_bounded() -> None:
 
 def test_public_liveness_status_is_bounded_and_does_not_echo_worker_output() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "context=\"control/scheduled-worker-a-v2\"" in text
+    assert "context=\"control/swa-v2/${description}\"" in text
     assert "APP_TOKEN_CREATION_FAILED" in text
     assert "RUNTIME_SKIPPED_OR_UNCLASSIFIED" in text
     assert "status_class=RUNTIME_FAILED_NO_STATUS" in text
