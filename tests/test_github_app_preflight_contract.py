@@ -34,12 +34,13 @@ def test_preflight_never_prints_secret_material() -> None:
     assert "cat \"$INSTALL_JSON\"" not in text
 
 
-def test_workflow_runs_preflight_before_token_creation_and_publishes_class() -> None:
+def test_workflow_runs_preflight_before_token_integration_and_model_runtime() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     preflight = text.index("Preflight GitHub App identity and installation")
     token = text.index("Create short-lived Control GitHub App token")
-    runtime = text.index("Reconcile, claim and execute one A1 task")
-    assert preflight < token < runtime
+    integration = text.index("Execute preferred deterministic PROJECT_INTEGRATION")
+    runtime = text.index("Reconcile, claim and execute one model-driven A1 task")
+    assert preflight < token < integration < runtime
     assert "steps.app-preflight.outcome == 'success'" in text
     assert "PREFLIGHT_CLASS: ${{ steps.app-preflight.outputs.status_class }}" in text
     assert "${PREFLIGHT_CLASS:-APP_PREFLIGHT_FAILED}" in text
