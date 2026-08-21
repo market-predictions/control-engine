@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/scheduled-worker-a-v2.yml'
+      - 'scripts/scheduled_worker_a_v2.sh'
+      - 'control_engine/scheduled_worker_a.py'
 
 permissions:
   contents: read
