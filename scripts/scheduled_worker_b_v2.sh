@@ -397,26 +397,37 @@ print(json.load(open(sys.argv[1], encoding='utf-8'))['outcome'])
 PY
 )"
 
-fetch_code || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_CODE_REFETCH" 78
-fetch_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_REFETCH" 78
-if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-claim \
-    --code-dir "$CODE_DIR" \
-    --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
-    --task-id "$task_id" \
-    >"$PRIVATE_TMP/precomplete-claim.log" 2>&1; then
-  fail_closed "FAIL_CLOSED_B1_CLAIM_NOT_CURRENT_BEFORE_COMPLETE"
-fi
+completion_done=false
+for completion_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS"); do
+  fetch_code || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_CODE_REFETCH" 78
+  fetch_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_REFETCH" 78
+  if ! python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-claim \
+      --code-dir "$CODE_DIR" \
+      --queue "$STATE_DIR/control/DISPATCH_QUEUE.json" \
+      --task-id "$task_id" \
+      >"$PRIVATE_TMP/precomplete-claim.log" 2>&1; then
+    fail_closed "FAIL_CLOSED_B1_CLAIM_NOT_CURRENT_BEFORE_COMPLETE"
+  fi
 
-if ! connected_complete \
-    --runtime-root "$STATE_DIR" \
-    --runtime-ref "$CONTROL_RUNTIME_REF" \
-    --github-repository "$CONTROL_PLANE_REPOSITORY" \
-    --task-id "$task_id" \
-    --worker-instance B1 \
-    --active-run-id "$run_id" \
-    --result "$FINAL_RESULT" \
-    >"$PRIVATE_TMP/complete.log" 2>&1; then
-  fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
+  if connected_complete \
+      --runtime-root "$STATE_DIR" \
+      --runtime-ref "$CONTROL_RUNTIME_REF" \
+      --github-repository "$CONTROL_PLANE_REPOSITORY" \
+      --task-id "$task_id" \
+      --worker-instance B1 \
+      --active-run-id "$run_id" \
+      --result "$FINAL_RESULT" \
+      >"$PRIVATE_TMP/complete.log" 2>&1; then
+    completion_done=true
+    break
+  fi
+
+  if ! grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$PRIVATE_TMP/complete.log"; then
+    fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
+  fi
+done
+if [ "$completion_done" != true ]; then
+  fail_closed "RUNTIME_CAS_CONFLICT_B1_TERMINAL_COMPLETION" 75
 fi
 
 reset_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_FETCH" 78
