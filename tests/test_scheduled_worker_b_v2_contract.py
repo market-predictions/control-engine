@@ -60,6 +60,23 @@ def test_claim_matches_proven_worker_a_cas_shape() -> None:
     assert "RUNTIME_CAS_CONFLICT_CLAIM" in text
 
 
+def test_terminal_completion_retries_only_runtime_cas_conflicts() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    model = text.index("model_rc=$?")
+    retry = text.index('for completion_attempt in $(seq 1 "$MAX_CAS_ATTEMPTS")')
+    refetch = text.index('fetch_state || fail_closed "EXECUTION_UNAVAILABLE_PRIVATE_RUNTIME_REFETCH"', retry)
+    readback = text.index("assert-claim", refetch)
+    complete = text.index("if connected_complete", readback)
+    cas_only = text.index("CONTROL_RUNTIME_CAS_CONFLICT", complete)
+    terminal_fail = text.index("FAIL_CLOSED_B1_TERMINAL_COMPLETION", complete)
+    bounded_fail = text.index("RUNTIME_CAS_CONFLICT_B1_TERMINAL_COMPLETION", complete)
+    assert model < retry < refetch < readback < complete < cas_only < terminal_fail < bounded_fail
+    assert text.count("python \"$PRIVATE_TMP/inference_worker.py\"") == 1
+    assert text.count("if connected_complete") == 1
+    assert "completion_done=false" in text
+    assert "completion_done=true" in text
+
+
 def test_inference_isolated_from_private_github_credential() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     start = text.index("env -i")
