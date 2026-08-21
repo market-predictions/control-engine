@@ -78,7 +78,9 @@ def select_b1(code_dir: str, queue_path: str, output: str) -> None:
     if selected is None:
         _write_private(output, {"selected": False})
         return
-    if selected.get("attempt", 0) >= selected.get("max_attempts", 0):
+    attempt = selected.get("attempt")
+    maximum = selected.get("max_attempts")
+    if isinstance(attempt, int) and isinstance(maximum, int) and attempt >= maximum:
         raise ActuatorContractError("private selector returned attempt-exhausted B task")
     _write_private(
         output,
