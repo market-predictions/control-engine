@@ -124,6 +124,7 @@ def assert_current_claim(
             {
                 "task_id": task_id,
                 "run_id": run_id,
+                "handover_id": task.get("handover_id"),
                 "repository": task.get("repository"),
                 "candidate_sha": task.get("candidate_sha"),
                 "candidate_pr": task.get("candidate_pr"),
