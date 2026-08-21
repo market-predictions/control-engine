@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "scheduled-worker-a-v2.yml"
 DIAGNOSTIC = ROOT / "scripts" / "private_intake_diagnostic.py"
+MIGRATION = ROOT / "scripts" / "quarantine_zta_legacy_repair.py"
 
 
 def test_scheduled_worker_uses_exact_pinned_github_app_token_action() -> None:
@@ -47,6 +48,7 @@ def test_deployment_wake_is_main_only_and_actuator_path_bounded() -> None:
     assert "'scripts/scheduled_worker_a_v2.sh'" in text
     assert "'scripts/github_app_preflight.sh'" in text
     assert "'scripts/private_intake_diagnostic.py'" in text
+    assert "'scripts/quarantine_zta_legacy_repair.py'" in text
     assert "'control_engine/scheduled_worker_a.py'" in text
 
 
@@ -61,6 +63,27 @@ def test_private_intake_diagnostic_uses_only_app_token_and_private_issue_receipt
     assert "issues/{RECOVERY_ISSUE}/comments" in diagnostic
     assert "actions/upload-artifact" not in workflow
     assert "actions/cache" not in workflow
+
+
+def test_legacy_zta_quarantine_is_exact_bounded_and_runs_before_reconciliation() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    migration = MIGRATION.read_text(encoding="utf-8")
+    assert 'TASK_ID = "ZTA-PR7-WRANGLER-REPAIR"' in migration
+    assert 'R1 = "ZTA-PR7-WRANGLER-REPAIR-R1"' in migration
+    assert 'R2 = "ZTA-PR7-WRANGLER-REPAIR-R2"' in migration
+    assert 'INTAKE_PATH = Path("control/project-intake/ZORGTECHADVIES_PR7.json")' in migration
+    assert 'QUEUE_PATH = Path("control/DISPATCH_QUEUE.json")' in migration
+    assert 'intent.get("handover_id") is None' in migration
+    assert 'intent.get("assurance_result_ref") is None' in migration
+    assert 'task["paused"] = True' in migration
+    assert 'intake["queue_intent"] = None' in migration
+    assert "--force" not in migration
+    migration_pos = workflow.index("Quarantine exact legacy ZTA PR7 repair intake")
+    diagnostic_pos = workflow.index("Publish private intake diagnostic receipt")
+    runtime_pos = workflow.index("Reconcile, claim and execute one A1 task")
+    assert migration_pos < diagnostic_pos < runtime_pos
+    assert "steps.legacy-zta-migration.outcome == 'success'" in workflow
+    assert "LEGACY_ZTA_MIGRATION_FAILED" in workflow
 
 
 def test_public_liveness_status_is_bounded_and_does_not_echo_worker_output() -> None:
