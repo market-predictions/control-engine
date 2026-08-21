@@ -24,15 +24,8 @@ RECOVERY_ISSUE = 187
 MARKER = "<!-- scheduled-worker-a-v2-private-intake-diagnostic -->"
 
 
-def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, capture: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        text=True,
-        capture_output=capture,
-        check=True,
-    )
+def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True, check=True)
 
 
 def private_git(token: str, args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -47,7 +40,10 @@ def gh(token: str, args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def post_or_update_receipt(token: str, body: str) -> None:
-    comments = gh(token, [f"repos/{CONTROL_REPOSITORY}/issues/{RECOVERY_ISSUE}/comments", "-f", "per_page=100"]).stdout
+    comments = gh(
+        token,
+        ["--method", "GET", f"repos/{CONTROL_REPOSITORY}/issues/{RECOVERY_ISSUE}/comments", "-f", "per_page=100"],
+    ).stdout
     existing_id: int | None = None
     for item in json.loads(comments):
         if MARKER in (item.get("body") or ""):
@@ -93,7 +89,7 @@ def main() -> int:
         for path in sorted(intake_dir.glob("*.json")):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as exc:  # JSON parse/type only; details stay private.
+            except Exception as exc:
                 findings.append((path.name, f"JSON_LOAD_ERROR: {type(exc).__name__}: {exc}"))
                 continue
             try:
