@@ -12,7 +12,10 @@ def test_scheduled_worker_uses_exact_pinned_github_app_token_action() -> None:
     assert "private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}" in text
     assert "owner: ${{ github.repository_owner }}" in text
     assert "permission-contents: 'write'" in text
-    assert "permission-workflows: 'write'" in text
+    app_block = text.split("Create short-lived Control GitHub App token", 1)[1].split("Setup Python", 1)[0]
+    assert "permission-workflows" not in app_block
+    assert "permission-issues" not in app_block
+    assert "permission-pull-requests" not in app_block
 
 
 def test_long_lived_pat_is_not_executable_bridge() -> None:
