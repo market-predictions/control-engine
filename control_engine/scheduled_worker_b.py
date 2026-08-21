@@ -29,8 +29,7 @@ def _private_modules(code_dir: str | Path):
         sys.path.insert(0, root)
     parallel = importlib.import_module("tools.control_parallel_execution_v1")
     queue_mod = importlib.import_module("tools.control_queue_v1")
-    dispatcher_state = importlib.import_module("dispatcher.state")
-    return parallel, queue_mod, dispatcher_state
+    return parallel, queue_mod
 
 
 def _task(queue: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -40,14 +39,12 @@ def _task(queue: dict[str, Any], task_id: str) -> dict[str, Any]:
     return matches[0]
 
 
-def resume_b_unavailable(code_dir: str, queue_path: str, output: str | None) -> None:
-    """Resume only inactive B-role EXECUTION_UNAVAILABLE records."""
-    parallel, _, dispatcher_state = _private_modules(code_dir)
+def list_resumable_b(code_dir: str, queue_path: str, output: str) -> None:
+    """Identify resumable B records; canonical CLI owns the actual transition."""
+    parallel, _ = _private_modules(code_dir)
     queue = _load(queue_path)
     parallel.validate_parallel_queue(queue)
-    resumed: list[str] = []
-    blocked: list[str] = []
-
+    resumable: list[str] = []
     for task in queue.get("tasks", []):
         if task.get("state") != "EXECUTION_UNAVAILABLE":
             continue
@@ -64,33 +61,14 @@ def resume_b_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
             )
         ):
             raise ActuatorContractError("unavailable B task still has active ownership")
-
-        before_state = task["state"]
-        updated = dispatcher_state.resume_unavailable(task)
-        if updated.get("state", "").endswith("_EXECUTING"):
-            raise ActuatorContractError("resume unexpectedly created an executing claim")
-        updated["active_run_id"] = None
-        updated["active_role"] = None
-        updated["active_worker_instance"] = None
-        updated["claim_started_at"] = None
-        updated["claim_expires_at"] = None
-        updated["resume_state"] = None
-        task.clear()
-        task.update(updated)
-        if task["state"] == "BLOCKED":
-            blocked.append(task["task_id"])
-        elif task["state"] != before_state:
-            resumed.append(task["task_id"])
-
-    parallel.validate_parallel_queue(queue)
-    if resumed or blocked:
-        Path(queue_path).write_text(json.dumps(queue, indent=2) + "\n", encoding="utf-8")
-    if output:
-        _write_private(output, {"resumed": resumed, "blocked": blocked})
+        resumable.append(task["task_id"])
+    target = Path(output)
+    target.write_text("".join(f"{task_id}\n" for task_id in resumable), encoding="utf-8")
+    target.chmod(0o600)
 
 
 def select_b1(code_dir: str, queue_path: str, output: str) -> None:
-    parallel, queue_mod, _ = _private_modules(code_dir)
+    parallel, queue_mod = _private_modules(code_dir)
     queue = _load(queue_path)
     selected = parallel.select_task_for_instance(
         queue,
@@ -120,7 +98,7 @@ def assert_current_claim(
     task_id: str,
     output: str | None,
 ) -> None:
-    parallel, queue_mod, _ = _private_modules(code_dir)
+    parallel, queue_mod = _private_modules(code_dir)
     queue = _load(queue_path)
     task = _task(queue, task_id)
     if task.get("active_role") != queue_mod.ROLE_B:
@@ -156,7 +134,7 @@ def assert_current_claim(
 
 
 def assert_finalized(code_dir: str, queue_path: str, task_id: str, run_id: str) -> None:
-    parallel, _, _ = _private_modules(code_dir)
+    parallel, _ = _private_modules(code_dir)
     queue = _load(queue_path)
     parallel.validate_parallel_queue(queue)
     task = _task(queue, task_id)
@@ -189,10 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Private-state helper for Scheduled Worker B V2")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    resume = sub.add_parser("resume-b-unavailable")
-    resume.add_argument("--code-dir", required=True)
-    resume.add_argument("--queue", required=True)
-    resume.add_argument("--output")
+    resumable = sub.add_parser("list-resumable-b")
+    resumable.add_argument("--code-dir", required=True)
+    resumable.add_argument("--queue", required=True)
+    resumable.add_argument("--output", required=True)
 
     select = sub.add_parser("select-b1")
     select.add_argument("--code-dir", required=True)
@@ -221,8 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        if args.command == "resume-b-unavailable":
-            resume_b_unavailable(args.code_dir, args.queue, args.output)
+        if args.command == "list-resumable-b":
+            list_resumable_b(args.code_dir, args.queue, args.output)
         elif args.command == "select-b1":
             select_b1(args.code_dir, args.queue, args.output)
         elif args.command == "assert-claim":
