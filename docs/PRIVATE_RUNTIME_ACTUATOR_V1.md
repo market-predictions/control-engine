@@ -9,7 +9,7 @@ The boundary is:
 ```text
 public control-engine = trusted executable code + free runner
 private control-plane = authoritative state + authority
-secret credential bridge = least-privilege transport only
+GitHub App installation token = short-lived least-privilege transport only
 ```
 
 The public repository never becomes a mirror of the private runtime. Private state may exist only transiently inside one ephemeral trusted default-branch Actions job and is deleted at job completion.
@@ -35,40 +35,51 @@ The scheduler does not create a second queue. It polls and advances the one priv
 
 Each invocation performs at most one A1 worker execution and follows this order:
 
-1. Fetch the bounded private Control implementation from an immutable 40-character SHA.
-2. Read the exact private `control-runtime-state` commit and exact `control/DISPATCH_QUEUE.json` blob.
-3. Reconcile expired leases.
-4. Resume inactive A-role `EXECUTION_UNAVAILABLE` records through the canonical state helper; exhausted attempt budgets become `BLOCKED` rather than looping forever.
-5. Reconcile managed `PROJECT_INTAKE_V1` records through the canonical intake materializer.
-6. Validate the queue and enforce the bounded runtime write scope.
-7. Re-read the remote runtime ref + queue blob; any movement discards and recomputes.
-8. Persist reconciliation only by ordinary non-force push.
-9. Select the preferred eligible A1 task through `CONTROL_PARALLEL_EXECUTION_V1` priority, dependency, capacity and repository-exclusion rules.
-10. Verify implementation provider credentials and the `FREE_FAIL_CLOSED` attestation before creating an executing claim.
-11. Re-read/reselect, create the exact A1 claim and persist it under a second exact ref+blob CAS cycle.
-12. Re-fetch canonical state and prove `START_PROVEN` from exact role, stable worker `A1`, run id and live lease.
-13. Prepare a credential-free target workspace.
-14. Run the existing provider-portable implementation/repair adapter with provider credentials but without the GitHub publication credential.
-15. Before publishing, prove the target work branch has not moved from the observed head.
-16. Publish by ordinary push only.
-17. Re-read the private runtime, prove the same claim is still current, construct the worker result, record/finalize under exact CAS, and read back ghost-free finalization.
+1. Create a short-lived GitHub App installation token from the dedicated App identity/private key on trusted public `main`.
+2. Fetch the bounded private Control implementation from an immutable 40-character SHA.
+3. Read the exact private `control-runtime-state` commit and exact `control/DISPATCH_QUEUE.json` blob.
+4. Reconcile expired leases.
+5. Resume inactive A-role `EXECUTION_UNAVAILABLE` records through the canonical state helper; exhausted attempt budgets become `BLOCKED` rather than looping forever.
+6. Reconcile managed `PROJECT_INTAKE_V1` records through the canonical intake materializer.
+7. Validate the queue and enforce the bounded runtime write scope.
+8. Re-read the remote runtime ref + queue blob; any movement discards and recomputes.
+9. Persist reconciliation only by ordinary non-force push.
+10. Select the preferred eligible A1 task through `CONTROL_PARALLEL_EXECUTION_V1` priority, dependency, capacity and repository-exclusion rules.
+11. Verify implementation provider credentials and the `FREE_FAIL_CLOSED` attestation before creating an executing claim.
+12. Re-read/reselect, create the exact A1 claim and persist it under a second exact ref+blob CAS cycle.
+13. Re-fetch canonical state and prove `START_PROVEN` from exact role, stable worker `A1`, run id and live lease.
+14. Prepare a credential-free target workspace.
+15. Run the existing provider-portable implementation/repair adapter with provider credentials but without the GitHub publication credential.
+16. Before publishing, prove the target work branch has not moved from the observed head.
+17. Publish by ordinary push only.
+18. Re-read the private runtime, prove the same claim is still current, construct the worker result, record/finalize under exact CAS, and read back ghost-free finalization.
 
 `PROJECT_INTEGRATION` is deliberately fail-closed in V1. Model-driven implementation execution must not silently acquire exact-head merge authority. A separately bounded deterministic integration executor may be added later under its own contract.
 
 ## Credential boundary
 
-The live workflow expects:
+The live workflow expects the GitHub bridge configuration:
 
 ```text
-CONTROL_GITHUB_WRITE_TOKEN
+CONTROL_GITHUB_APP_ID
+CONTROL_GITHUB_APP_PRIVATE_KEY
+```
+
+and, for model execution beyond deterministic state reconciliation:
+
+```text
 CONTROL_CLOUDFLARE_API_TOKEN
 CONTROL_CLOUDFLARE_ACCOUNT_ID
 CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED=true
 ```
 
-`CONTROL_GITHUB_WRITE_TOKEN` is the private state/publication bridge and must be least privilege for the repositories Control is authorized to mutate. The public repository's built-in `GITHUB_TOKEN` remains `contents: read` and is never private Control authority.
+The workflow uses the exact-pinned `actions/create-github-app-token` action to exchange the App identity/private key for a one-hour installation token. The token is restricted to repositories where the App is installed and to the explicitly requested permission subset. The action's normal post-step revokes the token when the job completes.
 
-Provider credentials are passed only to the isolated inference process. The inference process is launched from a clean environment and does not receive `CONTROL_GITHUB_WRITE_TOKEN`.
+The existing shell actuator receives that short-lived token under the compatibility environment name `CONTROL_GITHUB_WRITE_TOKEN`; this name no longer denotes a personal access token or durable credential.
+
+The public repository's built-in `GITHUB_TOKEN` remains `contents: read` and is never private Control authority.
+
+Provider credentials are passed only to the isolated inference process. The inference process is launched from a clean environment and does not receive the GitHub App installation token.
 
 No credential value may be printed, written to an artifact/cache, committed, or embedded in a repository URL.
 
