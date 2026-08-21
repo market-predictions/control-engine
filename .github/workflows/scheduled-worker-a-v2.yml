@@ -12,6 +12,7 @@ on:
       - '.github/workflows/scheduled-worker-a-v2.yml'
       - 'scripts/scheduled_worker_a_v2.sh'
       - 'scripts/github_app_preflight.sh'
+      - 'scripts/private_intake_diagnostic.py'
       - 'control_engine/scheduled_worker_a.py'
 
 permissions:
@@ -53,6 +54,7 @@ jobs:
           private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: 'write'
+          permission-issues: 'write'
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5 exact commit observed in public CI
@@ -65,7 +67,15 @@ jobs:
           set -euo pipefail
           bash -n scripts/scheduled_worker_a_v2.sh
           bash -n scripts/github_app_preflight.sh
-          python -m py_compile control_engine/scheduled_worker_a.py
+          python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py
+
+      - name: Publish private intake diagnostic receipt
+        if: steps.app-token.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python scripts/private_intake_diagnostic.py
 
       - name: Reconcile, claim and execute one A1 task
         id: runtime
