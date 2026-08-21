@@ -29,3 +29,13 @@ def test_builtin_github_token_stays_read_only_and_app_token_is_ephemeral() -> No
     assert "contents: write" not in top_permissions
     assert "skip-token-revoke" not in text
     assert "pull_request:" not in text
+
+
+def test_deployment_wake_is_main_only_and_actuator_path_bounded() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "push:" in text
+    assert "branches:\n      - main" in text
+    assert "paths:" in text
+    assert "'.github/workflows/scheduled-worker-a-v2.yml'" in text
+    assert "'scripts/scheduled_worker_a_v2.sh'" in text
+    assert "'control_engine/scheduled_worker_a.py'" in text
