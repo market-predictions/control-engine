@@ -40,13 +40,35 @@ def _task(queue: dict[str, Any], task_id: str) -> dict[str, Any]:
     return matches[0]
 
 
-def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> None:
-    """Resume only inactive A-role EXECUTION_UNAVAILABLE records.
+def _has_active_ownership(task: dict[str, Any]) -> bool:
+    return any(
+        task.get(field) is not None
+        for field in (
+            "active_run_id",
+            "active_role",
+            "active_worker_instance",
+            "claim_started_at",
+            "claim_expires_at",
+        )
+    )
 
-    This closes the historical liveness hole where unavailable A work remained
-    stranded forever because the planner did not invoke resume_unavailable().
-    Attempt-exhausted tasks deterministically become BLOCKED through the
-    canonical state helper rather than being retried indefinitely.
+
+def _clear_inactive_ownership(task: dict[str, Any]) -> None:
+    task["active_run_id"] = None
+    task["active_role"] = None
+    task["active_worker_instance"] = None
+    task["claim_started_at"] = None
+    task["claim_expires_at"] = None
+    task["resume_state"] = None
+
+
+def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> None:
+    """Converge inactive retry state before intake materialization and selection.
+
+    Canonical unavailable A work is resumed through the pinned private state
+    helper. Any inactive queued task whose attempt budget is already exhausted
+    is transitioned to canonical BLOCKED so selection and claimability cannot
+    diverge after lease recovery.
     """
     parallel, _, dispatcher_state = _private_modules(code_dir)
     queue = _load(queue_path)
@@ -59,34 +81,40 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
             continue
         if task.get("resume_state") not in {"IMPLEMENTATION_QUEUED", "REPAIR_QUEUED"}:
             continue
-        if any(
-            task.get(field) is not None
-            for field in (
-                "active_run_id",
-                "active_role",
-                "active_worker_instance",
-                "claim_started_at",
-                "claim_expires_at",
-            )
-        ):
+        if _has_active_ownership(task):
             raise ActuatorContractError("unavailable A task still has active ownership")
 
         before_state = task["state"]
         updated = dispatcher_state.resume_unavailable(task)
         if updated.get("state", "").endswith("_EXECUTING"):
             raise ActuatorContractError("resume unexpectedly created an executing claim")
-        updated["active_run_id"] = None
-        updated["active_role"] = None
-        updated["active_worker_instance"] = None
-        updated["claim_started_at"] = None
-        updated["claim_expires_at"] = None
-        updated["resume_state"] = None
+        _clear_inactive_ownership(updated)
         task.clear()
         task.update(updated)
         if task["state"] == "BLOCKED":
             blocked.append(task["task_id"])
         elif task["state"] != before_state:
             resumed.append(task["task_id"])
+
+    queued_states = {"IMPLEMENTATION_QUEUED", "REPAIR_QUEUED", "ASSURANCE_QUEUED"}
+    for task in queue.get("tasks", []):
+        if task.get("state") not in queued_states:
+            continue
+        attempt = task.get("attempt")
+        maximum = task.get("max_attempts")
+        if not isinstance(attempt, int) or not isinstance(maximum, int) or attempt < maximum:
+            continue
+        if _has_active_ownership(task):
+            raise ActuatorContractError("attempt-exhausted queued task still has active ownership")
+        updated = dispatcher_state.transition(task, "BLOCKED")
+        _clear_inactive_ownership(updated)
+        updated["last_findings"] = list(task.get("last_findings", [])) + [
+            "Attempt budget exhausted during scheduled reconciliation."
+        ]
+        task.clear()
+        task.update(updated)
+        if task["task_id"] not in blocked:
+            blocked.append(task["task_id"])
 
     parallel.validate_parallel_queue(queue)
     if resumed or blocked:
@@ -106,6 +134,8 @@ def select_a1(code_dir: str, queue_path: str, output: str) -> None:
     if selected is None:
         _write_private(output, {"selected": False})
         return
+    if selected.get("attempt", 0) >= selected.get("max_attempts", 0):
+        raise ActuatorContractError("private selector returned attempt-exhausted A task")
     payload = {
         "selected": True,
         "task_id": selected["task_id"],
@@ -235,7 +265,6 @@ def main() -> int:
         else:  # pragma: no cover
             raise ActuatorContractError("unsupported command")
     except Exception as exc:
-        # Never render private task payloads in public logs. Error classes are enough for the caller.
         sys.stderr.write(f"ACTUATOR_CONTRACT_ERROR:{type(exc).__name__}\n")
         return 2
     return 0
