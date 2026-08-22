@@ -191,9 +191,10 @@ def build_messages(pack: dict[str, Any]) -> list[dict[str, str]]:
         "Return exactly one JSON object and no markdown with exactly these keys: "
         "candidate_sha, verdict, summary, findings. "
         "verdict must be PASS, FAIL, or INDETERMINATE. "
-        "PASS only when every acceptance criterion is supported. "
+        "PASS only when every acceptance criterion is supported, and for PASS findings MUST be exactly []. "
         "FAIL when supplied evidence proves a criterion is violated. "
-        "INDETERMINATE when required evidence is missing or conflicting."
+        "INDETERMINATE when required evidence is missing or conflicting. "
+        "For FAIL or INDETERMINATE findings MUST be a non-empty array of short plain strings."
     )
     user = json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -241,6 +242,8 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
     if not isinstance(findings, list) or len(findings) > 20:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
     if any(not isinstance(item, str) or not item.strip() or len(item) > 2000 for item in findings):
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
+    if verdict == "PASS" and findings:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
     if verdict in {"FAIL", "INDETERMINATE"} and not findings:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
