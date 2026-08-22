@@ -72,11 +72,13 @@ def test_ci_run_ids_are_exact_candidate_and_repository_bound() -> None:
         integration._ci_run_ids(REPO, CANDIDATE, wrong_repo)
 
 
-def test_reconcile_write_scope_admits_only_flat_project_intake_json() -> None:
+def test_reconcile_write_scope_admits_only_flat_intake_and_handover_json() -> None:
     allowed = {"control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"}
     changed = {
         "control/project-intake/CONTROL_193_PR194_ASSURE_R3.json",
+        "control/handovers/CONTROL-193-PR194-H3.json",
         "control/project-intake/nested/escape.json",
+        "control/handovers/nested/escape.json",
         "control/project-intake/not-json.txt",
         "control/worker-results/forbidden.json",
     }
@@ -85,6 +87,7 @@ def test_reconcile_write_scope_admits_only_flat_project_intake_json() -> None:
         "control/DISPATCH_QUEUE.json",
         "control/DISPATCH_RUNS.json",
         "control/project-intake/CONTROL_193_PR194_ASSURE_R3.json",
+        "control/handovers/CONTROL-193-PR194-H3.json",
     }
 
 
