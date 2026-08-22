@@ -146,7 +146,9 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
 
     new_project_id = new_task_id.replace("-", "_")
     target = intake_dir / f"{new_project_id}.json"
-    new_handover = _next_handover_id(source_handover)
+    # Execution retries reuse the same still-unconsumed immutable assurance request.
+    # Task/revision identity advances, governance/handover identity does not.
+    retry_handover = source_handover
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     successor = _replace_task_identity(source, old_task_id, new_task_id)
@@ -156,11 +158,12 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
     intent["revision"] = new_task_id
     intent["supersedes_revision"] = source_revision
     intent["task_id"] = new_task_id
-    intent["handover_id"] = new_handover
+    intent["handover_id"] = retry_handover
     intent["priority"] = int(source_intent.get("priority", 0)) - 1
     intent["max_attempts"] = int(source_intent.get("max_attempts", task.get("max_attempts", 3)))
     intent["last_verdict"] = "NONE"
     intent["last_findings"] = []
+    intent["current_blocker"] = None
     intent["created_at"] = now
     intent["updated_at"] = now
     instruction = intent.get("instruction")
@@ -173,9 +176,9 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
     criteria = intent.get("acceptance_criteria")
     if not isinstance(criteria, list):
         raise ActuatorContractError("source assurance intake acceptance criteria are missing")
-    criteria.append(
-        "This R3 generation is the final automatic execution retry; if it exhausts without a durable verdict, converge terminally instead of creating R4."
-    )
+    final_retry = "This R3 generation is the final automatic execution retry; if it exhausts without a durable verdict, converge terminally instead of creating R4."
+    if final_retry not in criteria:
+        criteria.append(final_retry)
 
     if target.exists():
         existing = _load(target)
@@ -186,6 +189,13 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
             or existing_intent.get("supersedes_revision") != source_revision
         ):
             raise ActuatorContractError("existing assurance retry intake conflicts with expected binding")
+        existing_handover = existing_intent.get("handover_id")
+        if existing_handover != retry_handover:
+            expected_blocker = f"INTAKE_RECONCILIATION_BLOCKED: authoritative handover is missing: {existing_handover}"
+            if existing_intent.get("current_blocker") != expected_blocker:
+                raise ActuatorContractError("existing assurance retry handover drift is not the known auto-blocker")
+            target.write_text(json.dumps(successor, indent=2) + "\n", encoding="utf-8")
+            target.chmod(0o600)
         return new_task_id
 
     target.write_text(json.dumps(successor, indent=2) + "\n", encoding="utf-8")
@@ -208,7 +218,8 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
     helper. Any inactive queued task whose attempt budget is already exhausted
     is transitioned to canonical BLOCKED so selection and claimability cannot
     diverge after lease recovery. A verdictless exhausted assurance task may
-    materialize exactly one further immutable intake generation, capped at R3.
+    materialize exactly one further immutable execution generation, capped at
+    R3, while reusing its still-unconsumed assurance-request handover.
     Already-converged BLOCKED records are eligible only when they carry the
     exact scheduled-reconciliation exhaustion marker.
     """
@@ -304,34 +315,27 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
 def select_a1(code_dir: str, queue_path: str, output: str) -> None:
     parallel, queue_mod, _ = _private_modules(code_dir)
     queue = _load(queue_path)
-    selected = parallel.select_task_for_instance(
-        queue,
-        queue_mod.ROLE_A,
-        parallel.INSTANCE_A1,
-    )
+    selected = parallel.select_task_for_instance(queue, queue_mod.ROLE_A, parallel.INSTANCE_A1)
     if selected is None:
         _write_private(output, {"selected": False})
         return
     if selected.get("attempt", 0) >= selected.get("max_attempts", 0):
         raise ActuatorContractError("private selector returned attempt-exhausted A task")
-    payload = {
-        "selected": True,
-        "task_id": selected["task_id"],
-        "repository": selected.get("repository"),
-        "operation": selected.get("operation"),
-        "state": selected.get("state"),
-        "work_branch": selected.get("work_branch"),
-        "target_branch": selected.get("target_branch"),
-    }
-    _write_private(output, payload)
+    _write_private(
+        output,
+        {
+            "selected": True,
+            "task_id": selected["task_id"],
+            "repository": selected.get("repository"),
+            "operation": selected.get("operation"),
+            "state": selected.get("state"),
+            "work_branch": selected.get("work_branch"),
+            "target_branch": selected.get("target_branch"),
+        },
+    )
 
 
-def assert_current_claim(
-    code_dir: str,
-    queue_path: str,
-    task_id: str,
-    output: str | None,
-) -> None:
+def assert_current_claim(code_dir: str, queue_path: str, task_id: str, output: str | None) -> None:
     parallel, queue_mod, _ = _private_modules(code_dir)
     queue = _load(queue_path)
     task = _task(queue, task_id)
@@ -342,29 +346,11 @@ def assert_current_claim(
     run_id = task.get("active_run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ActuatorContractError("canonical claim run id is missing")
-    parallel.assert_claim_current(
-        queue,
-        task_id=task_id,
-        role=queue_mod.ROLE_A,
-        worker_instance=parallel.INSTANCE_A1,
-        run_id=run_id,
-        now=datetime.now(timezone.utc),
-    )
+    parallel.assert_claim_current(queue, task_id=task_id, role=queue_mod.ROLE_A, worker_instance=parallel.INSTANCE_A1, run_id=run_id, now=datetime.now(timezone.utc))
     if queue.get("principal_manual_relay_count") != 0 or task.get("principal_manual_relay_count") != 0:
         raise ActuatorContractError("principal_manual_relay_count changed from zero")
     if output:
-        _write_private(
-            output,
-            {
-                "task_id": task_id,
-                "run_id": run_id,
-                "repository": task.get("repository"),
-                "operation": task.get("operation"),
-                "state": task.get("state"),
-                "work_branch": task.get("work_branch"),
-                "target_branch": task.get("target_branch"),
-            },
-        )
+        _write_private(output, {"task_id": task_id, "run_id": run_id, "repository": task.get("repository"), "operation": task.get("operation"), "state": task.get("state"), "work_branch": task.get("work_branch"), "target_branch": task.get("target_branch")})
 
 
 def assert_finalized(code_dir: str, queue_path: str, task_id: str, run_id: str) -> None:
@@ -397,33 +383,27 @@ def read_private_field(path: str, field: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Private-state helper for Scheduled Worker A V2")
     sub = parser.add_subparsers(dest="command", required=True)
-
     resume = sub.add_parser("resume-a-unavailable")
     resume.add_argument("--code-dir", required=True)
     resume.add_argument("--queue", required=True)
     resume.add_argument("--output")
-
     select = sub.add_parser("select-a1")
     select.add_argument("--code-dir", required=True)
     select.add_argument("--queue", required=True)
     select.add_argument("--output", required=True)
-
     claim = sub.add_parser("assert-claim")
     claim.add_argument("--code-dir", required=True)
     claim.add_argument("--queue", required=True)
     claim.add_argument("--task-id", required=True)
     claim.add_argument("--output")
-
     finalized = sub.add_parser("assert-finalized")
     finalized.add_argument("--code-dir", required=True)
     finalized.add_argument("--queue", required=True)
     finalized.add_argument("--task-id", required=True)
     finalized.add_argument("--run-id", required=True)
-
     field = sub.add_parser("field")
     field.add_argument("--file", required=True)
     field.add_argument("--name", required=True)
-
     return parser
 
 
@@ -440,7 +420,7 @@ def main() -> int:
             assert_finalized(args.code_dir, args.queue, args.task_id, args.run_id)
         elif args.command == "field":
             sys.stdout.write(read_private_field(args.file, args.name))
-        else:  # pragma: no cover
+        else:
             raise ActuatorContractError("unsupported command")
     except Exception as exc:
         sys.stderr.write(f"ACTUATOR_CONTRACT_ERROR:{type(exc).__name__}\n")
