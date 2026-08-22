@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           MEMORY_REPOSITORY='market-predictions/memory'
           MEMORY_BRANCH='import/historical-context-phase-1'
-          EXPECTED_HEAD='3e696d80e9b3820057d1144ee7f048fd81e6b171'
+          EXPECTED_HEAD='3b19146e5b03dd1ad2c789b3d752f87643f11dd7'
           EXPECTED_BASE='c407a9c8dfc5617f1a0adc6997a40ddd602ac011'
           ROOT="${RUNNER_TEMP}/memory-pr2-validation"
           REPO_DIR="${ROOT}/memory"
@@ -105,14 +105,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$VALIDATION" = 'PASS' ] && \
-             [ "$HEAD_SHA" = '3e696d80e9b3820057d1144ee7f048fd81e6b171' ] && \
+             [ "$HEAD_SHA" = '3b19146e5b03dd1ad2c789b3d752f87643f11dd7' ] && \
              [ "$BASE_SHA" = 'c407a9c8dfc5617f1a0adc6997a40ddd602ac011' ]; then
             state=success
-            context='memory/pr2-validator/3e696d80/PASS'
+            context='memory/pr2-validator/3b19146e/PASS'
             description='MEMORY_PR2_EXACT_HEAD_VALIDATION_PASS'
           else
             state=failure
-            context='memory/pr2-validator/3e696d80/FAIL'
+            context='memory/pr2-validator/3b19146e/FAIL'
             description='MEMORY_PR2_EXACT_HEAD_VALIDATION_FAIL'
           fi
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
