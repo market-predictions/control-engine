@@ -1,22 +1,9 @@
-name: Scheduled Worker B V2
-# R3 completion-fingerprint deployment wake
-# Memory H5 assurance wake
-# Memory H5 post-expiry assurance wake
-# Control-146 lease-expiry reconciliation wake for Memory H5
-# Preferred B1 wake after Control-193 terminal
+name: Provider B Recovery V2
+# Recovery-only provider-portable B1 path. Normal semantic B1 target is ChatGPT Work.
+# No schedule or push trigger: this workflow must never race a Work-B1 canary/claim.
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/scheduled-worker-b-v2.yml'
-      - 'scripts/scheduled_worker_b_v2.sh'
-      - 'scripts/scheduled_worker_b_v2_resilient.sh'
-      - 'control_engine/scheduled_worker_b.py'
 
 permissions:
   contents: read
