@@ -362,15 +362,14 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
     if resumed or blocked:
         Path(queue_path).write_text(json.dumps(queue, indent=2) + "\n", encoding="utf-8")
     if output:
-        _write_private(
-            output,
-            {
-                "resumed": resumed,
-                "blocked": blocked,
-                "generated_assurance_retries": generated_assurance_retries,
-                "retry_reconciliation_blockers": retry_reconciliation_blockers,
-            },
-        )
+        report_payload: dict[str, Any] = {
+            "resumed": resumed,
+            "blocked": blocked,
+            "generated_assurance_retries": generated_assurance_retries,
+        }
+        if retry_reconciliation_blockers:
+            report_payload["retry_reconciliation_blockers"] = retry_reconciliation_blockers
+        _write_private(output, report_payload)
 
 
 def select_a1(code_dir: str, queue_path: str, output: str) -> None:
