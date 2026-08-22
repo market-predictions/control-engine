@@ -36,8 +36,8 @@ def test_public_workflow_is_main_only_and_secret_safe() -> None:
 def test_actuator_reuses_existing_control_primitives() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert 'CONTROL_RUNTIME_REF="control-runtime-state"' in text
-    assert 'CONTROL_CODE_REF="runtime/public-b-v2-code-r1"' in text
-    assert 'CONTROL_CODE_SHA="728117701e20ba3762e984ef779a74effb3bcc55"' in text
+    assert 'CONTROL_CODE_REF="runtime/public-b-v2-code-r2"' in text
+    assert 'CONTROL_CODE_SHA="97ef7de0007b4886e336182c7a9a0ee20ae77455"' in text
     assert 'LEASE_MINUTES=15' in text
     assert 'dispatcher/cli.py\" resume' in text
     assert 'dispatcher/cli.py\" claim' in text
