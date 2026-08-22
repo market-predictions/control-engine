@@ -1,0 +1,40 @@
+name: Worker B Wake Bridge V1
+
+on:
+  workflow_run:
+    workflows:
+      - Scheduled Worker A V2
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/worker-b-wake-bridge-v1.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: control-worker-b-wake-bridge-v1
+  cancel-in-progress: false
+
+jobs:
+  wake-b:
+    if: github.repository == 'market-predictions/control-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch Scheduled Worker B V2
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/scheduled-worker-b-v2.yml/dispatches" \
+            -f ref=main
