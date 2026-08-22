@@ -5,8 +5,8 @@ umask 077
 PUBLIC_REPOSITORY="market-predictions/control-engine"
 CONTROL_PLANE_REPOSITORY="market-predictions/control-plane"
 CONTROL_RUNTIME_REF="control-runtime-state"
-CONTROL_CODE_REF="runtime/public-b-v2-code-r1"
-CONTROL_CODE_SHA="728117701e20ba3762e984ef779a74effb3bcc55"
+CONTROL_CODE_REF="runtime/public-b-v2-code-r2"
+CONTROL_CODE_SHA="97ef7de0007b4886e336182c7a9a0ee20ae77455"
 MAX_CAS_ATTEMPTS=3
 LEASE_MINUTES=15
 
