@@ -44,7 +44,9 @@ bounded extra evidence <=  8,000 bytes
 total semantic pack    <= 52,000 bytes
 ```
 
-If the package does not fit, the deterministic routing decision is the compatibility Boolean `work_required=true`, which now means **DEEP review required**. The field name is retained temporarily to keep the current delta small; it no longer means ChatGPT Work.
+Before executor selection, `measure_semantic_budget()` measures the prospective exact pack and `classify_execution_surface()` evaluates every hard builder budget. If **any** component or the complete serialized pack exceeds its bound, the deterministic routing result is `work_required=true`, which now means **DEEP review required**. A caller-supplied diff threshold may be stricter than 32,000 bytes but may never relax the builder's 32,000-byte hard maximum.
+
+The `work_required` field name is retained temporarily as a compatibility wire alias; it no longer means ChatGPT Work.
 
 ## Minimal routing
 
@@ -57,7 +59,10 @@ work_required=true|false
 DEEP review is required when:
 
 - explicitly required by the caller/project contract;
-- the exact diff exceeds the bounded Cloudflare budget;
+- the exact diff exceeds the effective Cloudflare diff budget;
+- the assurance contract exceeds 8,000 bytes;
+- bounded extra evidence exceeds 8,000 bytes;
+- the complete prospective semantic pack exceeds 52,000 bytes;
 - the change touches defined Control authority, executor or assurance-contract paths, including the Cloudflare and Codex adapters.
 
 There is no score, confidence model, percentage router or round-robin state.
@@ -104,6 +109,8 @@ candidate mismatch
 ```
 
 These are classified as `EXECUTION_UNAVAILABLE_*` and must never be converted into semantic `INDETERMINATE`.
+
+A prospective semantic pack that does not fit the bounded STANDARD contract is different: it is deterministically classified **before** Cloudflare invocation as DEEP, so budget overflow is not discovered late as a STANDARD execution failure.
 
 ## Shadow calibration
 
