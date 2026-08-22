@@ -67,6 +67,19 @@ def _valid_sha(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{40}", value))
 
 
+def _unwrap_single_json_fence(value: str) -> str:
+    raw = value.strip()
+    if not raw.startswith("```"):
+        return raw
+    match = re.fullmatch(r"```(?:json)?\s*\n?(.*?)\n?```", raw, flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+    inner = match.group(1).strip()
+    if not inner:
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+    return inner
+
+
 def lineage_id(*, task_id: str, handover_id: str, candidate_sha: str) -> str:
     if not task_id or not handover_id or not _valid_sha(candidate_sha):
         raise CloudflareB1Error("lineage identity is incomplete or invalid")
@@ -202,9 +215,7 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
     if not isinstance(response, str) or not response.strip():
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
 
-    raw = response.strip()
-    if raw.startswith("```") or raw.endswith("```"):
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+    raw = _unwrap_single_json_fence(response)
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
