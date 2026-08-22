@@ -15,12 +15,15 @@ on:
     paths:
       - '.github/workflows/scheduled-worker-a-v2.yml'
       - 'scripts/scheduled_worker_a_v2.sh'
+      - 'scripts/scheduled_worker_a_v2_retry_guard.sh'
       - 'scripts/project_integration_executor.py'
+      - 'scripts/project_integration_executor_guarded.py'
       - 'scripts/private_reconcile_readonly_probe.py'
       - 'scripts/github_app_preflight.sh'
       - 'scripts/private_intake_diagnostic.py'
       - 'scripts/quarantine_zta_legacy_repair.py'
       - 'control_engine/scheduled_worker_a.py'
+      - 'control_engine/scheduled_worker_a_retry_guard.py'
 
 permissions:
   contents: read
@@ -75,8 +78,9 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/scheduled_worker_a_v2.sh
+          bash -n scripts/scheduled_worker_a_v2_retry_guard.sh
           bash -n scripts/github_app_preflight.sh
-          python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py scripts/private_reconcile_readonly_probe.py scripts/quarantine_zta_legacy_repair.py scripts/project_integration_executor.py
+          python -m py_compile control_engine/scheduled_worker_a.py control_engine/scheduled_worker_a_retry_guard.py scripts/private_intake_diagnostic.py scripts/private_reconcile_readonly_probe.py scripts/quarantine_zta_legacy_repair.py scripts/project_integration_executor.py scripts/project_integration_executor_guarded.py
 
       - name: Quarantine exact legacy ZTA PR7 repair intake
         id: legacy-zta-migration
@@ -112,7 +116,7 @@ jobs:
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set +e
-          output="$(python scripts/project_integration_executor.py 2>&1)"
+          output="$(python scripts/project_integration_executor_guarded.py 2>&1)"
           rc=$?
           status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_INTEGRATION=//p' | tail -n 1)"
           handled="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_INTEGRATION_HANDLED=//p' | tail -n 1)"
@@ -136,7 +140,7 @@ jobs:
           CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED }}
         run: |
           set +e
-          output="$(bash scripts/scheduled_worker_a_v2.sh 2>&1)"
+          output="$(bash scripts/scheduled_worker_a_v2_retry_guard.sh 2>&1)"
           rc=$?
           status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_V2=//p' | tail -n 1)"
           if [ -z "$status_class" ]; then
