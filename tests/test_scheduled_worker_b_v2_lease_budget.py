@@ -9,6 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "scheduled_worker_b_v2.sh"
 RESILIENT = ROOT / "scripts" / "scheduled_worker_b_v2_resilient.sh"
+WORKFLOW = ROOT / ".github" / "workflows" / "scheduled-worker-b-v2.yml"
 
 
 def _render_resilient_script(tmp_path: Path) -> str:
@@ -58,3 +59,17 @@ def test_lease_budget_fence_preserves_terminal_retry_patch(tmp_path: Path) -> No
     assert "if [ \"$completion_attempt\" -lt \"$MAX_CAS_ATTEMPTS\" ]; then" in rendered
     assert "FAIL_CLOSED_B1_TERMINAL_COMPLETION" in rendered
     assert "CONTROL_RUNTIME_CAS_CONFLICT" not in rendered[rendered.index("for completion_attempt"):]
+
+
+def test_terminal_failure_emits_only_bounded_redacted_diagnostic_block(tmp_path: Path) -> None:
+    rendered = _render_resilient_script(tmp_path)
+    assert "B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN" in rendered
+    assert "B1_TERMINAL_COMPLETION_DIAGNOSTIC_END" in rendered
+    assert 'tail -n 80 "$PRIVATE_TMP/complete.log"' in rendered
+    assert "AUTHORIZATION: basic [REDACTED]" in rendered
+    assert "x-access-token:[REDACTED]" in rendered
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "output=\"$(bash scripts/scheduled_worker_b_v2_resilient.sh 2>&1)\"" in workflow
+    assert "/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN$/,/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_END$/p" in workflow
+    assert "printf '%s\\n' \"$diagnostic\"" in workflow

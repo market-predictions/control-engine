@@ -53,6 +53,18 @@ new = '''  # connected_complete is stage-idempotent: immutable result and comple
   if [ "$completion_attempt" -lt "$MAX_CAS_ATTEMPTS" ]; then
     continue
   fi
+
+  # Expose only a bounded, token-redacted completion diagnostic. The workflow
+  # filters this marker block out of the otherwise swallowed worker output.
+  printf 'B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN\\n' >&2
+  if [ -f "$PRIVATE_TMP/complete.log" ]; then
+    tail -n 80 "$PRIVATE_TMP/complete.log" \\
+      | sed -E 's/AUTHORIZATION: basic [^[:space:]]+/AUTHORIZATION: basic [REDACTED]/g; s/x-access-token:[^[:space:]@]+/x-access-token:[REDACTED]/g' \\
+      >&2 || true
+  else
+    printf 'complete.log missing\\n' >&2
+  fi
+  printf 'B1_TERMINAL_COMPLETION_DIAGNOSTIC_END\\n' >&2
   fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
 '''
 count = text.count(old)
