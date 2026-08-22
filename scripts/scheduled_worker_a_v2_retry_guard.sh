@@ -16,7 +16,7 @@ pin_old = '''CONTROL_CODE_REF="recovery/187-policy-metadata-r1"
 CONTROL_CODE_SHA="62cf2a88edd8700c073e51274d331210c7a36900"
 '''
 pin_new = '''CONTROL_CODE_REF="recovery/intake-immutable-result-collision-r1"
-CONTROL_CODE_SHA="a4f40afc90b51f05c88b16d9d17ac987c2ba0d30"
+CONTROL_CODE_SHA="7e0e9e218467c3090dbfcbb63a51a819cc19aba6"
 '''
 count = text.count(pin_old)
 if count != 1:
