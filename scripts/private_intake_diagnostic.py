@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Deployment wake: 2026-08-22 exhausted CONTROL-193 R3 terminal convergence.
 """Private-only intake validation receipt for Scheduled Worker A V2.
 
 No private intake content is written to the public repository, logs, artifacts or
