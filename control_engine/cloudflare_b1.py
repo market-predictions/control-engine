@@ -18,6 +18,7 @@ MAX_BOUNDED_EVIDENCE_BYTES = 8_000
 MAX_PACK_BYTES = 52_000
 DEFAULT_TIMEOUT_SECONDS = 90
 DEFAULT_SEED = 199001
+DEFAULT_MAX_TOKENS = 512
 
 CONTROL_PLANE_REPOSITORY = "market-predictions/control-plane"
 CONTROL_ENGINE_REPOSITORY = "market-predictions/control-engine"
@@ -188,12 +189,16 @@ def build_messages(pack: dict[str, Any]) -> list[dict[str, str]]:
 def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) -> dict[str, Any]:
     if not _valid_sha(candidate_sha):
         raise CloudflareB1Error("candidate_sha is invalid")
-    if not isinstance(api_response, dict) or api_response.get("success") is not True:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_API_REJECTED")
-    result = api_response.get("result")
-    if not isinstance(result, dict):
+    if not isinstance(api_response, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
-    response = result.get("response")
+
+    choices = api_response.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
+    response = message.get("content")
     if not isinstance(response, str) or not response.strip():
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
 
@@ -241,6 +246,7 @@ def run_workers_ai_once(
     messages: list[dict[str, str]],
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     seed: int = DEFAULT_SEED,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account_id or ""):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_ACCOUNT")
@@ -250,9 +256,19 @@ def run_workers_ai_once(
         raise CloudflareB1Error("messages must contain exactly system and user entries")
     if not isinstance(timeout_seconds, int) or timeout_seconds < 1 or timeout_seconds > 300:
         raise CloudflareB1Error("timeout_seconds is outside the bounded range")
+    if not isinstance(max_tokens, int) or max_tokens < 1 or max_tokens > 2048:
+        raise CloudflareB1Error("max_tokens is outside the bounded range")
 
-    endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{MODEL_ID}"
-    body = _json_bytes({"messages": messages, "seed": seed})
+    endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"
+    body = _json_bytes(
+        {
+            "model": MODEL_ID,
+            "messages": messages,
+            "temperature": 0,
+            "seed": seed,
+            "max_tokens": max_tokens,
+        }
+    )
     request = urllib.request.Request(
         endpoint,
         data=body,
