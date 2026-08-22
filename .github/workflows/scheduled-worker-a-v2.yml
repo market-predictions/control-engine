@@ -6,6 +6,7 @@ name: Scheduled Worker A V2
 # expired completion-diagnostic R2 reconciliation wake
 # Memory H4 intake materialization wake
 # Memory H5 intake materialization wake
+# Work H6 intake materialization wake
 
 on:
   schedule:
