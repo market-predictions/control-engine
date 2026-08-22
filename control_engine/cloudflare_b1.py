@@ -55,6 +55,14 @@ class CloudflareB1ExecutionUnavailable(RuntimeError):
 
 
 @dataclass(frozen=True)
+class SemanticBudgetMeasurement:
+    diff_bytes: int
+    contract_bytes: int
+    evidence_bytes: int
+    pack_bytes: int
+
+
+@dataclass(frozen=True)
 class ExecutionSurfaceDecision:
     work_required: bool
     reasons: tuple[str, ...]
@@ -92,26 +100,82 @@ def lineage_id(*, task_id: str, handover_id: str, candidate_sha: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def measure_semantic_budget(
+    *,
+    task_id: str,
+    handover_id: str,
+    candidate_sha: str,
+    assurance_contract: str,
+    acceptance_criteria: list[str],
+    capsule: dict[str, Any],
+    diff: str,
+    bounded_evidence: Any,
+) -> SemanticBudgetMeasurement:
+    """Measure the exact prospective semantic pack before executor routing."""
+    if not task_id or not handover_id or not _valid_sha(candidate_sha):
+        raise CloudflareB1Error("semantic budget identity is incomplete or invalid")
+    if not isinstance(assurance_contract, str):
+        raise CloudflareB1Error("assurance_contract must be text")
+    if not isinstance(acceptance_criteria, list):
+        raise CloudflareB1Error("acceptance_criteria must be a list")
+    if not isinstance(capsule, dict):
+        raise CloudflareB1Error("capsule must be an object")
+    if not isinstance(diff, str):
+        raise CloudflareB1Error("diff must be text")
+
+    pack = {
+        "protocol_id": PROTOCOL_ID,
+        "lineage_id": lineage_id(task_id=task_id, handover_id=handover_id, candidate_sha=candidate_sha),
+        "task_id": task_id,
+        "handover_id": handover_id,
+        "candidate_sha": candidate_sha,
+        "assurance_contract": assurance_contract,
+        "acceptance_criteria": acceptance_criteria,
+        "b0_capsule": capsule,
+        "exact_diff": diff,
+        "bounded_evidence": bounded_evidence,
+    }
+    return SemanticBudgetMeasurement(
+        diff_bytes=len(diff.encode("utf-8")),
+        contract_bytes=len(assurance_contract.encode("utf-8")),
+        evidence_bytes=len(_json_bytes(bounded_evidence)),
+        pack_bytes=len(_json_bytes(pack)),
+    )
+
+
 def classify_execution_surface(
     *,
     repository: str,
     changed_files: list[str],
-    diff_bytes: int,
+    budget: SemanticBudgetMeasurement,
     explicit_work_required: bool = False,
     max_diff_bytes: int = MAX_DIFF_BYTES,
 ) -> ExecutionSurfaceDecision:
-    if not isinstance(diff_bytes, int) or diff_bytes < 0:
-        raise CloudflareB1Error("diff_bytes must be a non-negative integer")
     if not repository:
         raise CloudflareB1Error("repository is required")
     if any(not isinstance(path, str) or not path for path in changed_files):
         raise CloudflareB1Error("changed_files must contain non-empty paths")
+    if not isinstance(budget, SemanticBudgetMeasurement):
+        raise CloudflareB1Error("semantic budget measurement is required")
+    if any(
+        not isinstance(value, int) or value < 0
+        for value in (budget.diff_bytes, budget.contract_bytes, budget.evidence_bytes, budget.pack_bytes)
+    ):
+        raise CloudflareB1Error("semantic budget values must be non-negative integers")
+    if not isinstance(max_diff_bytes, int) or max_diff_bytes < 0:
+        raise CloudflareB1Error("max_diff_bytes must be a non-negative integer")
 
     reasons: list[str] = []
     if explicit_work_required:
         reasons.append("EXPLICIT_WORK_REQUIRED")
-    if diff_bytes > max_diff_bytes:
+    if budget.diff_bytes > min(max_diff_bytes, MAX_DIFF_BYTES):
         reasons.append("DIFF_BUDGET_EXCEEDED")
+    if budget.contract_bytes > MAX_CONTRACT_BYTES:
+        reasons.append("CONTRACT_BUDGET_EXCEEDED")
+    if budget.evidence_bytes > MAX_BOUNDED_EVIDENCE_BYTES:
+        reasons.append("BOUNDED_EVIDENCE_BUDGET_EXCEEDED")
+    if budget.pack_bytes > MAX_PACK_BYTES:
+        reasons.append("SEMANTIC_PACK_BUDGET_EXCEEDED")
 
     prefixes: tuple[str, ...] = ()
     if repository == CONTROL_PLANE_REPOSITORY:
@@ -141,8 +205,6 @@ def build_semantic_pack(
         raise CloudflareB1Error("semantic pack identity is incomplete or invalid")
     if not isinstance(assurance_contract, str) or not assurance_contract.strip():
         raise CloudflareB1Error("assurance_contract must be non-empty text")
-    if len(assurance_contract.encode("utf-8")) > MAX_CONTRACT_BYTES:
-        raise CloudflareB1Error("assurance contract exceeds bounded budget")
     if not isinstance(acceptance_criteria, list) or not acceptance_criteria:
         raise CloudflareB1Error("acceptance_criteria must be a non-empty list")
     if any(not isinstance(item, str) or not item.strip() for item in acceptance_criteria):
@@ -157,15 +219,27 @@ def build_semantic_pack(
         raise CloudflareB1Error("START_PROVEN is required before semantic review")
     if capsule.get("deterministic_contradictions"):
         raise CloudflareB1Error("semantic Cloudflare path is forbidden with deterministic contradictions")
-    if not isinstance(diff, str):
-        raise CloudflareB1Error("diff must be text")
-    if len(diff.encode("utf-8")) > MAX_DIFF_BYTES:
-        raise CloudflareB1Error("diff exceeds bounded Cloudflare budget")
-    evidence_bytes = _json_bytes(bounded_evidence)
-    if len(evidence_bytes) > MAX_BOUNDED_EVIDENCE_BYTES:
-        raise CloudflareB1Error("bounded evidence exceeds budget")
 
-    pack = {
+    budget = measure_semantic_budget(
+        task_id=task_id,
+        handover_id=handover_id,
+        candidate_sha=candidate_sha,
+        assurance_contract=assurance_contract,
+        acceptance_criteria=acceptance_criteria,
+        capsule=capsule,
+        diff=diff,
+        bounded_evidence=bounded_evidence,
+    )
+    if budget.contract_bytes > MAX_CONTRACT_BYTES:
+        raise CloudflareB1Error("assurance contract exceeds bounded budget")
+    if budget.diff_bytes > MAX_DIFF_BYTES:
+        raise CloudflareB1Error("diff exceeds bounded Cloudflare budget")
+    if budget.evidence_bytes > MAX_BOUNDED_EVIDENCE_BYTES:
+        raise CloudflareB1Error("bounded evidence exceeds budget")
+    if budget.pack_bytes > MAX_PACK_BYTES:
+        raise CloudflareB1Error("semantic pack exceeds total bounded budget")
+
+    return {
         "protocol_id": PROTOCOL_ID,
         "lineage_id": lineage_id(task_id=task_id, handover_id=handover_id, candidate_sha=candidate_sha),
         "task_id": task_id,
@@ -177,9 +251,6 @@ def build_semantic_pack(
         "exact_diff": diff,
         "bounded_evidence": bounded_evidence,
     }
-    if len(_json_bytes(pack)) > MAX_PACK_BYTES:
-        raise CloudflareB1Error("semantic pack exceeds total bounded budget")
-    return pack
 
 
 def build_messages(pack: dict[str, Any]) -> list[dict[str, str]]:
