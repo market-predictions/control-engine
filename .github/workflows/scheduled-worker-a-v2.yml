@@ -128,7 +128,12 @@ jobs:
 
       - name: Reconcile, claim and execute one model-driven A1 task
         id: runtime
-        if: steps.app-preflight.outcome == 'success' && steps.app-token.outcome == 'success' && steps.legacy-zta-migration.outcome == 'success' && steps.integration.outcome == 'success' && steps.integration.outputs.handled != 'true'
+        if: >-
+          steps.app-preflight.outcome == 'success' &&
+          steps.app-token.outcome == 'success' &&
+          steps.legacy-zta-migration.outcome == 'success' &&
+          ((steps.integration.outcome == 'success' && steps.integration.outputs.handled != 'true') ||
+           steps.integration.outputs.status_class == 'BLOCKED_PROJECT_INTEGRATION')
         continue-on-error: true
         shell: bash
         env:
@@ -173,14 +178,16 @@ jobs:
             description=APP_TOKEN_CREATION_FAILED
           elif [ "$MIGRATION_OUTCOME" != "success" ]; then
             description=LEGACY_ZTA_MIGRATION_FAILED
-          elif [ "$INTEGRATION_OUTCOME" != "success" ]; then
+          elif [ "$INTEGRATION_OUTCOME" != "success" ] && [ "$INTEGRATION_CLASS" != "BLOCKED_PROJECT_INTEGRATION" ]; then
             description="${INTEGRATION_CLASS:-PROJECT_INTEGRATION_FAILED}"
-          elif [ "$INTEGRATION_HANDLED" = "true" ]; then
+          elif [ "$INTEGRATION_OUTCOME" = "success" ] && [ "$INTEGRATION_HANDLED" = "true" ]; then
             description="${INTEGRATION_CLASS:-COMPLETED_ONE_PROJECT_INTEGRATION}"
             state=success
           elif [ -n "${RUNTIME_CLASS:-}" ]; then
             description="$RUNTIME_CLASS"
             if [ "$RUNTIME_OUTCOME" = "success" ]; then state=success; fi
+          elif [ "$INTEGRATION_CLASS" = "BLOCKED_PROJECT_INTEGRATION" ]; then
+            description=BLOCKED_PROJECT_INTEGRATION
           fi
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
@@ -190,10 +197,10 @@ jobs:
           if [ "$PREFLIGHT_OUTCOME" != "success" ] || [ "$APP_OUTCOME" != "success" ] || [ "$MIGRATION_OUTCOME" != "success" ]; then
             exit 1
           fi
-          if [ "$INTEGRATION_OUTCOME" != "success" ]; then
+          if [ "$INTEGRATION_OUTCOME" != "success" ] && [ "$INTEGRATION_CLASS" != "BLOCKED_PROJECT_INTEGRATION" ]; then
             exit 1
           fi
-          if [ "$INTEGRATION_HANDLED" = "true" ]; then
+          if [ "$INTEGRATION_OUTCOME" = "success" ] && [ "$INTEGRATION_HANDLED" = "true" ]; then
             exit 0
           fi
           if [ "$RUNTIME_OUTCOME" != "success" ]; then
