@@ -9,9 +9,26 @@
     "The measurement must be bound to the frozen candidate."
   ],
   "capsule": {
-    "authority": {"semantic_verdict_present": false},
-    "task": {"candidate_sha": "3333333333333333333333333333333333333333"},
-    "claim": {"start_proven": true},
+    "protocol_id": "CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1",
+    "version": "1.0",
+    "authority": {
+      "logical_role": "governance_release_assurance",
+      "worker_instance": "B1",
+      "semantic_verdict_present": false,
+      "merge_authority": false,
+      "release_authority": false
+    },
+    "task": {
+      "task_id": "SHADOW-INDETERMINATE",
+      "handover_id": "SHADOW-INDETERMINATE-H1",
+      "candidate_sha": "3333333333333333333333333333333333333333"
+    },
+    "claim": {
+      "active_run_id": "shadow-indeterminate-run-1",
+      "active_role": "governance_release_assurance",
+      "active_worker_instance": "B1",
+      "start_proven": true
+    },
     "deterministic_contradictions": []
   },
   "diff": "diff --git a/src/cache.py b/src/cache.py\n--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1,2 @@\n CACHE=True\n+CACHE_TTL=60\n",
