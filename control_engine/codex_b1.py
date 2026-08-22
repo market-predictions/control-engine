@@ -140,7 +140,7 @@ def classify_review_snapshot(
     stale_reviews = [item for item in codex_reviews if _commit(item) not in (None, candidate_sha)]
 
     exact_review_ids = {item.get("id") for item in exact_reviews if item.get("id") is not None}
-    findings: list[str] = []
+    finding_records: list[tuple[str, bool]] = []
     for item in review_comments:
         if not _is_codex(item):
             continue
@@ -150,10 +150,13 @@ def classify_review_snapshot(
         exact_review_binding = review_id in exact_review_ids if review_id is not None else False
         if not exact_commit_binding and not exact_review_binding:
             continue
+        body = item.get("body")
+        tagged_indeterminate = isinstance(body, str) and body.strip().startswith(INDETERMINATE_MARKER)
         finding = _bounded_finding(item)
         if finding:
-            findings.append(finding)
+            finding_records.append((finding, tagged_indeterminate))
 
+    findings = [finding for finding, _ in finding_records]
     if len(findings) > MAX_FINDINGS:
         return CodexReviewDecision(
             status="EXECUTION_UNAVAILABLE",
@@ -163,8 +166,8 @@ def classify_review_snapshot(
             reviewed_commit=candidate_sha if exact_reviews else None,
         )
 
-    indeterminate = [finding for finding in findings if INDETERMINATE_MARKER in finding]
-    definite = [finding for finding in findings if INDETERMINATE_MARKER not in finding]
+    indeterminate = [finding for finding, tagged in finding_records if tagged]
+    definite = [finding for finding, tagged in finding_records if not tagged]
     if definite:
         return CodexReviewDecision(
             status="COMPLETE",
