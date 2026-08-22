@@ -2,6 +2,7 @@ name: Scheduled Worker A V2
 # credential-refresh deployment wake
 # post-repair assurance intake materialization wake
 # completion-diagnostic assurance intake materialization wake
+# read-only reconciliation probe before integration gate
 
 on:
   schedule:
@@ -14,6 +15,7 @@ on:
       - '.github/workflows/scheduled-worker-a-v2.yml'
       - 'scripts/scheduled_worker_a_v2.sh'
       - 'scripts/project_integration_executor.py'
+      - 'scripts/private_reconcile_readonly_probe.py'
       - 'scripts/github_app_preflight.sh'
       - 'scripts/private_intake_diagnostic.py'
       - 'scripts/quarantine_zta_legacy_repair.py'
@@ -73,7 +75,7 @@ jobs:
           set -euo pipefail
           bash -n scripts/scheduled_worker_a_v2.sh
           bash -n scripts/github_app_preflight.sh
-          python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py scripts/quarantine_zta_legacy_repair.py scripts/project_integration_executor.py
+          python -m py_compile control_engine/scheduled_worker_a.py scripts/private_intake_diagnostic.py scripts/private_reconcile_readonly_probe.py scripts/quarantine_zta_legacy_repair.py scripts/project_integration_executor.py
 
       - name: Quarantine exact legacy ZTA PR7 repair intake
         id: legacy-zta-migration
@@ -91,6 +93,14 @@ jobs:
         env:
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python scripts/private_intake_diagnostic.py
+
+      - name: Run read-only reconciliation diagnostic before integration
+        if: steps.app-token.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python scripts/private_reconcile_readonly_probe.py
 
       - name: Execute preferred deterministic PROJECT_INTEGRATION
         id: integration
