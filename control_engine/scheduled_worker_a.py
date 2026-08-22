@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import datetime, timezone
 import importlib
 import json
@@ -104,6 +105,58 @@ def _replace_task_identity(value: Any, old: str, new: str) -> Any:
     return value
 
 
+def _ensure_assurance_retry_handover(
+    queue_path: str,
+    *,
+    old_task_id: str,
+    new_task_id: str,
+    source_handover_id: str,
+    new_handover_id: str,
+    candidate_sha: str,
+    candidate_pr: int | None,
+    now: str,
+) -> None:
+    control_dir = Path(queue_path).parent
+    handover_dir = control_dir / "handovers"
+    if not handover_dir.is_dir():
+        raise ActuatorContractError("canonical handover directory is missing")
+    source_path = handover_dir / f"{source_handover_id}.json"
+    if not source_path.is_file():
+        raise ActuatorContractError("source assurance handover is missing")
+    source = _load(source_path)
+    if source.get("handover_id") != source_handover_id:
+        raise ActuatorContractError("source assurance handover identity mismatch")
+    if source.get("task_id") != old_task_id:
+        raise ActuatorContractError("source assurance handover task mismatch")
+    if source.get("handover_type") != "ASSURANCE_REQUEST":
+        raise ActuatorContractError("source handover is not an assurance request")
+    if source.get("candidate_sha") != candidate_sha or source.get("candidate_pr") != candidate_pr:
+        raise ActuatorContractError("source assurance handover candidate binding mismatch")
+
+    target = handover_dir / f"{new_handover_id}.json"
+    if target.exists():
+        existing = _load(target)
+        if (
+            existing.get("handover_id") != new_handover_id
+            or existing.get("task_id") != new_task_id
+            or existing.get("candidate_sha") != candidate_sha
+            or existing.get("candidate_pr") != candidate_pr
+            or existing.get("handover_type") != "ASSURANCE_REQUEST"
+        ):
+            raise ActuatorContractError("existing assurance retry handover conflicts with expected binding")
+        return
+
+    successor = copy.deepcopy(source)
+    successor["handover_id"] = new_handover_id
+    successor["task_id"] = new_task_id
+    successor["created_at"] = now
+    successor["actionable_findings"] = []
+    successor["assurance_result_ref"] = None
+    successor["predecessor_handover_id"] = source_handover_id
+    target.write_text(json.dumps(successor, indent=2) + "\n", encoding="utf-8")
+    target.chmod(0o600)
+
+
 def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str | None:
     if task.get("operation") != "ASSURANCE" or task.get("last_verdict") != "NONE":
         return None
@@ -126,7 +179,6 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
         existing = existing_tasks[0]
         if existing.get("candidate_sha") != candidate_sha or existing.get("operation") != "ASSURANCE":
             raise ActuatorContractError("existing assurance retry task has conflicting binding")
-        return new_task_id
 
     intake_dir = Path(queue_path).parent / "project-intake"
     if not intake_dir.is_dir():
@@ -173,9 +225,11 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
     criteria = intent.get("acceptance_criteria")
     if not isinstance(criteria, list):
         raise ActuatorContractError("source assurance intake acceptance criteria are missing")
-    criteria.append(
+    final_retry_criterion = (
         "This R3 generation is the final automatic execution retry; if it exhausts without a durable verdict, converge terminally instead of creating R4."
     )
+    if final_retry_criterion not in criteria:
+        criteria.append(final_retry_criterion)
 
     if target.exists():
         existing = _load(target)
@@ -184,12 +238,23 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
             existing_intent.get("task_id") != new_task_id
             or existing_intent.get("candidate_sha") != candidate_sha
             or existing_intent.get("supersedes_revision") != source_revision
+            or existing_intent.get("handover_id") != new_handover
         ):
             raise ActuatorContractError("existing assurance retry intake conflicts with expected binding")
-        return new_task_id
+    else:
+        target.write_text(json.dumps(successor, indent=2) + "\n", encoding="utf-8")
+        target.chmod(0o600)
 
-    target.write_text(json.dumps(successor, indent=2) + "\n", encoding="utf-8")
-    target.chmod(0o600)
+    _ensure_assurance_retry_handover(
+        queue_path,
+        old_task_id=old_task_id,
+        new_task_id=new_task_id,
+        source_handover_id=source_handover,
+        new_handover_id=new_handover,
+        candidate_sha=candidate_sha,
+        candidate_pr=task.get("candidate_pr"),
+        now=now,
+    )
     return new_task_id
 
 
@@ -208,9 +273,10 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
     helper. Any inactive queued task whose attempt budget is already exhausted
     is transitioned to canonical BLOCKED so selection and claimability cannot
     diverge after lease recovery. A verdictless exhausted assurance task may
-    materialize exactly one further immutable intake generation, capped at R3.
-    Already-converged BLOCKED records are eligible only when they carry the
-    exact scheduled-reconciliation exhaustion marker.
+    materialize exactly one further immutable intake plus assurance-request
+    handover generation, capped at R3/H3. Already-converged BLOCKED records are
+    eligible only when they carry the exact scheduled-reconciliation exhaustion
+    marker.
     """
     parallel, _, dispatcher_state = _private_modules(code_dir)
     queue = _load(queue_path)
