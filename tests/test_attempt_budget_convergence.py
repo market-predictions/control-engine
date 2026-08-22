@@ -99,19 +99,20 @@ def test_a_reconciliation_blocks_all_inactive_exhausted_queued_roles(monkeypatch
     ]
 
 
-def test_verdictless_exhausted_r2_materializes_exactly_one_r3_intake(monkeypatch, tmp_path: Path) -> None:
+def test_already_blocked_verdictless_r2_materializes_exactly_one_r3_intake(monkeypatch, tmp_path: Path) -> None:
     queue_path = tmp_path / "DISPATCH_QUEUE.json"
     intake_dir = tmp_path / "project-intake"
     intake_dir.mkdir()
     source_task_id = "CONTROL-193-PR194-ASSURE-R2"
     candidate = "e9ec2ba1f4339a44e15d70548317bddacb8e7faf"
-    source = _task(source_task_id, "ASSURANCE_QUEUED", 3, 3)
+    source = _task(source_task_id, "BLOCKED", 3, 3)
     source.update(
         {
             "operation": "ASSURANCE",
             "candidate_sha": candidate,
             "last_verdict": "NONE",
             "assurance_result_ref": None,
+            "last_findings": ["Attempt budget exhausted during scheduled reconciliation."],
         }
     )
     queue_path.write_text(
