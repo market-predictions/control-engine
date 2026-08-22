@@ -1,0 +1,24 @@
+{
+  "fixture_id": "FAIL",
+  "task_id": "SHADOW-FAIL",
+  "handover_id": "SHADOW-FAIL-H1",
+  "candidate_sha": "2222222222222222222222222222222222222222",
+  "assurance_contract": "Review only the supplied bounded evidence. Do not repair or infer missing evidence. Emit exactly one PASS, FAIL, or INDETERMINATE.",
+  "acceptance_criteria": [
+    "The user-facing status must be changed from STATUS=beta to exactly STATUS=ready.",
+    "No other semantic value may replace ready."
+  ],
+  "capsule": {
+    "authority": {"semantic_verdict_present": false},
+    "task": {"candidate_sha": "2222222222222222222222222222222222222222"},
+    "claim": {"start_proven": true},
+    "deterministic_contradictions": []
+  },
+  "diff": "diff --git a/app/status.txt b/app/status.txt\n--- a/app/status.txt\n+++ b/app/status.txt\n@@ -1 +1 @@\n-STATUS=beta\n+STATUS=almost-ready\n",
+  "bounded_evidence": {
+    "changed_files": ["app/status.txt"],
+    "ci": {"exact_candidate_conclusion": "success"},
+    "candidate_mutated_after_freeze": false
+  },
+  "expected_verdict": "FAIL"
+}
