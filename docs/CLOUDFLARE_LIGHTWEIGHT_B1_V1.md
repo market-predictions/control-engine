@@ -1,27 +1,27 @@
 # Cloudflare Lightweight B1 V1
 
-Status: **shadow implementation only**
+Status: **dual-executor foundation only; not yet canonical production authority**
 
 Related Control issue: `market-predictions/control-plane#199`
 
 ## Purpose
 
-Provide a fast, bounded semantic assurance execution surface without changing the Control authority model.
-
-This implementation is deliberately smaller than the historical provider-B path.
+Provide the bounded STANDARD semantic assurance executor inside one logical B1 role without changing the Control authority model.
 
 ```text
-A1 = ChatGPT heavy engineering
+A1 = ChatGPT implementation_operations
 B0 = deterministic GitHub evidence
 B1 = one logical governance_release_assurance slot
 GitHub = only queue/claim/result authority
-Cloudflare = optional lightweight semantic executor
-Work = independent deep/recovery executor
+Cloudflare = STANDARD bounded semantic executor
+Codex = DEEP semantic review executor
 ```
+
+Cloudflare and Codex are executor metadata only. They are not independent workers and do not own queue, claim, merge, release or canonical result authority.
 
 ## First-principles boundaries
 
-Cloudflare does not own or store canonical Control state. It receives no GitHub token and no repository tools. The GitHub runner prepares the bounded semantic package and performs all lifecycle writes.
+Cloudflare does not own or store canonical Control state. It receives no GitHub token and no repository tools. GitHub Control prepares the bounded semantic package and owns all lifecycle transitions.
 
 The model is pinned to:
 
@@ -30,6 +30,8 @@ The model is pinned to:
 ```
 
 One exact task lineage may receive at most one Cloudflare infrastructure attempt once the live path is activated. There is no model fallback, provider fallback, retry/backoff framework or paid-route escalation.
+
+A Cloudflare infrastructure failure is `EXECUTION_UNAVAILABLE`; it does not automatically switch the same lineage to Codex or any historical Work backstop. Any later governed recovery requires a fresh deterministic Control decision under the canonical queue/claim contract.
 
 ## Bounded semantic package
 
@@ -42,21 +44,21 @@ bounded extra evidence <=  8,000 bytes
 total semantic pack    <= 52,000 bytes
 ```
 
-If the package does not fit, the deterministic routing decision is `WORK_REQUIRED`.
+If the package does not fit, the deterministic routing decision is the compatibility Boolean `work_required=true`, which now means **DEEP review required**. The field name is retained temporarily to keep the current delta small; it no longer means ChatGPT Work.
 
 ## Minimal routing
 
-`classify_execution_surface()` emits only a hard decision:
+`classify_execution_surface()` emits one hard decision:
 
 ```text
 work_required=true|false
 ```
 
-Work is required when:
+DEEP review is required when:
 
 - explicitly required by the caller/project contract;
 - the exact diff exceeds the bounded Cloudflare budget;
-- the change touches defined Control authority/executor paths.
+- the change touches defined Control authority, executor or assurance-contract paths, including the Cloudflare and Codex adapters.
 
 There is no score, confidence model, percentage router or round-robin state.
 
@@ -84,7 +86,7 @@ The expected model output has exactly four keys:
 }
 ```
 
-Extra fields, Markdown fences, wrong candidate identity, invalid enums, missing findings for FAIL/INDETERMINATE or otherwise malformed output are rejected locally.
+Extra fields, wrong candidate identity, invalid enums, missing findings for FAIL/INDETERMINATE or otherwise malformed output are rejected locally. A single JSON fence is normalized deterministically; arbitrary surrounding prose is rejected.
 
 ## Failure semantics
 
@@ -103,8 +105,6 @@ candidate mismatch
 
 These are classified as `EXECUTION_UNAVAILABLE_*` and must never be converted into semantic `INDETERMINATE`.
 
-The future live integration must release/resume the exact B1 claim and leave the lineage for the ChatGPT Work backstop after one Cloudflare infrastructure attempt.
-
 ## Shadow calibration
 
 `.github/workflows/cloudflare-b1-shadow-v1.yml` is intentionally non-authoritative:
@@ -121,12 +121,14 @@ Shadow evidence cannot be used as B1 authority.
 
 ## Promotion gates
 
-Do not activate the fast path until all of the following are proven in order:
+Do not activate the dual-executor production path until all of the following are proven in order:
 
 1. unit/contract regressions pass;
-2. shadow calibration has no unexplained false PASS;
-3. a harmless exact-head live canary proves shared B1 CAS claim/readback/`START_PROVEN`/result/finalization with no candidate mutation;
-4. one consequential standard-risk production assurance succeeds;
-5. only then may private canonical Control doctrine be promoted from Work-only to dual-executor/single-role B1.
+2. Cloudflare shadow calibration has no unexplained false PASS;
+3. a non-authoritative exact-head Codex handshake proves GitHub-to-Codex activation and deterministic result observation;
+4. the complete foundation receives fresh independent exact-head assurance without self-certifying its own activation assumptions;
+5. after assured integration, a harmless shared-B1 canary proves GitHub-owned claim/readback/`START_PROVEN`/semantic execution/result/finalization with no candidate mutation;
+6. one consequential standard-risk production assurance succeeds;
+7. only then may private canonical Control doctrine be promoted to the dual-executor/single-role B1 profile.
 
-Until those gates pass, the existing ChatGPT Work B1 profile remains canonical.
+Until those gates pass, the new dual-executor profile remains foundation-only. Historical ChatGPT Work and Scheduled ChatGPT evidence is preserved as history but neither is part of the target B1 critical path.
