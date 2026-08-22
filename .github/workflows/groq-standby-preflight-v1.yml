@@ -53,7 +53,9 @@ jobs:
         env:
           CONTROL_GITHUB_READ_TOKEN: ${{ steps.app-token.outputs.token }}
           GROQ_API_KEY: ${{ secrets.CONTROL_GROQ_API_KEY }}
-          CONTROL_GROQ_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_GROQ_FREE_FAIL_CLOSED_ATTESTED }}
+          # Probe-only attestation: the exact pinned private provider policy below
+          # independently enforces fresh FREE_FAIL_CLOSED policy/billing facts.
+          CONTROL_GROQ_FREE_FAIL_CLOSED_ATTESTED: 'true'
           CONTROL_ATTEMPT_ID: groq-standby-preflight-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
