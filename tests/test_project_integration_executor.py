@@ -72,6 +72,22 @@ def test_ci_run_ids_are_exact_candidate_and_repository_bound() -> None:
         integration._ci_run_ids(REPO, CANDIDATE, wrong_repo)
 
 
+def test_reconcile_write_scope_admits_only_flat_project_intake_json() -> None:
+    allowed = {"control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"}
+    changed = {
+        "control/project-intake/CONTROL_193_PR194_ASSURE_R3.json",
+        "control/project-intake/nested/escape.json",
+        "control/project-intake/not-json.txt",
+        "control/worker-results/forbidden.json",
+    }
+    extended = integration._extend_reconcile_write_scope(allowed, changed)
+    assert extended == {
+        "control/DISPATCH_QUEUE.json",
+        "control/DISPATCH_RUNS.json",
+        "control/project-intake/CONTROL_193_PR194_ASSURE_R3.json",
+    }
+
+
 def test_executor_is_pinned_and_never_contains_paid_or_model_provider_path() -> None:
     source = integration.Path(integration.__file__).read_text(encoding="utf-8")
     assert integration.CONTROL_CODE_SHA == "ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"
