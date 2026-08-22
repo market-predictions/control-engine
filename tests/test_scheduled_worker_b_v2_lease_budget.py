@@ -100,3 +100,36 @@ def test_terminal_failure_status_uses_only_allowlisted_fingerprints(tmp_path: Pa
     assert "complete.log" not in re.search(
         r'fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION_\$\{completion_class\}"', rendered
     ).group(0)
+
+
+def test_semantic_worker_error_persists_only_allowlisted_metadata_fingerprint(tmp_path: Path) -> None:
+    rendered = _render_resilient_script(tmp_path)
+    expected = {
+        "POLICY_REJECTED",
+        "CREDENTIAL_FORMAT_REJECTED",
+        "ACCOUNT_FORMAT_REJECTED",
+        "PROVIDER_HTTP_FAILURE",
+        "PROVIDER_TRANSPORT_UNAVAILABLE",
+        "PROVIDER_TIMEOUT",
+        "PROVIDER_RESPONSE_UNPARSEABLE",
+        "PROVIDER_RESPONSE_CONTRACT_REJECTED",
+        "TOOL_CALL_INVALID",
+        "FINAL_JSON_INVALID",
+        "FINAL_CONTENT_MISSING",
+        "FINAL_JSON_PARSE_INVALID",
+        "FINAL_JSON_EXACT_MISMATCH",
+        "CONTEXT_BUDGET_EXHAUSTED",
+        "TOOL_BUDGET_EXHAUSTED",
+        "WALL_CLOCK_BUDGET_EXHAUSTED",
+        "WORKER_CONTRACT_REJECTED",
+        "UNEXPECTED_FAILURE",
+        "UNKNOWN_WORKER_ERROR",
+    }
+    for fingerprint in expected:
+        assert fingerprint in rendered
+    assert 'json.load(open(sys.argv[1], encoding="utf-8")).get("error_code")' in rendered
+    assert 'Provider-portable assurance worker failed; error_code=${semantic_failure_class}; PASS is forbidden.' in rendered
+    # Raw model/provider content remains private; only inference_worker metadata
+    # error_code is promoted into the canonical finding.
+    generic_block = rendered[rendered.index("semantic_failure_class=UNKNOWN_WORKER_ERROR"):rendered.index("outcome=\"$(python -", rendered.index("semantic_failure_class=UNKNOWN_WORKER_ERROR"))]
+    assert "model.log" not in generic_block
