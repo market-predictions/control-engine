@@ -215,7 +215,11 @@ def test_helper_resumes_only_a_unavailable_and_blocks_exhausted(tmp_path: Path) 
         "b-unavailable": "EXECUTION_UNAVAILABLE",
     }
     result = json.loads(report.read_text(encoding="utf-8"))
-    assert result == {"resumed": ["a-retry"], "blocked": ["a-exhausted"]}
+    assert result == {
+        "resumed": ["a-retry"],
+        "blocked": ["a-exhausted"],
+        "generated_assurance_retries": [],
+    }
 
 
 def test_helper_rejects_unavailable_a_with_ghost_ownership(tmp_path: Path) -> None:
