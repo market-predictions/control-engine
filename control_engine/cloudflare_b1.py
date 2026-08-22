@@ -37,6 +37,7 @@ _CONTROL_ENGINE_SENSITIVE_PREFIXES = (
     "control_engine/",
     "scripts/scheduled_worker_",
     "scripts/project_integration_executor",
+    "scripts/github_app_preflight",
     "scripts/cloudflare_b1",
     "scripts/codex_b1",
     ".github/workflows/scheduled-worker-",
@@ -303,8 +304,11 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
     choice = choices[0]
-    if choice.get("finish_reason") == "length":
+    finish_reason = choice.get("finish_reason")
+    if finish_reason == "length":
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_OUTPUT_TRUNCATED")
+    if finish_reason != "stop":
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
     message = choice.get("message")
     if not isinstance(message, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
