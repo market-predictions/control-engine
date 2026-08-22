@@ -1,3 +1,4 @@
+import http.client
 import json
 
 import pytest
@@ -66,12 +67,16 @@ def test_ordinary_small_change_is_cloudflare_eligible():
     [
         "control_engine/cloudflare_b1.py",
         "control_engine/codex_b1.py",
+        "control_engine/scheduled_worker_a.py",
+        "control_engine/assurance_capsule.py",
+        "control_engine/timeline.py",
+        "scripts/project_integration_executor.py",
         "scripts/codex_b1_canary.py",
         ".github/workflows/codex-b1-deep-handshake-v1.yml",
         "docs/B1_DUAL_EXECUTOR_V1.md",
     ],
 )
-def test_control_executor_or_assurance_contract_path_requires_deep_review(path):
+def test_control_engine_source_or_authority_contract_path_requires_deep_review(path):
     decision = classify_execution_surface(
         repository=CONTROL_ENGINE_REPOSITORY,
         changed_files=[path],
@@ -239,3 +244,42 @@ def test_workers_ai_transport_is_exactly_one_request_and_bounded(monkeypatch):
         "seed": 199001,
         "max_tokens": 512,
     }
+
+
+def test_remote_disconnect_is_execution_unavailable(monkeypatch):
+    from control_engine import cloudflare_b1
+
+    def disconnect(*_args, **_kwargs):
+        raise http.client.RemoteDisconnected("remote closed connection")
+
+    monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", disconnect)
+    with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
+        cloudflare_b1.run_workers_ai_once(
+            account_id="account_1",
+            api_token="secret-token",
+            messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+        )
+    assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_TRANSPORT"
+
+
+def test_incomplete_read_is_execution_unavailable(monkeypatch):
+    from control_engine import cloudflare_b1
+
+    class PartialResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, _limit):
+            raise http.client.IncompleteRead(b"partial", 100)
+
+    monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", lambda *_args, **_kwargs: PartialResponse())
+    with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
+        cloudflare_b1.run_workers_ai_once(
+            account_id="account_1",
+            api_token="secret-token",
+            messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+        )
+    assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_TRANSPORT"
