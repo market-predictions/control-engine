@@ -53,25 +53,31 @@ def _task(task_id: str, state: str, attempt: int, maximum: int) -> dict:
     }
 
 
-def test_a_reconciliation_blocks_all_inactive_exhausted_queued_roles(monkeypatch, tmp_path: Path) -> None:
-    queue_path = tmp_path / "queue.json"
-    queue = {
-        "version": "1.0",
-        "principal_manual_relay_count": 0,
-        "tasks": [
-            _task("a-impl", "IMPLEMENTATION_QUEUED", 3, 3),
-            _task("a-repair", "REPAIR_QUEUED", 4, 4),
-            _task("b-assure", "ASSURANCE_QUEUED", 3, 3),
-            _task("retryable", "ASSURANCE_QUEUED", 2, 3),
-        ],
-    }
-    queue_path.write_text(json.dumps(queue), encoding="utf-8")
+def _install_fake_private_modules(monkeypatch) -> None:
     queue_mod = SimpleNamespace(ROLE_A="implementation_operations")
     monkeypatch.setattr(
         worker_a,
         "_private_modules",
         lambda _code_dir: (FakeParallel, queue_mod, FakeDispatcherState),
     )
+
+
+def test_a_reconciliation_blocks_all_inactive_exhausted_queued_roles(monkeypatch, tmp_path: Path) -> None:
+    queue_path = tmp_path / "queue.json"
+    b_assure = _task("b-assure", "ASSURANCE_QUEUED", 3, 3)
+    b_assure.update({"operation": "ASSURANCE", "last_verdict": "PASS"})
+    queue = {
+        "version": "1.0",
+        "principal_manual_relay_count": 0,
+        "tasks": [
+            _task("a-impl", "IMPLEMENTATION_QUEUED", 3, 3),
+            _task("a-repair", "REPAIR_QUEUED", 4, 4),
+            b_assure,
+            _task("retryable", "ASSURANCE_QUEUED", 2, 3),
+        ],
+    }
+    queue_path.write_text(json.dumps(queue), encoding="utf-8")
+    _install_fake_private_modules(monkeypatch)
 
     report = tmp_path / "report.json"
     worker_a.resume_a_unavailable("unused", str(queue_path), str(report))
@@ -91,6 +97,128 @@ def test_a_reconciliation_blocks_all_inactive_exhausted_queued_roles(monkeypatch
         "a-repair",
         "b-assure",
     ]
+
+
+def test_verdictless_exhausted_r2_materializes_exactly_one_r3_intake(monkeypatch, tmp_path: Path) -> None:
+    queue_path = tmp_path / "DISPATCH_QUEUE.json"
+    intake_dir = tmp_path / "project-intake"
+    intake_dir.mkdir()
+    source_task_id = "CONTROL-193-PR194-ASSURE-R2"
+    candidate = "e9ec2ba1f4339a44e15d70548317bddacb8e7faf"
+    source = _task(source_task_id, "ASSURANCE_QUEUED", 3, 3)
+    source.update(
+        {
+            "operation": "ASSURANCE",
+            "candidate_sha": candidate,
+            "last_verdict": "NONE",
+            "assurance_result_ref": None,
+        }
+    )
+    queue_path.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "principal_manual_relay_count": 0,
+                "tasks": [source],
+            }
+        ),
+        encoding="utf-8",
+    )
+    intake = {
+        "version": "1.0",
+        "project_id": "CONTROL_193_PR194_ASSURE_R2",
+        "repository": "market-predictions/control-plane",
+        "managed": True,
+        "status": "ASSURANCE_READY",
+        "principal_manual_relay_count": 0,
+        "queue_intent": {
+            "revision": source_task_id,
+            "supersedes_revision": "CONTROL-193-PR194-ASSURE-R1",
+            "task_id": source_task_id,
+            "workpackage_id": "CONTROL-WP_EXECUTION_UNAVAILABLE_RESUME_STATE_V1",
+            "operation": "ASSURANCE",
+            "instruction": f"Assure {source_task_id} independently.",
+            "acceptance_criteria": [f"Fresh B1 claim on {source_task_id} before review"],
+            "priority": -21,
+            "governance_issue": 193,
+            "candidate_pr": 194,
+            "candidate_sha": candidate,
+            "target_branch": "main",
+            "work_branch": "control/193-preserve-execution-unavailable-resume-state-v1",
+            "handover_id": "CONTROL-193-PR194-H2",
+            "merge_policy": "AFTER_PASS_EXACT_HEAD",
+            "principal_decision_required": False,
+            "paused": False,
+            "current_blocker": None,
+            "max_attempts": 3,
+            "last_verdict": "NONE",
+            "last_findings": [],
+            "depends_on": [],
+            "created_at": "2026-08-21T23:14:30Z",
+            "updated_at": "2026-08-21T23:22:00Z",
+        },
+    }
+    (intake_dir / "CONTROL_193_PR194_ASSURE_R2.json").write_text(
+        json.dumps(intake), encoding="utf-8"
+    )
+    _install_fake_private_modules(monkeypatch)
+
+    report = tmp_path / "report.json"
+    worker_a.resume_a_unavailable("unused", str(queue_path), str(report))
+
+    after = json.loads(queue_path.read_text(encoding="utf-8"))
+    predecessor = after["tasks"][0]
+    assert predecessor["state"] == "BLOCKED"
+    assert predecessor["last_verdict"] == "NONE"
+    assert predecessor["active_run_id"] is None
+    assert predecessor["last_findings"][-1].endswith(
+        "CONTROL-193-PR194-ASSURE-R3."
+    )
+
+    successor_path = intake_dir / "CONTROL_193_PR194_ASSURE_R3.json"
+    successor = json.loads(successor_path.read_text(encoding="utf-8"))
+    intent = successor["queue_intent"]
+    assert successor["project_id"] == "CONTROL_193_PR194_ASSURE_R3"
+    assert intent["task_id"] == "CONTROL-193-PR194-ASSURE-R3"
+    assert intent["revision"] == "CONTROL-193-PR194-ASSURE-R3"
+    assert intent["supersedes_revision"] == source_task_id
+    assert intent["candidate_sha"] == candidate
+    assert intent["handover_id"] == "CONTROL-193-PR194-H3"
+    assert intent["priority"] == -22
+    assert intent["last_verdict"] == "NONE"
+    assert intent["last_findings"] == []
+    assert "CONTROL-193-PR194-ASSURE-R3" in intent["instruction"]
+    assert json.loads(report.read_text(encoding="utf-8"))["generated_assurance_retries"] == [
+        "CONTROL-193-PR194-ASSURE-R3"
+    ]
+
+    worker_a.resume_a_unavailable("unused", str(queue_path), str(report))
+    assert len(list(intake_dir.glob("CONTROL_193_PR194_ASSURE_R3.json"))) == 1
+
+
+def test_exhausted_r3_is_terminal_and_does_not_create_r4(monkeypatch, tmp_path: Path) -> None:
+    queue_path = tmp_path / "DISPATCH_QUEUE.json"
+    (tmp_path / "project-intake").mkdir()
+    r3 = _task("CONTROL-193-PR194-ASSURE-R3", "ASSURANCE_QUEUED", 3, 3)
+    r3.update(
+        {
+            "operation": "ASSURANCE",
+            "candidate_sha": "e9ec2ba1f4339a44e15d70548317bddacb8e7faf",
+            "last_verdict": "NONE",
+            "assurance_result_ref": None,
+        }
+    )
+    queue_path.write_text(
+        json.dumps({"version": "1.0", "principal_manual_relay_count": 0, "tasks": [r3]}),
+        encoding="utf-8",
+    )
+    _install_fake_private_modules(monkeypatch)
+
+    worker_a.resume_a_unavailable("unused", str(queue_path), None)
+
+    after = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert after["tasks"][0]["state"] == "BLOCKED"
+    assert not (tmp_path / "project-intake" / "CONTROL_193_PR194_ASSURE_R4.json").exists()
 
 
 def test_b_selection_fails_closed_if_private_selector_returns_exhausted(monkeypatch, tmp_path: Path) -> None:
