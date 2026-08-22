@@ -74,6 +74,7 @@ def test_ordinary_small_change_is_cloudflare_eligible():
         "scripts/project_integration_executor.py",
         "scripts/codex_b1_canary.py",
         ".github/workflows/codex-b1-deep-handshake-v1.yml",
+        ".github/workflows/worker-b-wake-bridge-v1.yml",
         "docs/B1_DUAL_EXECUTOR_V1.md",
     ],
 )
