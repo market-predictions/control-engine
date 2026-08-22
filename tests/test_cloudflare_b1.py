@@ -46,14 +46,24 @@ def test_ordinary_small_change_is_cloudflare_eligible():
     assert decision.reasons == ()
 
 
-def test_control_authority_path_requires_work():
+@pytest.mark.parametrize(
+    "path",
+    [
+        "control_engine/cloudflare_b1.py",
+        "control_engine/codex_b1.py",
+        "scripts/codex_b1_canary.py",
+        ".github/workflows/codex-b1-deep-handshake-v1.yml",
+        "docs/B1_DUAL_EXECUTOR_V1.md",
+    ],
+)
+def test_control_executor_or_assurance_contract_path_requires_deep_review(path):
     decision = classify_execution_surface(
         repository=CONTROL_ENGINE_REPOSITORY,
-        changed_files=["control_engine/cloudflare_b1.py"],
+        changed_files=[path],
         diff_bytes=100,
     )
     assert decision.work_required is True
-    assert decision.reasons == ("CONTROL_AUTHORITY_PATH:control_engine/cloudflare_b1.py",)
+    assert decision.reasons == (f"CONTROL_AUTHORITY_PATH:{path}",)
 
 
 def test_oversized_diff_requires_work_without_retry_routing():
