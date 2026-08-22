@@ -3,6 +3,7 @@ name: Scheduled Worker B V2
 # Memory H5 assurance wake
 # Memory H5 post-expiry assurance wake
 # Control-146 lease-expiry reconciliation wake for Memory H5
+# Preferred B1 wake after Control-193 terminal
 
 on:
   schedule:
