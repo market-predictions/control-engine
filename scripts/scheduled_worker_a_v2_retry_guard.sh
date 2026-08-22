@@ -14,7 +14,7 @@ text = source.read_text(encoding="utf-8")
 old = '''python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_a.py" resume-a-unavailable \\
       --code-dir "$CODE_DIR" \\
 '''
-new = '''python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_a_retry_guard.py" \\
+new = '''python -m control_engine.scheduled_worker_a_retry_guard \\
       --code-dir "$CODE_DIR" \\
 '''
 count = text.count(old)
