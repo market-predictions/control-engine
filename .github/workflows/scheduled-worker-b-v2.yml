@@ -84,6 +84,10 @@ jobs:
           output="$(bash scripts/scheduled_worker_b_v2_resilient.sh 2>&1)"
           rc=$?
           status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_B_V2=//p' | tail -n 1)"
+          diagnostic="$(printf '%s\n' "$output" | sed -n '/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN$/,/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_END$/p')"
+          if [ -n "$diagnostic" ]; then
+            printf '%s\n' "$diagnostic"
+          fi
           if [ -z "$status_class" ]; then
             status_class=RUNTIME_FAILED_NO_STATUS
           fi
