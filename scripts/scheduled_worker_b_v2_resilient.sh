@@ -132,6 +132,58 @@ if count != 1:
     raise SystemExit(f"expected exactly one generic assurance-worker failure block, found {count}")
 text = text.replace(semantic_old, semantic_new)
 
+# EXECUTION_UNAVAILABLE must be as diagnosable as semantic INDETERMINATE without
+# exposing provider bodies, prompts or arbitrary exception text. Reuse the
+# pinned private inference kernel's SAFE_ERROR_CODES as the single allowlist;
+# malformed/missing metadata collapses to a stable non-sensitive fingerprint.
+unavailable_old = '''elif [ "$model_rc" = "75" ]; then
+  python "$PRIVATE_TMP/make_result.py" \\
+    --task-id "$task_id" \\
+    --run-id "$run_id" \\
+    --role governance_release_assurance \\
+    --outcome EXECUTION_UNAVAILABLE \\
+    --candidate-sha "$candidate_sha" \\
+    --summary 'Configured FREE_FAIL_CLOSED assurance provider is unavailable; no fallback or paid route was selected.' \\
+    --finding 'Provider-portable assurance adapter returned unavailable.' \\
+    --evidence "public control-engine Actions run ${GITHUB_RUN_ID}; backend=scheduled-b-v2" \\
+    --output "$FINAL_RESULT" \\
+    >"$PRIVATE_TMP/make-result.log" 2>&1
+'''
+unavailable_new = '''elif [ "$model_rc" = "75" ]; then
+  unavailable_failure_class=UNKNOWN_WORKER_ERROR
+  if [ -s "$METADATA" ]; then
+    unavailable_failure_class="$(python - "$METADATA" "$PRIVATE_TMP" <<'PYMETA'
+import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(sys.argv[2])))
+try:
+    from inference_worker import SAFE_ERROR_CODES
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("error_code")
+except Exception:
+    value = None
+print(value if value in SAFE_ERROR_CODES else "UNKNOWN_WORKER_ERROR")
+PYMETA
+)"
+  fi
+  python "$PRIVATE_TMP/make_result.py" \\
+    --task-id "$task_id" \\
+    --run-id "$run_id" \\
+    --role governance_release_assurance \\
+    --outcome EXECUTION_UNAVAILABLE \\
+    --candidate-sha "$candidate_sha" \\
+    --summary 'Configured FREE_FAIL_CLOSED assurance provider is unavailable; no fallback or paid route was selected.' \\
+    --finding "Provider-portable assurance adapter returned unavailable; error_code=${unavailable_failure_class}; no fallback or paid route selected." \\
+    --evidence "public control-engine Actions run ${GITHUB_RUN_ID}; backend=scheduled-b-v2" \\
+    --output "$FINAL_RESULT" \\
+    >"$PRIVATE_TMP/make-result.log" 2>&1
+'''
+count = text.count(unavailable_old)
+if count != 1:
+    raise SystemExit(f"expected exactly one generic assurance-unavailable block, found {count}")
+text = text.replace(unavailable_old, unavailable_new)
+
 old = '''  if ! grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$PRIVATE_TMP/complete.log"; then
     fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
   fi
