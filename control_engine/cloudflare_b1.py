@@ -73,10 +73,10 @@ def _unwrap_single_json_fence(value: str) -> str:
         return raw
     match = re.fullmatch(r"```(?:json)?\s*\n?(.*?)\n?```", raw, flags=re.DOTALL | re.IGNORECASE)
     if not match:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON")
     inner = match.group(1).strip()
     if not inner:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON")
     return inner
 
 
@@ -208,7 +208,10 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
     choices = api_response.get("choices")
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
-    message = choices[0].get("message")
+    choice = choices[0]
+    if choice.get("finish_reason") == "length":
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_OUTPUT_TRUNCATED")
+    message = choice.get("message")
     if not isinstance(message, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
     response = message.get("content")
@@ -219,28 +222,28 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT") from exc
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON") from exc
     if not isinstance(payload, dict):
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_KEYS")
 
     required = {"candidate_sha", "verdict", "summary", "findings"}
     if set(payload) != required:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_KEYS")
     if payload["candidate_sha"] != candidate_sha:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_CANDIDATE_MISMATCH")
     verdict = payload["verdict"]
     if verdict not in VERDICTS:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_ENUM")
     summary = payload["summary"]
     findings = payload["findings"]
     if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_SUMMARY")
     if not isinstance(findings, list) or len(findings) > 20:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
     if any(not isinstance(item, str) or not item.strip() or len(item) > 2000 for item in findings):
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
     if verdict in {"FAIL", "INDETERMINATE"} and not findings:
-        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT")
+        raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS")
 
     return {
         "candidate_sha": candidate_sha,
