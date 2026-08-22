@@ -1,19 +1,11 @@
-name: Worker B Wake Bridge V1
+name: Worker B Recovery Wake Bridge V1
+
+# Legacy provider-B wake bridge retained for explicit recovery only.
+# Normal consequential B1 execution is ChatGPT Work scheduled-pull.
+# No workflow_run or push trigger: this bridge must never race Work-B1.
 
 on:
-  workflow_run:
-    workflows:
-      - Scheduled Worker A V2
-    types:
-      - completed
-    branches:
-      - main
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/worker-b-wake-bridge-v1.yml'
 
 permissions:
   actions: write
@@ -24,12 +16,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  wake-b:
+  wake-b-recovery:
     if: github.repository == 'market-predictions/control-engine'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Dispatch Scheduled Worker B V2
+      - name: Dispatch Provider B Recovery V2
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
