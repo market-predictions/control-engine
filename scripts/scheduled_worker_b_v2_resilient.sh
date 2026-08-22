@@ -4,6 +4,7 @@ set -euo pipefail
 SOURCE="${GITHUB_WORKSPACE:-$(pwd)}/scripts/scheduled_worker_b_v2.sh"
 PATCHED="${RUNNER_TEMP:-/tmp}/scheduled_worker_b_v2_resilient_${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}.sh"
 
+# Deployment wake: 2026-08-22 expired R3 B1 claim reconciliation.
 python - "$SOURCE" "$PATCHED" <<'PY'
 from pathlib import Path
 import re
