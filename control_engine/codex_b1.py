@@ -146,9 +146,9 @@ def classify_review_snapshot(
             continue
         item_commit = _commit(item)
         review_id = item.get("pull_request_review_id")
-        if item_commit not in (None, candidate_sha):
-            continue
-        if exact_review_ids and review_id not in exact_review_ids:
+        exact_commit_binding = item_commit == candidate_sha
+        exact_review_binding = review_id in exact_review_ids if review_id is not None else False
+        if not exact_commit_binding and not exact_review_binding:
             continue
         finding = _bounded_finding(item)
         if finding:
