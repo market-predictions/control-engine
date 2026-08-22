@@ -1,0 +1,25 @@
+{
+  "fixture_id": "PASS",
+  "task_id": "SHADOW-PASS",
+  "handover_id": "SHADOW-PASS-H1",
+  "candidate_sha": "1111111111111111111111111111111111111111",
+  "assurance_contract": "Review only the supplied bounded evidence. Do not repair or infer missing evidence. Emit exactly one PASS, FAIL, or INDETERMINATE.",
+  "acceptance_criteria": [
+    "The candidate must change only fixtures/canary.txt.",
+    "The final file content must contain SAFE_FLAG=enabled.",
+    "The exact-candidate CI conclusion must be success."
+  ],
+  "capsule": {
+    "authority": {"semantic_verdict_present": false},
+    "task": {"candidate_sha": "1111111111111111111111111111111111111111"},
+    "claim": {"start_proven": true},
+    "deterministic_contradictions": []
+  },
+  "diff": "diff --git a/fixtures/canary.txt b/fixtures/canary.txt\n--- a/fixtures/canary.txt\n+++ b/fixtures/canary.txt\n@@ -1 +1,2 @@\n CANARY=1\n+SAFE_FLAG=enabled\n",
+  "bounded_evidence": {
+    "changed_files": ["fixtures/canary.txt"],
+    "ci": {"exact_candidate_conclusion": "success"},
+    "candidate_mutated_after_freeze": false
+  },
+  "expected_verdict": "PASS"
+}
