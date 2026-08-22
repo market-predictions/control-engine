@@ -30,6 +30,12 @@ def chat_payload(content: str) -> dict:
     return {"choices": [{"message": {"role": "assistant", "content": content}}]}
 
 
+def valid_pass_json():
+    return json.dumps(
+        {"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "All criteria supported.", "findings": []}
+    )
+
+
 def test_ordinary_small_change_is_cloudflare_eligible():
     decision = classify_execution_surface(
         repository="market-predictions/example",
@@ -95,18 +101,18 @@ def test_messages_are_two_message_no_tool_protocol():
 
 
 def test_strict_exact_verdict_accepts_pass():
-    payload = chat_payload(
-        json.dumps(
-            {"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "All criteria supported.", "findings": []}
-        )
-    )
-    assert parse_verdict_response(payload, candidate_sha=CANDIDATE)["verdict"] == "PASS"
+    assert parse_verdict_response(chat_payload(valid_pass_json()), candidate_sha=CANDIDATE)["verdict"] == "PASS"
+
+
+def test_single_json_fence_is_deterministically_normalized():
+    fenced = f"```json\n{valid_pass_json()}\n```"
+    assert parse_verdict_response(chat_payload(fenced), candidate_sha=CANDIDATE)["verdict"] == "PASS"
 
 
 @pytest.mark.parametrize(
     "response,code",
     [
-        ("```json\n{}\n```", "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
+        ("Result:\n" + valid_pass_json(), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
         (json.dumps({"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "ok", "findings": [], "confidence": 1}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
         (json.dumps({"candidate_sha": "b" * 40, "verdict": "PASS", "summary": "ok", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_CANDIDATE_MISMATCH"),
         (json.dumps({"candidate_sha": CANDIDATE, "verdict": "FAIL", "summary": "bad", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
