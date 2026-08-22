@@ -10,9 +10,26 @@
     "The exact-candidate CI conclusion must be success."
   ],
   "capsule": {
-    "authority": {"semantic_verdict_present": false},
-    "task": {"candidate_sha": "1111111111111111111111111111111111111111"},
-    "claim": {"start_proven": true},
+    "protocol_id": "CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1",
+    "version": "1.0",
+    "authority": {
+      "logical_role": "governance_release_assurance",
+      "worker_instance": "B1",
+      "semantic_verdict_present": false,
+      "merge_authority": false,
+      "release_authority": false
+    },
+    "task": {
+      "task_id": "SHADOW-PASS",
+      "handover_id": "SHADOW-PASS-H1",
+      "candidate_sha": "1111111111111111111111111111111111111111"
+    },
+    "claim": {
+      "active_run_id": "shadow-pass-run-1",
+      "active_role": "governance_release_assurance",
+      "active_worker_instance": "B1",
+      "start_proven": true
+    },
     "deterministic_contradictions": []
   },
   "diff": "diff --git a/fixtures/canary.txt b/fixtures/canary.txt\n--- a/fixtures/canary.txt\n+++ b/fixtures/canary.txt\n@@ -1 +1,2 @@\n CANARY=1\n+SAFE_FLAG=enabled\n",
