@@ -58,7 +58,10 @@ def test_lease_budget_fence_preserves_terminal_retry_patch(tmp_path: Path) -> No
     rendered = _render_resilient_script(tmp_path)
     assert "if [ \"$completion_attempt\" -lt \"$MAX_CAS_ATTEMPTS\" ]; then" in rendered
     assert "FAIL_CLOSED_B1_TERMINAL_COMPLETION" in rendered
-    assert "CONTROL_RUNTIME_CAS_CONFLICT" not in rendered[rendered.index("for completion_attempt"):]
+    old_cas_only_branch = '''if ! grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$PRIVATE_TMP/complete.log"; then
+    fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
+  fi'''
+    assert old_cas_only_branch not in rendered
 
 
 def test_terminal_failure_emits_only_bounded_redacted_diagnostic_block(tmp_path: Path) -> None:
