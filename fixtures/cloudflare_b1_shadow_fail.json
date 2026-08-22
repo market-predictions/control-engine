@@ -21,13 +21,24 @@
     "task": {
       "task_id": "SHADOW-FAIL",
       "handover_id": "SHADOW-FAIL-H1",
-      "candidate_sha": "2222222222222222222222222222222222222222"
+      "candidate_sha": "2222222222222222222222222222222222222222",
+      "acceptance_criteria_sha256": "80eec2a5009bb669acbbc1a5f75427a5b22b25277450df54b1da9ed64fec569e"
     },
     "claim": {
+      "state": "ASSURANCE_EXECUTING",
       "active_run_id": "shadow-fail-run-1",
       "active_role": "governance_release_assurance",
       "active_worker_instance": "B1",
+      "lease_current_at_observation": true,
       "start_proven": true
+    },
+    "diff": {
+      "sha256": "d5ebb1ece9f1dd4ba087316100994a20e09a35ecb945c4636b312f7e519face7",
+      "bytes": 133,
+      "content_embedded": false
+    },
+    "source_digests": {
+      "diff_sha256": "d5ebb1ece9f1dd4ba087316100994a20e09a35ecb945c4636b312f7e519face7"
     },
     "deterministic_contradictions": []
   },
