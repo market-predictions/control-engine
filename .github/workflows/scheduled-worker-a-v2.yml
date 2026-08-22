@@ -5,6 +5,7 @@ name: Scheduled Worker A V2
 # read-only reconciliation probe before integration gate
 # expired completion-diagnostic R2 reconciliation wake
 # Memory H4 intake materialization wake
+# Memory H5 intake materialization wake
 
 on:
   schedule:
