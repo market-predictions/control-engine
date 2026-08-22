@@ -99,16 +99,19 @@ def test_a_reconciliation_blocks_all_inactive_exhausted_queued_roles(monkeypatch
     ]
 
 
-def test_already_blocked_verdictless_r2_materializes_exactly_one_r3_intake(monkeypatch, tmp_path: Path) -> None:
+def test_already_blocked_verdictless_r2_materializes_r3_intake_and_handover(monkeypatch, tmp_path: Path) -> None:
     queue_path = tmp_path / "DISPATCH_QUEUE.json"
     intake_dir = tmp_path / "project-intake"
+    handover_dir = tmp_path / "handovers"
     intake_dir.mkdir()
+    handover_dir.mkdir()
     source_task_id = "CONTROL-193-PR194-ASSURE-R2"
     candidate = "e9ec2ba1f4339a44e15d70548317bddacb8e7faf"
     source = _task(source_task_id, "BLOCKED", 3, 3)
     source.update(
         {
             "operation": "ASSURANCE",
+            "candidate_pr": 194,
             "candidate_sha": candidate,
             "last_verdict": "NONE",
             "assurance_result_ref": None,
@@ -116,13 +119,7 @@ def test_already_blocked_verdictless_r2_materializes_exactly_one_r3_intake(monke
         }
     )
     queue_path.write_text(
-        json.dumps(
-            {
-                "version": "1.0",
-                "principal_manual_relay_count": 0,
-                "tasks": [source],
-            }
-        ),
+        json.dumps({"version": "1.0", "principal_manual_relay_count": 0, "tasks": [source]}),
         encoding="utf-8",
     )
     intake = {
@@ -159,9 +156,26 @@ def test_already_blocked_verdictless_r2_materializes_exactly_one_r3_intake(monke
             "updated_at": "2026-08-21T23:22:00Z",
         },
     }
-    (intake_dir / "CONTROL_193_PR194_ASSURE_R2.json").write_text(
-        json.dumps(intake), encoding="utf-8"
-    )
+    (intake_dir / "CONTROL_193_PR194_ASSURE_R2.json").write_text(json.dumps(intake), encoding="utf-8")
+    handover = {
+        "version": "1.0",
+        "handover_id": "CONTROL-193-PR194-H2",
+        "task_id": source_task_id,
+        "repository": "market-predictions/control-plane",
+        "handover_type": "ASSURANCE_REQUEST",
+        "from_role": "implementation_operations",
+        "to_role": "governance_release_assurance",
+        "next_action": "ASSURE_FROZEN_CANDIDATE",
+        "candidate_sha": candidate,
+        "candidate_pr": 194,
+        "created_at": "2026-08-21T23:14:30Z",
+        "work_contract_ref": "https://github.com/market-predictions/control-plane/issues/193",
+        "context_refs": [],
+        "actionable_findings": [],
+        "assurance_result_ref": None,
+        "predecessor_handover_id": None,
+    }
+    (handover_dir / "CONTROL-193-PR194-H2.json").write_text(json.dumps(handover), encoding="utf-8")
     _install_fake_private_modules(monkeypatch)
 
     report = tmp_path / "report.json"
@@ -172,12 +186,9 @@ def test_already_blocked_verdictless_r2_materializes_exactly_one_r3_intake(monke
     assert predecessor["state"] == "BLOCKED"
     assert predecessor["last_verdict"] == "NONE"
     assert predecessor["active_run_id"] is None
-    assert predecessor["last_findings"][-1].endswith(
-        "CONTROL-193-PR194-ASSURE-R3."
-    )
+    assert predecessor["last_findings"][-1].endswith("CONTROL-193-PR194-ASSURE-R3.")
 
-    successor_path = intake_dir / "CONTROL_193_PR194_ASSURE_R3.json"
-    successor = json.loads(successor_path.read_text(encoding="utf-8"))
+    successor = json.loads((intake_dir / "CONTROL_193_PR194_ASSURE_R3.json").read_text(encoding="utf-8"))
     intent = successor["queue_intent"]
     assert successor["project_id"] == "CONTROL_193_PR194_ASSURE_R3"
     assert intent["task_id"] == "CONTROL-193-PR194-ASSURE-R3"
@@ -188,13 +199,23 @@ def test_already_blocked_verdictless_r2_materializes_exactly_one_r3_intake(monke
     assert intent["priority"] == -22
     assert intent["last_verdict"] == "NONE"
     assert intent["last_findings"] == []
-    assert "CONTROL-193-PR194-ASSURE-R3" in intent["instruction"]
+
+    successor_handover = json.loads((handover_dir / "CONTROL-193-PR194-H3.json").read_text(encoding="utf-8"))
+    assert successor_handover["handover_id"] == "CONTROL-193-PR194-H3"
+    assert successor_handover["task_id"] == "CONTROL-193-PR194-ASSURE-R3"
+    assert successor_handover["candidate_sha"] == candidate
+    assert successor_handover["candidate_pr"] == 194
+    assert successor_handover["predecessor_handover_id"] == "CONTROL-193-PR194-H2"
+    assert successor_handover["assurance_result_ref"] is None
+    assert successor_handover["actionable_findings"] == []
+
     assert json.loads(report.read_text(encoding="utf-8"))["generated_assurance_retries"] == [
         "CONTROL-193-PR194-ASSURE-R3"
     ]
 
     worker_a.resume_a_unavailable("unused", str(queue_path), str(report))
     assert len(list(intake_dir.glob("CONTROL_193_PR194_ASSURE_R3.json"))) == 1
+    assert len(list(handover_dir.glob("CONTROL-193-PR194-H3.json"))) == 1
 
 
 def test_exhausted_r3_is_terminal_and_does_not_create_r4(monkeypatch, tmp_path: Path) -> None:
@@ -235,10 +256,7 @@ def test_b_selection_fails_closed_if_private_selector_returns_exhausted(monkeypa
         "governance_issue": 1,
         "state": "ASSURANCE_QUEUED",
     }
-    parallel = SimpleNamespace(
-        INSTANCE_B1="B1",
-        select_task_for_instance=lambda queue, role, worker: exhausted,
-    )
+    parallel = SimpleNamespace(INSTANCE_B1="B1", select_task_for_instance=lambda queue, role, worker: exhausted)
     queue_mod = SimpleNamespace(ROLE_B="governance_release_assurance")
     monkeypatch.setattr(worker_b, "_private_modules", lambda _code_dir: (parallel, queue_mod))
 
