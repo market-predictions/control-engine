@@ -73,3 +73,27 @@ def test_terminal_failure_emits_only_bounded_redacted_diagnostic_block(tmp_path:
     assert "output=\"$(bash scripts/scheduled_worker_b_v2_resilient.sh 2>&1)\"" in workflow
     assert "/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN$/,/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_END$/p" in workflow
     assert "printf '%s\\n' \"$diagnostic\"" in workflow
+
+
+def test_terminal_failure_status_uses_only_allowlisted_fingerprints(tmp_path: Path) -> None:
+    rendered = _render_resilient_script(tmp_path)
+    expected = {
+        "RESULT_IDENTITY_MISMATCH",
+        "RESULT_ROLE_MISMATCH",
+        "RESULT_FIELDS_MISMATCH",
+        "CANDIDATE_MISMATCH",
+        "IMMUTABLE_RUNTIME_COLLISION",
+        "RUNTIME_CAS_CONFLICT",
+        "RESULT_BLOB_MISMATCH",
+        "RESULT_BLOB_LOOKUP_INVALID",
+        "RESULT_BLOB_AUTH_MISSING",
+        "CLAIM_VALIDATION",
+        "OTHER_CONNECTED_RUNTIME_ERROR",
+        "UNKNOWN",
+    }
+    for fingerprint in expected:
+        assert fingerprint in rendered
+    assert 'fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION_${completion_class}"' in rendered
+    assert "complete.log" not in re.search(
+        r'fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION_\$\{completion_class\}"', rendered
+    ).group(0)
