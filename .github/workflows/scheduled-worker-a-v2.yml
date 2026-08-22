@@ -8,6 +8,7 @@ name: Scheduled Worker A V2
 # Memory H5 intake materialization wake
 # Work H6 intake materialization wake
 # Control #199 PR69 assurance intake materialization wake
+# Control #199 dual-executor H3 intake materialization wake
 
 on:
   schedule:
