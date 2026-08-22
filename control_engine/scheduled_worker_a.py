@@ -243,6 +243,27 @@ def _has_exhaustion_marker(task: dict[str, Any]) -> bool:
     )
 
 
+def _ensure_assurance_retry_intake_isolated(
+    queue_path: str,
+    task: dict[str, Any],
+    reconciliation_blockers: list[dict[str, str]],
+) -> str | None:
+    """Isolate missing historical intake provenance without hiding binding conflicts."""
+    try:
+        return _ensure_assurance_retry_intake(queue_path, task)
+    except ActuatorContractError as exc:
+        reason = str(exc)
+        if not reason.startswith("expected one authoritative project intake for exhausted assurance task"):
+            raise
+        reconciliation_blockers.append(
+            {
+                "task_id": str(task.get("task_id", "")),
+                "reason": reason,
+            }
+        )
+        return None
+
+
 def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> None:
     """Converge inactive retry state before intake materialization and selection.
 
@@ -253,7 +274,9 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
     materialize exactly one further immutable execution generation, capped at
     R3, while reusing its still-unconsumed assurance-request handover.
     Already-converged BLOCKED records are eligible only when they carry the
-    exact scheduled-reconciliation exhaustion marker.
+    exact scheduled-reconciliation exhaustion marker. Missing historical intake
+    provenance is isolated to that stale task so unrelated valid intake can
+    continue; conflicting bindings still fail closed globally.
     """
     parallel, _, dispatcher_state = _private_modules(code_dir)
     queue = _load(queue_path)
@@ -261,6 +284,7 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
     resumed: list[str] = []
     blocked: list[str] = []
     generated_assurance_retries: list[str] = []
+    retry_reconciliation_blockers: list[dict[str, str]] = []
 
     for task in queue.get("tasks", []):
         if task.get("state") != "EXECUTION_UNAVAILABLE":
@@ -291,7 +315,9 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
             continue
         if _has_active_ownership(task):
             raise ActuatorContractError("blocked exhausted assurance still has active ownership")
-        retry_task_id = _ensure_assurance_retry_intake(queue_path, task)
+        retry_task_id = _ensure_assurance_retry_intake_isolated(
+            queue_path, task, retry_reconciliation_blockers
+        )
         if not retry_task_id:
             continue
         finding = f"Verdictless execution exhaustion materialized bounded successor intake {retry_task_id}."
@@ -313,7 +339,9 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
 
         retry_task_id = None
         if task.get("state") == "ASSURANCE_QUEUED":
-            retry_task_id = _ensure_assurance_retry_intake(queue_path, task)
+            retry_task_id = _ensure_assurance_retry_intake_isolated(
+                queue_path, task, retry_reconciliation_blockers
+            )
 
         updated = dispatcher_state.transition(task, "BLOCKED")
         _clear_inactive_ownership(updated)
@@ -340,6 +368,7 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
                 "resumed": resumed,
                 "blocked": blocked,
                 "generated_assurance_retries": generated_assurance_retries,
+                "retry_reconciliation_blockers": retry_reconciliation_blockers,
             },
         )
 
