@@ -1,41 +1,34 @@
 name: Codex B1 Deep Handshake V1
 
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Same-repository PR number to review
-        required: true
-        default: '69'
-      candidate_sha:
-        description: Exact 40-hex PR head to bind
-        required: true
-      task_id:
-        description: Synthetic non-authoritative canary task identity
-        required: true
-        default: CONTROL-199-CODEX-B1-HANDSHAKE
-      handover_id:
-        description: Synthetic non-authoritative canary handover identity
-        required: true
-        default: CONTROL-199-CODEX-B1-HANDSHAKE-H1
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: read
   issues: write
   pull-requests: read
+  statuses: write
 
 concurrency:
-  group: codex-b1-deep-handshake-${{ github.event.inputs.pr_number }}
+  group: codex-b1-deep-handshake-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   handshake:
+    if: github.event.pull_request.number == 69
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+      TASK_ID: CONTROL-199-CODEX-B1-HANDSHAKE
+      HANDOVER_ID: CONTROL-199-CODEX-B1-HANDSHAKE-H1
     steps:
       - name: Checkout exact actuator candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -48,14 +41,11 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile control_engine/codex_b1.py scripts/codex_b1_canary.py
-          python -m pytest -q tests/test_codex_b1.py
+          python -m pytest -q tests/test_codex_b1.py tests/test_cloudflare_b1.py
 
       - name: Bind exact live PR head
-        id: bind
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          CANDIDATE_SHA: ${{ github.event.inputs.candidate_sha }}
         run: |
           set -euo pipefail
           case "$PR_NUMBER" in (*[!0-9]*|'') echo 'invalid PR number' >&2; exit 2;; esac
@@ -63,13 +53,10 @@ jobs:
           [ "${#CANDIDATE_SHA}" -eq 40 ] || { echo 'candidate SHA must be 40 hex' >&2; exit 2; }
           live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           [ "$live_head" = "$CANDIDATE_SHA" ] || { echo "exact-head mismatch: $live_head" >&2; exit 2; }
-          echo "live_head=$live_head" >> "$GITHUB_OUTPUT"
+          checked_out="$(git rev-parse HEAD)"
+          [ "$checked_out" = "$CANDIDATE_SHA" ] || { echo "checkout mismatch: $checked_out" >&2; exit 2; }
 
       - name: Build bounded Codex request
-        env:
-          TASK_ID: ${{ github.event.inputs.task_id }}
-          HANDOVER_ID: ${{ github.event.inputs.handover_id }}
-          CANDIDATE_SHA: ${{ github.event.inputs.candidate_sha }}
         run: |
           set -euo pipefail
           cat > /tmp/criteria.json <<'JSON'
@@ -91,7 +78,6 @@ jobs:
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           set -euo pipefail
           response="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$(cat /tmp/codex-request.md)")"
@@ -104,8 +90,6 @@ jobs:
         id: observe
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          CANDIDATE_SHA: ${{ github.event.inputs.candidate_sha }}
           COMMENT_ID: ${{ steps.request.outputs.comment_id }}
         run: |
           set -euo pipefail
@@ -115,7 +99,7 @@ jobs:
             gh api -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" > /tmp/reactions.json
             gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" > /tmp/reviews.json
             gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100" > /tmp/review-comments.json
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" > /tmp/issue-comments.json
+            printf '[]\n' > /tmp/issue-comments.json
             python scripts/codex_b1_canary.py classify \
               --candidate-sha "$CANDIDATE_SHA" \
               --reviews /tmp/reviews.json \
@@ -142,9 +126,9 @@ jobs:
         run: |
           set -euo pipefail
           state=failure
-          description="CODEX_B1_HANDSHAKE_${STATUS:-UNKNOWN}"
+          description="CODEX_B1_HANDSHAKE_${STATUS:-UNKNOWN}_${VERDICT:-NONE}"
           if [ "${STATUS:-}" = COMPLETE ]; then state=success; fi
-          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
             -f state="$state" \
             -f context="control/codex-b1-handshake" \
             -f description="${description:0:140}" >/dev/null
