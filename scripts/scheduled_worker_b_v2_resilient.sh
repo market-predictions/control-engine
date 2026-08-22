@@ -15,6 +15,24 @@ source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 text = source.read_text(encoding="utf-8")
 
+# The private connected runtime is a tools package module. Directly executing
+# CODE_DIR/tools/control_connected_worker_runtime_v1.py puts only CODE_DIR/tools
+# on sys.path. Its fallback then imports control_parallel_execution_v1, which in
+# turn imports tools.control_queue_v1 and fails before main() with an uncaught
+# ModuleNotFoundError. Preserve the exact private code while exposing CODE_DIR as
+# the package root to the subprocess.
+complete_anchor = '''  GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" \\
+    python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete "$@"
+'''
+complete_fixed = '''  GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" \\
+  PYTHONPATH="$CODE_DIR${PYTHONPATH:+:$PYTHONPATH}" \\
+    python "$CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete "$@"
+'''
+count = text.count(complete_anchor)
+if count != 1:
+    raise SystemExit(f"expected exactly one connected runtime invocation anchor, found {count}")
+text = text.replace(complete_anchor, complete_fixed)
+
 # A B1 claim is deliberately hard-capped at 15 minutes. The pinned private
 # inference worker otherwise defaults to a 2400-second wall-clock budget, which
 # can outlive its owning claim and make terminal persistence impossible. Keep a
