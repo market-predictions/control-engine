@@ -58,6 +58,10 @@ class CloudflareB1ExecutionUnavailable(RuntimeError):
         self.code = code
 
 
+class _DuplicateJsonKey(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class SemanticBudgetMeasurement:
     diff_bytes: int
@@ -78,6 +82,15 @@ class ExecutionSurfaceDecision:
 
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateJsonKey(key)
+        value[key] = item
+    return value
 
 
 def _valid_sha(value: str) -> bool:
@@ -301,8 +314,8 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
 
     raw = _unwrap_single_json_fence(response)
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+    except (json.JSONDecodeError, _DuplicateJsonKey) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON") from exc
     if not isinstance(payload, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_KEYS")
@@ -387,8 +400,8 @@ def run_workers_ai_once(
     if len(raw) > 1_000_000:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_TOO_LARGE")
     try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+    except (json.JSONDecodeError, UnicodeDecodeError, _DuplicateJsonKey) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_UNPARSEABLE") from exc
     if not isinstance(payload, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
