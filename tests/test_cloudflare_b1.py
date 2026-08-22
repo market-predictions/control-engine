@@ -40,12 +40,23 @@ def capsule():
             "task_id": "T1",
             "handover_id": "H1",
             "candidate_sha": CANDIDATE,
+            "acceptance_criteria_sha256": "96a0e693616de4a256ba3da15cef02c0aff102f9a50ac4b3b01b782da24805d5",
         },
         "claim": {
+            "state": "ASSURANCE_EXECUTING",
             "active_run_id": "run-1",
             "active_role": "governance_release_assurance",
             "active_worker_instance": "B1",
+            "lease_current_at_observation": True,
             "start_proven": True,
+        },
+        "diff": {
+            "sha256": "f623deed686a9b4387589d5d628fe8ee9111765fe9c82193f9b4a16d3348a002",
+            "bytes": 5,
+            "content_embedded": False,
+        },
+        "source_digests": {
+            "diff_sha256": "f623deed686a9b4387589d5d628fe8ee9111765fe9c82193f9b4a16d3348a002",
         },
         "deterministic_contradictions": [],
     }
