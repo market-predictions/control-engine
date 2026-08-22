@@ -97,6 +97,10 @@ def _valid_sha(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{40}", value))
 
 
+def _valid_digest(value: object) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{64}", value))
+
+
 def _unwrap_single_json_fence(value: str) -> str:
     raw = value.strip()
     if not raw.startswith("```"):
@@ -253,18 +257,39 @@ def build_semantic_pack(
     if task.get("candidate_sha") != candidate_sha:
         raise CloudflareB1Error("capsule candidate does not match frozen candidate")
 
+    acceptance_digest = task.get("acceptance_criteria_sha256")
+    actual_acceptance_digest = hashlib.sha256(_json_bytes(acceptance_criteria)).hexdigest()
+    if not _valid_digest(acceptance_digest) or acceptance_digest != actual_acceptance_digest:
+        raise CloudflareB1Error("acceptance criteria do not match B0 evidence digest")
+
     claim = capsule.get("claim")
     if not isinstance(claim, dict):
         raise CloudflareB1Error("capsule claim identity is missing or invalid")
     if claim.get("start_proven") is not True:
         raise CloudflareB1Error("START_PROVEN is required before semantic review")
     if (
-        claim.get("active_role") != B0_ASSURANCE_ROLE
+        claim.get("state") != "ASSURANCE_EXECUTING"
+        or claim.get("lease_current_at_observation") is not True
+        or claim.get("active_role") != B0_ASSURANCE_ROLE
         or claim.get("active_worker_instance") != B0_ASSURANCE_WORKER
         or not isinstance(claim.get("active_run_id"), str)
         or not claim.get("active_run_id")
     ):
-        raise CloudflareB1Error("capsule claim does not match B1 assurance authority")
+        raise CloudflareB1Error("capsule claim is not a current B1 assurance lease")
+
+    diff_evidence = capsule.get("diff")
+    source_digests = capsule.get("source_digests")
+    actual_diff_digest = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+    if (
+        not isinstance(diff_evidence, dict)
+        or not _valid_digest(diff_evidence.get("sha256"))
+        or diff_evidence.get("sha256") != actual_diff_digest
+        or diff_evidence.get("bytes") != len(diff.encode("utf-8"))
+        or not isinstance(source_digests, dict)
+        or source_digests.get("diff_sha256") != actual_diff_digest
+    ):
+        raise CloudflareB1Error("diff does not match B0 evidence digest")
+
     if capsule.get("deterministic_contradictions"):
         raise CloudflareB1Error("semantic Cloudflare path is forbidden with deterministic contradictions")
 
