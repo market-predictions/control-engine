@@ -182,26 +182,14 @@ def classify_review_snapshot(
             reviewed_commit=candidate_sha,
         )
 
+    # A clean PASS is accepted only from the Codex reaction on the exact trigger
+    # comment. The caller fetches reactions for that comment ID, so historical
+    # issue comments cannot satisfy a later request for a different lineage.
     clean_reaction = any(
         _is_codex(item) and item.get("content") in {"+1", "thumbs_up"}
         for item in trigger_reactions
     )
-    clean_comment = any(
-        _is_codex(item)
-        and isinstance(item.get("body"), str)
-        and "Codex Review: Didn't find any major issues" in item["body"]
-        for item in issue_comments
-    )
-
-    if clean_reaction or clean_comment:
-        if stale_reviews and not exact_reviews:
-            return CodexReviewDecision(
-                status="EXECUTION_UNAVAILABLE",
-                verdict=None,
-                summary="Codex completion evidence is bound only to a different commit.",
-                findings=(),
-                reviewed_commit=_commit(stale_reviews[-1]),
-            )
+    if clean_reaction:
         return CodexReviewDecision(
             status="COMPLETE",
             verdict="PASS",
