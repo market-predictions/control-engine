@@ -23,6 +23,10 @@ DEFAULT_MAX_TOKENS = 512
 
 CONTROL_PLANE_REPOSITORY = "market-predictions/control-plane"
 CONTROL_ENGINE_REPOSITORY = "market-predictions/control-engine"
+B0_PROTOCOL_ID = "CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1"
+B0_VERSION = "1.0"
+B0_ASSURANCE_ROLE = "governance_release_assurance"
+B0_ASSURANCE_WORKER = "B1"
 
 _CONTROL_PLANE_SENSITIVE_PREFIXES = (
     "control/",
@@ -38,6 +42,7 @@ _CONTROL_ENGINE_SENSITIVE_PREFIXES = (
     "scripts/scheduled_worker_",
     "scripts/project_integration_executor",
     "scripts/github_app_preflight",
+    "scripts/quarantine_zta_legacy_repair",
     "scripts/cloudflare_b1",
     "scripts/codex_b1",
     ".github/workflows/scheduled-worker-",
@@ -229,12 +234,43 @@ def build_semantic_pack(
         raise CloudflareB1Error("acceptance_criteria contains an invalid item")
     if not isinstance(capsule, dict):
         raise CloudflareB1Error("capsule must be an object")
-    if capsule.get("authority", {}).get("semantic_verdict_present") is not False:
-        raise CloudflareB1Error("capsule must be verdict-free")
-    if capsule.get("task", {}).get("candidate_sha") != candidate_sha:
+    if capsule.get("protocol_id") != B0_PROTOCOL_ID or capsule.get("version") != B0_VERSION:
+        raise CloudflareB1Error("unsupported B0 capsule protocol")
+
+    authority = capsule.get("authority")
+    if not isinstance(authority, dict):
+        raise CloudflareB1Error("capsule authority is missing or invalid")
+    if (
+        authority.get("logical_role") != B0_ASSURANCE_ROLE
+        or authority.get("worker_instance") != B0_ASSURANCE_WORKER
+        or authority.get("semantic_verdict_present") is not False
+        or authority.get("merge_authority") is not False
+        or authority.get("release_authority") is not False
+    ):
+        raise CloudflareB1Error("capsule authority does not match B0 assurance authority")
+
+    task = capsule.get("task")
+    if not isinstance(task, dict):
+        raise CloudflareB1Error("capsule task identity is missing or invalid")
+    if task.get("task_id") != task_id:
+        raise CloudflareB1Error("capsule task does not match semantic lineage")
+    if task.get("handover_id") != handover_id:
+        raise CloudflareB1Error("capsule handover does not match semantic lineage")
+    if task.get("candidate_sha") != candidate_sha:
         raise CloudflareB1Error("capsule candidate does not match frozen candidate")
-    if capsule.get("claim", {}).get("start_proven") is not True:
+
+    claim = capsule.get("claim")
+    if not isinstance(claim, dict):
+        raise CloudflareB1Error("capsule claim identity is missing or invalid")
+    if claim.get("start_proven") is not True:
         raise CloudflareB1Error("START_PROVEN is required before semantic review")
+    if (
+        claim.get("active_role") != B0_ASSURANCE_ROLE
+        or claim.get("active_worker_instance") != B0_ASSURANCE_WORKER
+        or not isinstance(claim.get("active_run_id"), str)
+        or not claim.get("active_run_id")
+    ):
+        raise CloudflareB1Error("capsule claim does not match B1 assurance authority")
     if capsule.get("deterministic_contradictions"):
         raise CloudflareB1Error("semantic Cloudflare path is forbidden with deterministic contradictions")
 
