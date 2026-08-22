@@ -32,6 +32,7 @@ CONTROL_CODE_SHA = "ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"
 MAX_CAS_ATTEMPTS = 7
 LEASE_MINUTES = 75
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+PROJECT_INTAKE_PATH_RE = re.compile(r"^control/project-intake/[A-Za-z0-9_.-]+\.json$")
 STATUS_PREFIX = "SCHEDULED_WORKER_A_INTEGRATION="
 HANDLED_PREFIX = "SCHEDULED_WORKER_A_INTEGRATION_HANDLED="
 
@@ -155,6 +156,12 @@ def _changed_paths(state_dir: Path) -> set[str]:
     return {item for item in tracked + untracked if item}
 
 
+def _extend_reconcile_write_scope(allowed: set[str], changed: set[str]) -> set[str]:
+    result = set(allowed)
+    result.update(path for path in changed if PROJECT_INTAKE_PATH_RE.fullmatch(path))
+    return result
+
+
 def _persist(
     token: str,
     state_dir: Path,
@@ -262,6 +269,7 @@ def _reconcile_once(token: str, code_dir: Path, state_dir: Path, private_tmp: Pa
                 str(state_dir / "control" / "DISPATCH_QUEUE.json"),
             ]
         )
+        allowed = _extend_reconcile_write_scope(allowed, _changed_paths(state_dir))
         current = _remote_identity(token, state_dir)
         if current != observed:
             continue
