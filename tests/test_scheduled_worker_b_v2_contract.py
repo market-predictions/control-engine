@@ -12,10 +12,12 @@ SCRIPT = ROOT / "scripts" / "scheduled_worker_b_v2.sh"
 HELPER = ROOT / "control_engine" / "scheduled_worker_b.py"
 
 
-def test_public_workflow_is_main_only_and_secret_safe() -> None:
+def test_provider_b_is_manual_recovery_only_and_secret_safe() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "cron: '*/10 * * * *'" in text
     assert "workflow_dispatch:" in text
+    assert "schedule:" not in text
+    assert "cron:" not in text
+    assert "\n  push:" not in text
     assert "pull_request:" not in text
     assert "github.repository == 'market-predictions/control-engine'" in text
     assert "github.ref == 'refs/heads/main'" in text
