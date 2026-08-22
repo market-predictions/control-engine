@@ -193,6 +193,14 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
     return new_task_id
 
 
+def _has_exhaustion_marker(task: dict[str, Any]) -> bool:
+    findings = task.get("last_findings", [])
+    return isinstance(findings, list) and any(
+        finding == "Attempt budget exhausted during scheduled reconciliation."
+        for finding in findings
+    )
+
+
 def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> None:
     """Converge inactive retry state before intake materialization and selection.
 
@@ -201,6 +209,8 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
     is transitioned to canonical BLOCKED so selection and claimability cannot
     diverge after lease recovery. A verdictless exhausted assurance task may
     materialize exactly one further immutable intake generation, capped at R3.
+    Already-converged BLOCKED records are eligible only when they carry the
+    exact scheduled-reconciliation exhaustion marker.
     """
     parallel, _, dispatcher_state = _private_modules(code_dir)
     queue = _load(queue_path)
@@ -228,6 +238,24 @@ def resume_a_unavailable(code_dir: str, queue_path: str, output: str | None) -> 
             blocked.append(task["task_id"])
         elif task["state"] != before_state:
             resumed.append(task["task_id"])
+
+    for task in queue.get("tasks", []):
+        if task.get("state") != "BLOCKED" or not _has_exhaustion_marker(task):
+            continue
+        attempt = task.get("attempt")
+        maximum = task.get("max_attempts")
+        if not isinstance(attempt, int) or not isinstance(maximum, int) or attempt < maximum:
+            continue
+        if _has_active_ownership(task):
+            raise ActuatorContractError("blocked exhausted assurance still has active ownership")
+        retry_task_id = _ensure_assurance_retry_intake(queue_path, task)
+        if not retry_task_id:
+            continue
+        finding = f"Verdictless execution exhaustion materialized bounded successor intake {retry_task_id}."
+        if finding not in task.get("last_findings", []):
+            task["last_findings"] = list(task.get("last_findings", [])) + [finding]
+            blocked.append(task["task_id"])
+        generated_assurance_retries.append(retry_task_id)
 
     queued_states = {"IMPLEMENTATION_QUEUED", "REPAIR_QUEUED", "ASSURANCE_QUEUED"}
     for task in queue.get("tasks", []):
