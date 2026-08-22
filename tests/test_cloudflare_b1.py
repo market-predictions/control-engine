@@ -26,8 +26,8 @@ def capsule():
     }
 
 
-def chat_payload(content: str) -> dict:
-    return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+def chat_payload(content: str, *, finish_reason: str = "stop") -> dict:
+    return {"choices": [{"finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}]}
 
 
 def valid_pass_json():
@@ -112,16 +112,22 @@ def test_single_json_fence_is_deterministically_normalized():
 @pytest.mark.parametrize(
     "response,code",
     [
-        ("Result:\n" + valid_pass_json(), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
-        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "ok", "findings": [], "confidence": 1}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
+        ("Result:\n" + valid_pass_json(), "EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON"),
+        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "ok", "findings": [], "confidence": 1}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_KEYS"),
         (json.dumps({"candidate_sha": "b" * 40, "verdict": "PASS", "summary": "ok", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_CANDIDATE_MISMATCH"),
-        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "FAIL", "summary": "bad", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
+        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "FAIL", "summary": "bad", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS"),
     ],
 )
 def test_malformed_or_mismatched_output_is_execution_failure_not_semantic_verdict(response, code):
     with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
         parse_verdict_response(chat_payload(response), candidate_sha=CANDIDATE)
     assert caught.value.code == code
+
+
+def test_length_finish_reason_is_execution_failure():
+    with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
+        parse_verdict_response(chat_payload(valid_pass_json(), finish_reason="length"), candidate_sha=CANDIDATE)
+    assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_OUTPUT_TRUNCATED"
 
 
 def test_lineage_key_is_exact_and_candidate_sensitive():
@@ -144,7 +150,7 @@ def test_workers_ai_transport_is_exactly_one_request_and_bounded(monkeypatch):
 
         def read(self, limit):
             assert limit == 1_000_001
-            return json.dumps({"choices": [{"message": {"role": "assistant", "content": "{}"}}]}).encode()
+            return json.dumps({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "{}"}}]}).encode()
 
     def fake_urlopen(request, timeout):
         body = json.loads(request.data)
