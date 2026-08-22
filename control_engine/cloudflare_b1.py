@@ -32,10 +32,15 @@ _CONTROL_PLANE_SENSITIVE_PREFIXES = (
 _CONTROL_ENGINE_SENSITIVE_PREFIXES = (
     "control_engine/scheduled_worker_b.py",
     "control_engine/cloudflare_b1.py",
+    "control_engine/codex_b1.py",
     "scripts/scheduled_worker_b",
     "scripts/cloudflare_b1",
+    "scripts/codex_b1",
     ".github/workflows/scheduled-worker-b",
     ".github/workflows/cloudflare-b1",
+    ".github/workflows/codex-b1",
+    "docs/B1_DUAL_EXECUTOR_V1.md",
+    "docs/CLOUDFLARE_LIGHTWEIGHT_B1_V1.md",
 )
 
 
