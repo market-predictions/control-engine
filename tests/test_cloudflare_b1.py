@@ -115,6 +115,7 @@ def test_single_json_fence_is_deterministically_normalized():
         ("Result:\n" + valid_pass_json(), "EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON"),
         (json.dumps({"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "ok", "findings": [], "confidence": 1}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_KEYS"),
         (json.dumps({"candidate_sha": "b" * 40, "verdict": "PASS", "summary": "ok", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_CANDIDATE_MISMATCH"),
+        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "ok", "findings": ["No issues"]}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS"),
         (json.dumps({"candidate_sha": CANDIDATE, "verdict": "FAIL", "summary": "bad", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_FINDINGS"),
     ],
 )
