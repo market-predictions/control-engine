@@ -29,6 +29,7 @@ jobs:
           python-version: '3.12'
       - name: Run non-authoritative three-case calibration
         env:
+          PYTHONPATH: .
           CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
