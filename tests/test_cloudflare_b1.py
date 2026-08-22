@@ -26,6 +26,10 @@ def capsule():
     }
 
 
+def chat_payload(content: str) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+
 def test_ordinary_small_change_is_cloudflare_eligible():
     decision = classify_execution_surface(
         repository="market-predictions/example",
@@ -91,14 +95,11 @@ def test_messages_are_two_message_no_tool_protocol():
 
 
 def test_strict_exact_verdict_accepts_pass():
-    payload = {
-        "success": True,
-        "result": {
-            "response": json.dumps(
-                {"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "All criteria supported.", "findings": []}
-            )
-        },
-    }
+    payload = chat_payload(
+        json.dumps(
+            {"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "All criteria supported.", "findings": []}
+        )
+    )
     assert parse_verdict_response(payload, candidate_sha=CANDIDATE)["verdict"] == "PASS"
 
 
@@ -113,7 +114,7 @@ def test_strict_exact_verdict_accepts_pass():
 )
 def test_malformed_or_mismatched_output_is_execution_failure_not_semantic_verdict(response, code):
     with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
-        parse_verdict_response({"success": True, "result": {"response": response}}, candidate_sha=CANDIDATE)
+        parse_verdict_response(chat_payload(response), candidate_sha=CANDIDATE)
     assert caught.value.code == code
 
 
@@ -123,7 +124,7 @@ def test_lineage_key_is_exact_and_candidate_sensitive():
     assert first != lineage_id(task_id="T1", handover_id="H1", candidate_sha="b" * 40)
 
 
-def test_workers_ai_transport_is_exactly_one_request(monkeypatch):
+def test_workers_ai_transport_is_exactly_one_request_and_bounded(monkeypatch):
     from control_engine import cloudflare_b1
 
     calls = []
@@ -137,10 +138,11 @@ def test_workers_ai_transport_is_exactly_one_request(monkeypatch):
 
         def read(self, limit):
             assert limit == 1_000_001
-            return json.dumps({"success": True, "result": {"response": "{}"}}).encode()
+            return json.dumps({"choices": [{"message": {"role": "assistant", "content": "{}"}}]}).encode()
 
     def fake_urlopen(request, timeout):
-        calls.append((request.full_url, timeout))
+        body = json.loads(request.data)
+        calls.append((request.full_url, timeout, body))
         return FakeResponse()
 
     monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", fake_urlopen)
@@ -149,6 +151,15 @@ def test_workers_ai_transport_is_exactly_one_request(monkeypatch):
         api_token="secret-token",
         messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
     )
-    assert result["success"] is True
+    assert "choices" in result
     assert len(calls) == 1
-    assert calls[0][0].endswith("/ai/run/@cf/openai/gpt-oss-120b")
+    url, timeout, body = calls[0]
+    assert url.endswith("/ai/v1/chat/completions")
+    assert timeout == 90
+    assert body == {
+        "model": "@cf/openai/gpt-oss-120b",
+        "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+        "temperature": 0,
+        "seed": 199001,
+        "max_tokens": 512,
+    }
