@@ -40,6 +40,7 @@ _CONTROL_ENGINE_SENSITIVE_PREFIXES = (
     "scripts/cloudflare_b1",
     "scripts/codex_b1",
     ".github/workflows/scheduled-worker-",
+    ".github/workflows/worker-b-wake-bridge",
     ".github/workflows/cloudflare-b1",
     ".github/workflows/codex-b1",
     "docs/B1_DUAL_EXECUTOR_V1.md",
