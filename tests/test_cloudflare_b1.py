@@ -1,0 +1,154 @@
+import json
+
+import pytest
+
+from control_engine.cloudflare_b1 import (
+    CONTROL_ENGINE_REPOSITORY,
+    MODEL_ID,
+    CloudflareB1Error,
+    CloudflareB1ExecutionUnavailable,
+    build_messages,
+    build_semantic_pack,
+    classify_execution_surface,
+    lineage_id,
+    parse_verdict_response,
+)
+
+CANDIDATE = "a" * 40
+
+
+def capsule():
+    return {
+        "authority": {"semantic_verdict_present": False},
+        "task": {"candidate_sha": CANDIDATE},
+        "claim": {"start_proven": True},
+        "deterministic_contradictions": [],
+    }
+
+
+def test_ordinary_small_change_is_cloudflare_eligible():
+    decision = classify_execution_surface(
+        repository="market-predictions/example",
+        changed_files=["src/widget.py", "tests/test_widget.py"],
+        diff_bytes=12000,
+    )
+    assert decision.cloudflare_eligible is True
+    assert decision.reasons == ()
+
+
+def test_control_authority_path_requires_work():
+    decision = classify_execution_surface(
+        repository=CONTROL_ENGINE_REPOSITORY,
+        changed_files=["control_engine/cloudflare_b1.py"],
+        diff_bytes=100,
+    )
+    assert decision.work_required is True
+    assert decision.reasons == ("CONTROL_AUTHORITY_PATH:control_engine/cloudflare_b1.py",)
+
+
+def test_oversized_diff_requires_work_without_retry_routing():
+    decision = classify_execution_surface(
+        repository="market-predictions/example",
+        changed_files=["src/big.py"],
+        diff_bytes=32001,
+    )
+    assert decision.work_required is True
+    assert decision.reasons == ("DIFF_BUDGET_EXCEEDED",)
+
+
+def test_semantic_pack_requires_start_proven_and_clean_b0():
+    bad = capsule()
+    bad["claim"]["start_proven"] = False
+    with pytest.raises(CloudflareB1Error, match="START_PROVEN"):
+        build_semantic_pack(
+            task_id="T1",
+            handover_id="H1",
+            candidate_sha=CANDIDATE,
+            assurance_contract="One verdict.",
+            acceptance_criteria=["criterion"],
+            capsule=bad,
+            diff="+safe",
+            bounded_evidence={},
+        )
+
+
+def test_messages_are_two_message_no_tool_protocol():
+    pack = build_semantic_pack(
+        task_id="T1",
+        handover_id="H1",
+        candidate_sha=CANDIDATE,
+        assurance_contract="One verdict.",
+        acceptance_criteria=["criterion"],
+        capsule=capsule(),
+        diff="+safe",
+        bounded_evidence={"ci": "success"},
+    )
+    messages = build_messages(pack)
+    assert len(messages) == 2
+    assert [item["role"] for item in messages] == ["system", "user"]
+    assert all(set(item) == {"role", "content"} for item in messages)
+    assert MODEL_ID == "@cf/openai/gpt-oss-120b"
+
+
+def test_strict_exact_verdict_accepts_pass():
+    payload = {
+        "success": True,
+        "result": {
+            "response": json.dumps(
+                {"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "All criteria supported.", "findings": []}
+            )
+        },
+    }
+    assert parse_verdict_response(payload, candidate_sha=CANDIDATE)["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "response,code",
+    [
+        ("```json\n{}\n```", "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
+        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "PASS", "summary": "ok", "findings": [], "confidence": 1}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
+        (json.dumps({"candidate_sha": "b" * 40, "verdict": "PASS", "summary": "ok", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_CANDIDATE_MISMATCH"),
+        (json.dumps({"candidate_sha": CANDIDATE, "verdict": "FAIL", "summary": "bad", "findings": []}), "EXECUTION_UNAVAILABLE_CLOUDFLARE_MALFORMED_VERDICT"),
+    ],
+)
+def test_malformed_or_mismatched_output_is_execution_failure_not_semantic_verdict(response, code):
+    with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
+        parse_verdict_response({"success": True, "result": {"response": response}}, candidate_sha=CANDIDATE)
+    assert caught.value.code == code
+
+
+def test_lineage_key_is_exact_and_candidate_sensitive():
+    first = lineage_id(task_id="T1", handover_id="H1", candidate_sha=CANDIDATE)
+    assert first == lineage_id(task_id="T1", handover_id="H1", candidate_sha=CANDIDATE)
+    assert first != lineage_id(task_id="T1", handover_id="H1", candidate_sha="b" * 40)
+
+
+def test_workers_ai_transport_is_exactly_one_request(monkeypatch):
+    from control_engine import cloudflare_b1
+
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, limit):
+            assert limit == 1_000_001
+            return json.dumps({"success": True, "result": {"response": "{}"}}).encode()
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", fake_urlopen)
+    result = cloudflare_b1.run_workers_ai_once(
+        account_id="account_1",
+        api_token="secret-token",
+        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+    )
+    assert result["success"] is True
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/ai/run/@cf/openai/gpt-oss-120b")
