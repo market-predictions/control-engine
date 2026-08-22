@@ -133,3 +133,19 @@ def test_semantic_worker_error_persists_only_allowlisted_metadata_fingerprint(tm
     # error_code is promoted into the canonical finding.
     generic_block = rendered[rendered.index("semantic_failure_class=UNKNOWN_WORKER_ERROR"):rendered.index("outcome=\"$(python -", rendered.index("semantic_failure_class=UNKNOWN_WORKER_ERROR"))]
     assert "model.log" not in generic_block
+
+
+def test_unavailable_worker_error_persists_only_kernel_allowlisted_fingerprint(tmp_path: Path) -> None:
+    rendered = _render_resilient_script(tmp_path)
+    start = rendered.index("unavailable_failure_class=UNKNOWN_WORKER_ERROR")
+    end = rendered.index("else\n  semantic_failure_class=UNKNOWN_WORKER_ERROR", start)
+    unavailable_block = rendered[start:end]
+
+    assert 'from inference_worker import SAFE_ERROR_CODES' in unavailable_block
+    assert 'json.load(open(sys.argv[1], encoding="utf-8")).get("error_code")' in unavailable_block
+    assert 'value if value in SAFE_ERROR_CODES else "UNKNOWN_WORKER_ERROR"' in unavailable_block
+    assert "--outcome EXECUTION_UNAVAILABLE" in unavailable_block
+    assert 'Provider-portable assurance adapter returned unavailable; error_code=${unavailable_failure_class}; no fallback or paid route selected.' in unavailable_block
+    assert "model.log" not in unavailable_block
+    assert "CLOUDFLARE_API_TOKEN" not in unavailable_block
+    assert "CONTROL_GITHUB_WRITE_TOKEN" not in unavailable_block
