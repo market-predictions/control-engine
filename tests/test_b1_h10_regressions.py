@@ -33,12 +33,23 @@ def _capsule() -> dict:
             "task_id": "T1",
             "handover_id": "H1",
             "candidate_sha": CANDIDATE,
+            "acceptance_criteria_sha256": "19491d7bfff1ecf40598f9e0924131564c27eb0d06090c208402f0d01a803fe1",
         },
         "claim": {
+            "state": "ASSURANCE_EXECUTING",
             "active_run_id": "run-1",
             "active_role": "governance_release_assurance",
             "active_worker_instance": "B1",
+            "lease_current_at_observation": True,
             "start_proven": True,
+        },
+        "diff": {
+            "sha256": "f623deed686a9b4387589d5d628fe8ee9111765fe9c82193f9b4a16d3348a002",
+            "bytes": 5,
+            "content_embedded": False,
+        },
+        "source_digests": {
+            "diff_sha256": "f623deed686a9b4387589d5d628fe8ee9111765fe9c82193f9b4a16d3348a002",
         },
         "deterministic_contradictions": [],
     }
@@ -105,13 +116,44 @@ def test_semantic_pack_accepts_exact_b0_task_handover_claim_lineage():
         lambda value: value["claim"].update(active_role="implementation_operations"),
         lambda value: value["claim"].update(active_worker_instance="B2"),
         lambda value: value["claim"].update(active_run_id=""),
+        lambda value: value["claim"].update(state="ASSURANCE_QUEUED"),
+        lambda value: value["claim"].update(lease_current_at_observation=False),
+        lambda value: value["claim"].update(lease_current_at_observation=None),
+        lambda value: value["task"].update(acceptance_criteria_sha256="0" * 64),
+        lambda value: value["diff"].update(sha256="0" * 64),
+        lambda value: value["source_digests"].update(diff_sha256="0" * 64),
     ],
 )
-def test_semantic_pack_rejects_cross_lineage_or_wrong_authority_capsules(mutate):
+def test_semantic_pack_rejects_cross_lineage_wrong_authority_or_stale_evidence(mutate):
     capsule = copy.deepcopy(_capsule())
     mutate(capsule)
     with pytest.raises(CloudflareB1Error):
         _build(capsule)
+
+
+def test_semantic_pack_rejects_substituted_semantic_inputs():
+    with pytest.raises(CloudflareB1Error, match="acceptance criteria"):
+        build_semantic_pack(
+            task_id="T1",
+            handover_id="H1",
+            candidate_sha=CANDIDATE,
+            assurance_contract="Return one exact-head verdict.",
+            acceptance_criteria=["weaker criterion"],
+            capsule=_capsule(),
+            diff="+safe",
+            bounded_evidence={},
+        )
+    with pytest.raises(CloudflareB1Error, match="diff"):
+        build_semantic_pack(
+            task_id="T1",
+            handover_id="H1",
+            candidate_sha=CANDIDATE,
+            assurance_contract="Return one exact-head verdict.",
+            acceptance_criteria=["Exact current lineage is START_PROVEN."],
+            capsule=_capsule(),
+            diff="+different",
+            bounded_evidence={},
+        )
 
 
 def test_definite_codex_finding_that_mentions_marker_is_fail():
