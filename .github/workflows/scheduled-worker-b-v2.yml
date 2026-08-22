@@ -2,6 +2,7 @@ name: Scheduled Worker B V2
 # R3 completion-fingerprint deployment wake
 # Memory H5 assurance wake
 # Memory H5 post-expiry assurance wake
+# Control-146 lease-expiry reconciliation wake for Memory H5
 
 on:
   schedule:
