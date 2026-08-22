@@ -143,18 +143,20 @@ Codex is review-only in this path. It receives no queue, claim, merge, release o
 
 ## Non-authoritative pre-merge handshake
 
-The repository handshake canary is PR-head triggered on `pull_request:synchronize` for PR #69 rather than `workflow_dispatch`, because a workflow introduced by the PR itself cannot be manually dispatched until that workflow already exists on the default branch.
+A workflow introduced by the candidate itself is deliberately **not** used to trigger the pre-merge Codex handshake. `workflow_dispatch` would not exist on the default branch yet, while `pull_request` event tokens can be restricted from writing the trigger comment. The smallest reliable pre-merge proof is therefore a trusted external GitHub actuator posting one exact candidate-bound `@codex review` request.
 
-The canary:
+The pre-merge handshake:
 
-- checks out and revalidates the exact live PR head;
-- has only the bounded repository permissions it needs, including `statuses: write` for its non-authoritative commit status;
-- posts one exact candidate-bound `@codex review` request;
-- observes reactions only on that exact request plus exact-head Codex reviews/comments;
-- publishes `semantic_authority=false`;
+- fresh-reads the live PR head before posting the request;
+- embeds the exact candidate SHA and bounded review contract;
+- observes only trusted Codex bot evidence;
+- treats findings as review evidence and a `+1` reaction on the exact request comment as clean completion;
+- remains `semantic_authority=false`;
 - never reads or mutates private Control queue/result state.
 
-It is transport/executor evidence only and never establishes canonical `START_PROVEN` or a canonical B1 verdict.
+This is transport/executor evidence only and never establishes canonical `START_PROVEN` or a canonical B1 verdict.
+
+After the foundation is independently assured and integrated, the canonical GitHub Control Pump becomes the production actuator for Deep-B dispatch. No special pre-merge workflow is promoted into the runtime architecture.
 
 ## Failure semantics
 
@@ -188,7 +190,7 @@ Required sequence:
 
 1. deterministic unit tests for both executor adapters;
 2. existing Cloudflare shadow calibration remains green;
-3. PR-head-triggered non-authoritative Codex GitHub handshake proves request -> exact Codex completion -> deterministic classification with `semantic_authority=false`;
+3. trusted-external non-authoritative Codex GitHub handshake proves request -> exact Codex completion -> deterministic classification with `semantic_authority=false`;
 4. independent exact-head assurance of the complete #199 foundation by an executor that is not certifying its own activation path;
 5. merge exact assured foundation;
 6. one harmless shared-B1 canonical claim canary;
