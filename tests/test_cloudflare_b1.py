@@ -4,13 +4,19 @@ import pytest
 
 from control_engine.cloudflare_b1 import (
     CONTROL_ENGINE_REPOSITORY,
+    MAX_BOUNDED_EVIDENCE_BYTES,
+    MAX_CONTRACT_BYTES,
+    MAX_DIFF_BYTES,
+    MAX_PACK_BYTES,
     MODEL_ID,
+    SemanticBudgetMeasurement,
     CloudflareB1Error,
     CloudflareB1ExecutionUnavailable,
     build_messages,
     build_semantic_pack,
     classify_execution_surface,
     lineage_id,
+    measure_semantic_budget,
     parse_verdict_response,
 )
 
@@ -24,6 +30,15 @@ def capsule():
         "claim": {"start_proven": True},
         "deterministic_contradictions": [],
     }
+
+
+def budget(*, diff=100, contract=100, evidence=100, pack=1000):
+    return SemanticBudgetMeasurement(
+        diff_bytes=diff,
+        contract_bytes=contract,
+        evidence_bytes=evidence,
+        pack_bytes=pack,
+    )
 
 
 def chat_payload(content: str, *, finish_reason: str = "stop") -> dict:
@@ -40,7 +55,7 @@ def test_ordinary_small_change_is_cloudflare_eligible():
     decision = classify_execution_surface(
         repository="market-predictions/example",
         changed_files=["src/widget.py", "tests/test_widget.py"],
-        diff_bytes=12000,
+        budget=budget(diff=12000, pack=15000),
     )
     assert decision.cloudflare_eligible is True
     assert decision.reasons == ()
@@ -60,20 +75,58 @@ def test_control_executor_or_assurance_contract_path_requires_deep_review(path):
     decision = classify_execution_surface(
         repository=CONTROL_ENGINE_REPOSITORY,
         changed_files=[path],
-        diff_bytes=100,
+        budget=budget(),
     )
     assert decision.work_required is True
     assert decision.reasons == (f"CONTROL_AUTHORITY_PATH:{path}",)
 
 
-def test_oversized_diff_requires_work_without_retry_routing():
+@pytest.mark.parametrize(
+    "measurement,reason",
+    [
+        (budget(diff=MAX_DIFF_BYTES + 1), "DIFF_BUDGET_EXCEEDED"),
+        (budget(contract=MAX_CONTRACT_BYTES + 1), "CONTRACT_BUDGET_EXCEEDED"),
+        (budget(evidence=MAX_BOUNDED_EVIDENCE_BYTES + 1), "BOUNDED_EVIDENCE_BUDGET_EXCEEDED"),
+        (budget(pack=MAX_PACK_BYTES + 1), "SEMANTIC_PACK_BUDGET_EXCEEDED"),
+    ],
+)
+def test_every_semantic_pack_budget_overflow_requires_deep_review(measurement, reason):
+    decision = classify_execution_surface(
+        repository="market-predictions/example",
+        changed_files=["src/widget.py"],
+        budget=measurement,
+    )
+    assert decision.work_required is True
+    assert decision.reasons == (reason,)
+
+
+def test_custom_diff_limit_cannot_exceed_builder_hard_limit():
     decision = classify_execution_surface(
         repository="market-predictions/example",
         changed_files=["src/big.py"],
-        diff_bytes=32001,
+        budget=budget(diff=MAX_DIFF_BYTES + 1),
+        max_diff_bytes=MAX_DIFF_BYTES * 2,
     )
-    assert decision.work_required is True
     assert decision.reasons == ("DIFF_BUDGET_EXCEEDED",)
+
+
+def test_exact_budget_measurement_matches_built_pack_bytes():
+    kwargs = dict(
+        task_id="T1",
+        handover_id="H1",
+        candidate_sha=CANDIDATE,
+        assurance_contract="One verdict.",
+        acceptance_criteria=["criterion"],
+        capsule=capsule(),
+        diff="+safe",
+        bounded_evidence={"ci": "success"},
+    )
+    measured = measure_semantic_budget(**kwargs)
+    pack = build_semantic_pack(**kwargs)
+    serialized = json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert measured.diff_bytes == len(b"+safe")
+    assert measured.contract_bytes == len(b"One verdict.")
+    assert measured.pack_bytes == len(serialized)
 
 
 def test_semantic_pack_requires_start_proven_and_clean_b0():
