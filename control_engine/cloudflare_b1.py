@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import re
 import socket
@@ -30,13 +31,15 @@ _CONTROL_PLANE_SENSITIVE_PREFIXES = (
     "tools/control_",
 )
 _CONTROL_ENGINE_SENSITIVE_PREFIXES = (
-    "control_engine/scheduled_worker_b.py",
-    "control_engine/cloudflare_b1.py",
-    "control_engine/codex_b1.py",
-    "scripts/scheduled_worker_b",
+    # The implementation package is Control infrastructure. Conservatively
+    # self-route its source changes to DEEP instead of trying to enumerate
+    # individual authority modules and risking an omission.
+    "control_engine/",
+    "scripts/scheduled_worker_",
+    "scripts/project_integration_executor",
     "scripts/cloudflare_b1",
     "scripts/codex_b1",
-    ".github/workflows/scheduled-worker-b",
+    ".github/workflows/scheduled-worker-",
     ".github/workflows/cloudflare-b1",
     ".github/workflows/codex-b1",
     "docs/B1_DUAL_EXECUTOR_V1.md",
@@ -377,7 +380,7 @@ def run_workers_ai_once(
             raw = response.read(1_000_001)
     except urllib.error.HTTPError as exc:
         raise CloudflareB1ExecutionUnavailable(f"EXECUTION_UNAVAILABLE_CLOUDFLARE_HTTP_{exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+    except (urllib.error.URLError, TimeoutError, socket.timeout, http.client.HTTPException, ConnectionError) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_TRANSPORT") from exc
 
     if len(raw) > 1_000_000:
