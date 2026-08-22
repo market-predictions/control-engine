@@ -21,13 +21,24 @@
     "task": {
       "task_id": "SHADOW-INDETERMINATE",
       "handover_id": "SHADOW-INDETERMINATE-H1",
-      "candidate_sha": "3333333333333333333333333333333333333333"
+      "candidate_sha": "3333333333333333333333333333333333333333",
+      "acceptance_criteria_sha256": "e508dca5bf76a1fa7197b1044e4da45c82e5a7c979ef35ef1b81f669f1710ca7"
     },
     "claim": {
+      "state": "ASSURANCE_EXECUTING",
       "active_run_id": "shadow-indeterminate-run-1",
       "active_role": "governance_release_assurance",
       "active_worker_instance": "B1",
+      "lease_current_at_observation": true,
       "start_proven": true
+    },
+    "diff": {
+      "sha256": "dcfe5d356ec47d2150dd17e7506e658ce8cfeee47ce8848ee899a408feca26c7",
+      "bytes": 119,
+      "content_embedded": false
+    },
+    "source_digests": {
+      "diff_sha256": "dcfe5d356ec47d2150dd17e7506e658ce8cfeee47ce8848ee899a408feca26c7"
     },
     "deterministic_contradictions": []
   },
