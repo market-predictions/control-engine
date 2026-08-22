@@ -59,7 +59,7 @@ def test_request_rejects_invalid_identity_and_unbounded_criteria():
         )
 
 
-def test_clean_codex_reaction_maps_to_pass():
+def test_clean_codex_reaction_on_exact_trigger_maps_to_pass():
     result = classify_review_snapshot(
         candidate_sha=CANDIDATE,
         reviews=[review()],
@@ -69,6 +69,23 @@ def test_clean_codex_reaction_maps_to_pass():
     assert result.status == "COMPLETE"
     assert result.verdict == "PASS"
     assert result.findings == ()
+
+
+def test_historical_clean_issue_comment_cannot_authorize_pass():
+    result = classify_review_snapshot(
+        candidate_sha=CANDIDATE,
+        reviews=[],
+        review_comments=[],
+        trigger_reactions=[],
+        issue_comments=[
+            {
+                "user": bot(),
+                "body": "Codex Review: Didn't find any major issues",
+            }
+        ],
+    )
+    assert result.status == "PENDING"
+    assert result.verdict is None
 
 
 def test_codex_finding_maps_to_fail():
@@ -107,15 +124,26 @@ def test_definite_finding_takes_precedence_over_indeterminate():
     assert result.verdict == "FAIL"
 
 
-def test_stale_review_never_authorizes_pass():
+def test_stale_review_never_authorizes_pass_without_current_trigger_reaction():
+    result = classify_review_snapshot(
+        candidate_sha=CANDIDATE,
+        reviews=[review(sha="b" * 40)],
+        review_comments=[],
+        trigger_reactions=[],
+    )
+    assert result.status == "EXECUTION_UNAVAILABLE"
+    assert result.verdict is None
+
+
+def test_current_trigger_reaction_is_request_bound_even_with_old_review_history():
     result = classify_review_snapshot(
         candidate_sha=CANDIDATE,
         reviews=[review(sha="b" * 40)],
         review_comments=[],
         trigger_reactions=[reaction()],
     )
-    assert result.status == "EXECUTION_UNAVAILABLE"
-    assert result.verdict is None
+    assert result.status == "COMPLETE"
+    assert result.verdict == "PASS"
 
 
 def test_processing_reaction_is_pending_not_start_or_pass():
