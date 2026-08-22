@@ -11,6 +11,18 @@ import sys
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 text = source.read_text(encoding="utf-8")
+
+pin_old = '''CONTROL_CODE_REF="recovery/187-policy-metadata-r1"
+CONTROL_CODE_SHA="62cf2a88edd8700c073e51274d331210c7a36900"
+'''
+pin_new = '''CONTROL_CODE_REF="recovery/intake-immutable-result-collision-r1"
+CONTROL_CODE_SHA="a4f40afc90b51f05c88b16d9d17ac987c2ba0d30"
+'''
+count = text.count(pin_old)
+if count != 1:
+    raise SystemExit(f"expected exactly one A private-code pin, found {count}")
+text = text.replace(pin_old, pin_new)
+
 old = '''python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_a.py" resume-a-unavailable \\
       --code-dir "$CODE_DIR" \\
 '''
@@ -20,7 +32,9 @@ new = '''python -m control_engine.scheduled_worker_a_retry_guard \\
 count = text.count(old)
 if count != 1:
     raise SystemExit(f"expected exactly one A retry reconciliation invocation, found {count}")
-target.write_text(text.replace(old, new), encoding="utf-8")
+text = text.replace(old, new)
+
+target.write_text(text, encoding="utf-8")
 PY
 
 chmod 700 "$PATCHED"
