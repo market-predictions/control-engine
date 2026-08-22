@@ -27,9 +27,26 @@ CANDIDATE = "a" * 40
 
 def capsule():
     return {
-        "authority": {"semantic_verdict_present": False},
-        "task": {"candidate_sha": CANDIDATE},
-        "claim": {"start_proven": True},
+        "protocol_id": "CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1",
+        "version": "1.0",
+        "authority": {
+            "logical_role": "governance_release_assurance",
+            "worker_instance": "B1",
+            "semantic_verdict_present": False,
+            "merge_authority": False,
+            "release_authority": False,
+        },
+        "task": {
+            "task_id": "T1",
+            "handover_id": "H1",
+            "candidate_sha": CANDIDATE,
+        },
+        "claim": {
+            "active_run_id": "run-1",
+            "active_role": "governance_release_assurance",
+            "active_worker_instance": "B1",
+            "start_proven": True,
+        },
         "deterministic_contradictions": [],
     }
 
