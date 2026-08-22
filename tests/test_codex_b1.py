@@ -88,6 +88,24 @@ def test_historical_clean_issue_comment_cannot_authorize_pass():
     assert result.verdict is None
 
 
+def test_unbound_historical_review_comment_cannot_create_finding():
+    old = {
+        "user": bot(),
+        "pull_request_review_id": 99,
+        "body": "Old blocking finding with no commit metadata.",
+        "path": "src/old.py",
+        "line": 3,
+    }
+    result = classify_review_snapshot(
+        candidate_sha=CANDIDATE,
+        reviews=[],
+        review_comments=[old],
+        trigger_reactions=[],
+    )
+    assert result.status == "PENDING"
+    assert result.verdict is None
+
+
 def test_codex_finding_maps_to_fail():
     result = classify_review_snapshot(
         candidate_sha=CANDIDATE,
