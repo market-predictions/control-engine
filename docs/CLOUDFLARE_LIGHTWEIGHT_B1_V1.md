@@ -63,7 +63,10 @@ DEEP review is required when:
 - the assurance contract exceeds 8,000 bytes;
 - bounded extra evidence exceeds 8,000 bytes;
 - the complete prospective semantic pack exceeds 52,000 bytes;
-- the change touches defined Control authority, executor or assurance-contract paths, including the Cloudflare and Codex adapters.
+- the candidate changes public Control Engine implementation source (`control_engine/`) or the defined scheduled-worker/project-integration/executor/assurance-contract surfaces;
+- the candidate changes defined private Control authority paths.
+
+The public Control Engine self-routes its implementation-source changes conservatively to DEEP. This is intentionally broader than trying to enumerate individual authority modules such as the B0 capsule or worker actuators and accidentally omitting one.
 
 There is no score, confidence model, percentage router or round-robin state.
 
@@ -103,12 +106,14 @@ Examples:
 HTTP 429 / capacity
 HTTP 5xx
 network/timeout
+remote disconnect / reset
+incomplete HTTP response body
 invalid Cloudflare response envelope
 malformed reviewer JSON
 candidate mismatch
 ```
 
-These are classified as `EXECUTION_UNAVAILABLE_*` and must never be converted into semantic `INDETERMINATE`.
+URL/network exceptions, HTTP protocol exceptions (including incomplete reads), connection termination/reset and socket timeouts are normalized to `EXECUTION_UNAVAILABLE_CLOUDFLARE_TRANSPORT`. They must never escape as an accidental verdict mismatch and must never be converted into semantic `INDETERMINATE`.
 
 A prospective semantic pack that does not fit the bounded STANDARD contract is different: it is deterministically classified **before** Cloudflare invocation as DEEP, so budget overflow is not discovered late as a STANDARD execution failure.
 
