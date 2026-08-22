@@ -35,22 +35,16 @@ _CONTROL_PLANE_SENSITIVE_PREFIXES = (
     "tools/control_",
 )
 _CONTROL_ENGINE_SENSITIVE_PREFIXES = (
-    # The implementation package is Control infrastructure. Conservatively
-    # self-route its source changes to DEEP instead of trying to enumerate
-    # individual authority modules and risking an omission.
+    # Control Engine is itself execution/governance infrastructure. Route its
+    # implementation, actuator, workflow, contract and bundle surfaces to DEEP
+    # by top-level class so future files cannot silently fall through STANDARD.
     "control_engine/",
-    "scripts/scheduled_worker_",
-    "scripts/project_integration_executor",
-    "scripts/github_app_preflight",
-    "scripts/quarantine_zta_legacy_repair",
-    "scripts/cloudflare_b1",
-    "scripts/codex_b1",
-    ".github/workflows/scheduled-worker-",
-    ".github/workflows/worker-b-wake-bridge",
-    ".github/workflows/cloudflare-b1",
-    ".github/workflows/codex-b1",
-    "docs/B1_DUAL_EXECUTOR_V1.md",
-    "docs/CLOUDFLARE_LIGHTWEIGHT_B1_V1.md",
+    "scripts/",
+    ".github/workflows/",
+    "docs/",
+    "schemas/",
+    "ENGINE_MANIFEST.json",
+    "ENGINE_BUNDLE_V1.json",
 )
 
 
