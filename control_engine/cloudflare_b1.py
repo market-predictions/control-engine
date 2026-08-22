@@ -380,7 +380,7 @@ def run_workers_ai_once(
             raw = response.read(1_000_001)
     except urllib.error.HTTPError as exc:
         raise CloudflareB1ExecutionUnavailable(f"EXECUTION_UNAVAILABLE_CLOUDFLARE_HTTP_{exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError, socket.timeout, http.client.HTTPException, ConnectionError) as exc:
+    except (urllib.error.URLError, TimeoutError, socket.timeout, http.client.HTTPException, ConnectionError, OSError) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_TRANSPORT") from exc
 
     if len(raw) > 1_000_000:
