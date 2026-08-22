@@ -85,7 +85,7 @@ No ChatGPT Work dependency is implied by the compatibility field name. A later c
 
 - bounded Cloudflare evidence budget exceeded;
 - project-local contract explicitly requires deep review;
-- candidate changes canonical Control authority, claim/lease semantics, assurance semantics, merge/release authority or a core security boundary.
+- candidate changes canonical Control authority, claim/lease semantics, assurance semantics, merge/release authority, either semantic executor, or a core security boundary.
 
 No percentage routing, learned risk score, consensus layer or model voting.
 
@@ -129,9 +129,10 @@ chatgpt-codex-connector[bot]
 
 The adapter binds the exact candidate SHA and recognizes:
 
-- native Codex review findings -> `FAIL`;
+- native exact-head Codex review findings -> `FAIL`;
 - a finding explicitly tagged `CONTROL_B1_INDETERMINATE:` -> `INDETERMINATE` when no definite violation exists;
-- documented clean Codex completion (`+1` / clean-review completion) with no findings -> `PASS`;
+- a `+1` reaction from the trusted Codex bot on the exact request comment -> clean `PASS`;
+- historical clean issue comments are never PASS evidence;
 - wrong-head/stale review -> execution unavailable;
 - no terminal evidence yet -> pending;
 - connector error/timeout/unparseable evidence -> execution unavailable.
@@ -139,6 +140,21 @@ The adapter binds the exact candidate SHA and recognizes:
 A processing acknowledgement such as an eyes reaction is never a verdict and never `START_PROVEN`.
 
 Codex is review-only in this path. It receives no queue, claim, merge, release or canonical-result authority.
+
+## Non-authoritative pre-merge handshake
+
+The repository handshake canary is PR-head triggered on `pull_request:synchronize` for PR #69 rather than `workflow_dispatch`, because a workflow introduced by the PR itself cannot be manually dispatched until that workflow already exists on the default branch.
+
+The canary:
+
+- checks out and revalidates the exact live PR head;
+- has only the bounded repository permissions it needs, including `statuses: write` for its non-authoritative commit status;
+- posts one exact candidate-bound `@codex review` request;
+- observes reactions only on that exact request plus exact-head Codex reviews/comments;
+- publishes `semantic_authority=false`;
+- never reads or mutates private Control queue/result state.
+
+It is transport/executor evidence only and never establishes canonical `START_PROVEN` or a canonical B1 verdict.
 
 ## Failure semantics
 
@@ -172,7 +188,7 @@ Required sequence:
 
 1. deterministic unit tests for both executor adapters;
 2. existing Cloudflare shadow calibration remains green;
-3. manual-only Codex GitHub handshake canary proves request -> exact Codex completion -> deterministic classification with `semantic_authority=false`;
+3. PR-head-triggered non-authoritative Codex GitHub handshake proves request -> exact Codex completion -> deterministic classification with `semantic_authority=false`;
 4. independent exact-head assurance of the complete #199 foundation by an executor that is not certifying its own activation path;
 5. merge exact assured foundation;
 6. one harmless shared-B1 canonical claim canary;
