@@ -80,18 +80,50 @@ def _next_handover_id(handover_id: str) -> str:
     return f"{handover_id[:match.start()]}-H{int(match.group(1)) + 1}"
 
 
-def _matching_intake(intake_dir: Path, task_id: str) -> tuple[Path, dict[str, Any]]:
+def _matching_intake(intake_dir: Path, task: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    task_id = task.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise ActuatorContractError("exhausted assurance task identity is missing")
+
     matches: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(intake_dir.glob("*.json")):
         payload = _load(path)
         intent = payload.get("queue_intent")
         if isinstance(intent, dict) and intent.get("task_id") == task_id:
             matches.append((path, payload))
-    if len(matches) != 1:
-        raise ActuatorContractError(
-            f"expected exactly one project intake for exhausted assurance task, found {len(matches)}"
-        )
-    return matches[0]
+
+    # Historical/superseded intake revisions are durable evidence and may remain
+    # in the canonical intake directory. The queue's intake_revision identifies
+    # the authoritative source revision for this exact exhausted task; select it
+    # deterministically rather than requiring historical files to be deleted.
+    current_revision = task.get("intake_revision")
+    if isinstance(current_revision, str) and current_revision:
+        revision_matches = [
+            item
+            for item in matches
+            if isinstance(item[1].get("queue_intent"), dict)
+            and item[1]["queue_intent"].get("revision") == current_revision
+        ]
+        if len(revision_matches) == 1:
+            return revision_matches[0]
+        if len(revision_matches) > 1:
+            raise ActuatorContractError(
+                f"duplicate project intakes for exhausted assurance task {task_id!r} "
+                f"at canonical revision {current_revision!r}"
+            )
+
+    if len(matches) == 1:
+        return matches[0]
+
+    revisions = sorted(
+        str(item[1].get("queue_intent", {}).get("revision"))
+        for item in matches
+        if isinstance(item[1].get("queue_intent"), dict)
+    )
+    raise ActuatorContractError(
+        f"expected one authoritative project intake for exhausted assurance task {task_id!r}; "
+        f"current_revision={current_revision!r}; found {len(matches)} matching task revisions {revisions!r}"
+    )
 
 
 def _replace_task_identity(value: Any, old: str, new: str) -> Any:
@@ -131,7 +163,7 @@ def _ensure_assurance_retry_intake(queue_path: str, task: dict[str, Any]) -> str
     intake_dir = Path(queue_path).parent / "project-intake"
     if not intake_dir.is_dir():
         raise ActuatorContractError("canonical project-intake directory is missing")
-    _, source = _matching_intake(intake_dir, old_task_id)
+    _, source = _matching_intake(intake_dir, task)
     source_intent = source.get("queue_intent")
     if not isinstance(source_intent, dict):
         raise ActuatorContractError("source assurance intake has no queue_intent")
