@@ -16,6 +16,10 @@ import sys
 import tempfile
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from scripts import project_integration_executor as integration
 
 
