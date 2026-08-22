@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Memory H6 Work-B1 intake materialization wake
 """Read-only private reconciliation probe for Scheduled Worker A V2 diagnostics.
 
 The probe fetches the pinned private Control code and current runtime state,
