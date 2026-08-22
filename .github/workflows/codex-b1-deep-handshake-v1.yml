@@ -24,6 +24,7 @@ jobs:
       CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
       TASK_ID: CONTROL-199-CODEX-B1-HANDSHAKE
       HANDOVER_ID: CONTROL-199-CODEX-B1-HANDSHAKE-H1
+      PYTHONPATH: .
     steps:
       - name: Checkout exact actuator candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
