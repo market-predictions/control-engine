@@ -60,6 +60,78 @@ if count != 1:
     raise SystemExit(f"expected exactly one assurance inference anchor, found {count}")
 text = text.replace(inference_anchor, inference_bounded)
 
+# The private inference kernel already writes a deliberately sanitized metadata
+# document for every non-unavailable worker error. Keep the model log private,
+# but carry only its allowlisted error_code into the canonical INDETERMINATE
+# finding. This makes semantic transport/contract failures actionable without
+# leaking prompt, provider response, credentials or arbitrary exception text.
+semantic_old = '''else
+  python "$PRIVATE_TMP/make_result.py" \\
+    --task-id "$task_id" \\
+    --run-id "$run_id" \\
+    --role governance_release_assurance \\
+    --outcome INDETERMINATE \\
+    --candidate-sha "$candidate_sha" \\
+    --summary 'Assurance worker failed before producing a valid structured verdict.' \\
+    --finding 'Provider-portable assurance worker failed; PASS is forbidden.' \\
+    --evidence "public control-engine Actions run ${GITHUB_RUN_ID}; backend=scheduled-b-v2" \\
+    --output "$FINAL_RESULT" \\
+    >"$PRIVATE_TMP/make-result.log" 2>&1
+fi
+'''
+semantic_new = '''else
+  semantic_failure_class=UNKNOWN_WORKER_ERROR
+  if [ -s "$METADATA" ]; then
+    semantic_failure_class="$(python - "$METADATA" <<'PYMETA'
+import json
+import sys
+
+allowed = {
+    "POLICY_REJECTED",
+    "CREDENTIAL_FORMAT_REJECTED",
+    "ACCOUNT_FORMAT_REJECTED",
+    "PROVIDER_HTTP_FAILURE",
+    "PROVIDER_TRANSPORT_UNAVAILABLE",
+    "PROVIDER_TIMEOUT",
+    "PROVIDER_RESPONSE_UNPARSEABLE",
+    "PROVIDER_RESPONSE_CONTRACT_REJECTED",
+    "TOOL_CALL_INVALID",
+    "FINAL_JSON_INVALID",
+    "FINAL_CONTENT_MISSING",
+    "FINAL_JSON_PARSE_INVALID",
+    "FINAL_JSON_EXACT_MISMATCH",
+    "CONTEXT_BUDGET_EXHAUSTED",
+    "TOOL_BUDGET_EXHAUSTED",
+    "WALL_CLOCK_BUDGET_EXHAUSTED",
+    "WORKER_CONTRACT_REJECTED",
+    "UNEXPECTED_FAILURE",
+}
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("error_code")
+except Exception:
+    value = None
+print(value if value in allowed else "UNKNOWN_WORKER_ERROR")
+PYMETA
+)"
+  fi
+  python "$PRIVATE_TMP/make_result.py" \\
+    --task-id "$task_id" \\
+    --run-id "$run_id" \\
+    --role governance_release_assurance \\
+    --outcome INDETERMINATE \\
+    --candidate-sha "$candidate_sha" \\
+    --summary 'Assurance worker failed before producing a valid structured verdict.' \\
+    --finding "Provider-portable assurance worker failed; error_code=${semantic_failure_class}; PASS is forbidden." \\
+    --evidence "public control-engine Actions run ${GITHUB_RUN_ID}; backend=scheduled-b-v2" \\
+    --output "$FINAL_RESULT" \\
+    >"$PRIVATE_TMP/make-result.log" 2>&1
+fi
+'''
+count = text.count(semantic_old)
+if count != 1:
+    raise SystemExit(f"expected exactly one generic assurance-worker failure block, found {count}")
+text = text.replace(semantic_old, semantic_new)
+
 old = '''  if ! grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$PRIVATE_TMP/complete.log"; then
     fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
   fi
