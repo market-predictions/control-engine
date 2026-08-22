@@ -65,7 +65,38 @@ new = '''  # connected_complete is stage-idempotent: immutable result and comple
     printf 'complete.log missing\\n' >&2
   fi
   printf 'B1_TERMINAL_COMPLETION_DIAGNOSTIC_END\\n' >&2
-  fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
+
+  # Commit-status contexts are already the public non-sensitive liveness
+  # surface. Publish only a stable allowlisted failure fingerprint there so the
+  # exact completion class is recoverable without exposing private task/result
+  # payloads or broadening GitHub permissions.
+  completion_class=UNKNOWN
+  if [ -f "$PRIVATE_TMP/complete.log" ]; then
+    if grep -q 'worker result identity mismatch' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RESULT_IDENTITY_MISMATCH
+    elif grep -q 'worker result role mismatch' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RESULT_ROLE_MISMATCH
+    elif grep -q 'worker result fields do not match canonical result contract' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RESULT_FIELDS_MISMATCH
+    elif grep -q 'assurance result candidate differs from current task' "$PRIVATE_TMP/complete.log"; then
+      completion_class=CANDIDATE_MISMATCH
+    elif grep -q 'immutable runtime collision' "$PRIVATE_TMP/complete.log"; then
+      completion_class=IMMUTABLE_RUNTIME_COLLISION
+    elif grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RUNTIME_CAS_CONFLICT
+    elif grep -q 'authoritative GitHub result blob SHA differs from local result bytes' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RESULT_BLOB_MISMATCH
+    elif grep -q 'GitHub did not return an exact result blob SHA' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RESULT_BLOB_LOOKUP_INVALID
+    elif grep -q 'GH_TOKEN is required to fetch authoritative result blob SHA' "$PRIVATE_TMP/complete.log"; then
+      completion_class=RESULT_BLOB_AUTH_MISSING
+    elif grep -q 'claim' "$PRIVATE_TMP/complete.log" && grep -q -E 'expired|not current|ownership|run' "$PRIVATE_TMP/complete.log"; then
+      completion_class=CLAIM_VALIDATION
+    elif grep -q '^ERROR:' "$PRIVATE_TMP/complete.log"; then
+      completion_class=OTHER_CONNECTED_RUNTIME_ERROR
+    fi
+  fi
+  fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION_${completion_class}"
 '''
 count = text.count(old)
 if count != 1:
