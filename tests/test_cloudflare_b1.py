@@ -1,5 +1,6 @@
 import http.client
 import json
+import ssl
 
 import pytest
 
@@ -276,6 +277,22 @@ def test_incomplete_read_is_execution_unavailable(monkeypatch):
             raise http.client.IncompleteRead(b"partial", 100)
 
     monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", lambda *_args, **_kwargs: PartialResponse())
+    with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
+        cloudflare_b1.run_workers_ai_once(
+            account_id="account_1",
+            api_token="secret-token",
+            messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+        )
+    assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_TRANSPORT"
+
+
+def test_tls_eof_is_execution_unavailable(monkeypatch):
+    from control_engine import cloudflare_b1
+
+    def tls_eof(*_args, **_kwargs):
+        raise ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+
+    monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", tls_eof)
     with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
         cloudflare_b1.run_workers_ai_once(
             account_id="account_1",
