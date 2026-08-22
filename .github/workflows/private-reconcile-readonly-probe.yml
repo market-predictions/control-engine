@@ -1,4 +1,5 @@
 name: Private A Reconcile Readonly Probe
+# diagnostic wake: CONTROL-193 completion lifecycle
 
 on:
   push:
