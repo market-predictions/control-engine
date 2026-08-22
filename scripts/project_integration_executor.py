@@ -33,6 +33,7 @@ MAX_CAS_ATTEMPTS = 7
 LEASE_MINUTES = 75
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_INTAKE_PATH_RE = re.compile(r"^control/project-intake/[A-Za-z0-9_.-]+\.json$")
+HANDOVER_PATH_RE = re.compile(r"^control/handovers/[A-Za-z0-9_.-]+\.json$")
 STATUS_PREFIX = "SCHEDULED_WORKER_A_INTEGRATION="
 HANDLED_PREFIX = "SCHEDULED_WORKER_A_INTEGRATION_HANDLED="
 
@@ -63,13 +64,7 @@ def _write(path: Path, payload: dict[str, Any]) -> None:
     path.chmod(0o600)
 
 
-def _run(
-    cmd: list[str],
-    *,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    check: bool = True,
-) -> subprocess.CompletedProcess[str]:
+def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True)
     if check and result.returncode != 0:
         raise IntegrationError(f"subprocess failed: {cmd[0]}")
@@ -78,11 +73,7 @@ def _run(
 
 def _private_git(token: str, cwd: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    return _run(
-        ["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {auth}", *args],
-        cwd=cwd,
-        check=check,
-    )
+    return _run(["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {auth}", *args], cwd=cwd, check=check)
 
 
 def _api(token: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -120,12 +111,7 @@ def _fetch_code(token: str, code_dir: Path) -> None:
 
 
 def _reset_state(token: str, state_dir: Path) -> None:
-    result = _private_git(
-        token,
-        state_dir,
-        ["fetch", "--quiet", "origin", f"refs/heads/{CONTROL_RUNTIME_REF}"],
-        check=False,
-    )
+    result = _private_git(token, state_dir, ["fetch", "--quiet", "origin", f"refs/heads/{CONTROL_RUNTIME_REF}"], check=False)
     if result.returncode != 0:
         raise IntegrationUnavailable("private runtime fetch unavailable")
     _run(["git", "reset", "--hard", "--quiet", "FETCH_HEAD"], cwd=state_dir)
@@ -139,12 +125,7 @@ def _identity(state_dir: Path, ref: str = "HEAD") -> tuple[str, str]:
 
 
 def _remote_identity(token: str, state_dir: Path) -> tuple[str, str]:
-    result = _private_git(
-        token,
-        state_dir,
-        ["fetch", "--quiet", "origin", f"refs/heads/{CONTROL_RUNTIME_REF}"],
-        check=False,
-    )
+    result = _private_git(token, state_dir, ["fetch", "--quiet", "origin", f"refs/heads/{CONTROL_RUNTIME_REF}"], check=False)
     if result.returncode != 0:
         raise IntegrationUnavailable("private runtime ref fetch unavailable")
     return _identity(state_dir, "FETCH_HEAD")
@@ -158,18 +139,11 @@ def _changed_paths(state_dir: Path) -> set[str]:
 
 def _extend_reconcile_write_scope(allowed: set[str], changed: set[str]) -> set[str]:
     result = set(allowed)
-    result.update(path for path in changed if PROJECT_INTAKE_PATH_RE.fullmatch(path))
+    result.update(path for path in changed if PROJECT_INTAKE_PATH_RE.fullmatch(path) or HANDOVER_PATH_RE.fullmatch(path))
     return result
 
 
-def _persist(
-    token: str,
-    state_dir: Path,
-    *,
-    message: str,
-    paths: list[str],
-    allowed: set[str],
-) -> bool:
+def _persist(token: str, state_dir: Path, *, message: str, paths: list[str], allowed: set[str]) -> bool:
     changed = _changed_paths(state_dir)
     if not changed:
         return True
@@ -177,12 +151,7 @@ def _persist(
         raise IntegrationBlocked("private runtime write scope exceeded")
     _run(["git", "add", "--", *paths], cwd=state_dir)
     _run(["git", "commit", "--quiet", "-m", message], cwd=state_dir)
-    pushed = _private_git(
-        token,
-        state_dir,
-        ["push", "--quiet", "origin", f"HEAD:refs/heads/{CONTROL_RUNTIME_REF}"],
-        check=False,
-    )
+    pushed = _private_git(token, state_dir, ["push", "--quiet", "origin", f"HEAD:refs/heads/{CONTROL_RUNTIME_REF}"], check=False)
     return pushed.returncode == 0
 
 
@@ -216,80 +185,28 @@ def _select_integration(code_dir: Path, state_dir: Path) -> dict[str, Any] | Non
 
 def _reconcile_once(token: str, code_dir: Path, state_dir: Path, private_tmp: Path) -> None:
     from control_engine.scheduled_worker_a import resume_a_unavailable
-
     for _ in range(MAX_CAS_ATTEMPTS):
         _reset_state(token, state_dir)
         observed = _identity(state_dir)
-        allowed = {
-            "control/DISPATCH_QUEUE.json",
-            "control/DISPATCH_RUNS.json",
-        }
+        allowed = {"control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"}
         for path in (state_dir / "control" / "project-intake").glob("*.json"):
             allowed.add(path.relative_to(state_dir).as_posix())
-
-        _run(
-            [
-                sys.executable,
-                str(code_dir / "dispatcher" / "cli.py"),
-                "reconcile",
-                "--queue",
-                str(state_dir / "control" / "DISPATCH_QUEUE.json"),
-                "--runs",
-                str(state_dir / "control" / "DISPATCH_RUNS.json"),
-            ]
-        )
-        resume_a_unavailable(
-            str(code_dir),
-            str(state_dir / "control" / "DISPATCH_QUEUE.json"),
-            str(private_tmp / "resume-a.json"),
-        )
-        _run(
-            [
-                sys.executable,
-                str(code_dir / "tools" / "control_project_intake_reconcile_v1.py"),
-                "--queue",
-                str(state_dir / "control" / "DISPATCH_QUEUE.json"),
-                "--intake-dir",
-                str(state_dir / "control" / "project-intake"),
-                "--handover-dir",
-                str(state_dir / "control" / "handovers"),
-                "--worker-result-dir",
-                str(state_dir / "control" / "worker-results"),
-                "--write",
-                "--report",
-                str(private_tmp / "intake-report.json"),
-            ]
-        )
-        _run(
-            [
-                sys.executable,
-                str(code_dir / "dispatcher" / "cli.py"),
-                "validate",
-                "--queue",
-                str(state_dir / "control" / "DISPATCH_QUEUE.json"),
-            ]
-        )
+        for path in (state_dir / "control" / "handovers").glob("*.json"):
+            allowed.add(path.relative_to(state_dir).as_posix())
+        _run([sys.executable, str(code_dir / "dispatcher" / "cli.py"), "reconcile", "--queue", str(state_dir / "control" / "DISPATCH_QUEUE.json"), "--runs", str(state_dir / "control" / "DISPATCH_RUNS.json")])
+        resume_a_unavailable(str(code_dir), str(state_dir / "control" / "DISPATCH_QUEUE.json"), str(private_tmp / "resume-a.json"))
+        _run([sys.executable, str(code_dir / "tools" / "control_project_intake_reconcile_v1.py"), "--queue", str(state_dir / "control" / "DISPATCH_QUEUE.json"), "--intake-dir", str(state_dir / "control" / "project-intake"), "--handover-dir", str(state_dir / "control" / "handovers"), "--worker-result-dir", str(state_dir / "control" / "worker-results"), "--write", "--report", str(private_tmp / "intake-report.json")])
+        _run([sys.executable, str(code_dir / "dispatcher" / "cli.py"), "validate", "--queue", str(state_dir / "control" / "DISPATCH_QUEUE.json")])
         allowed = _extend_reconcile_write_scope(allowed, _changed_paths(state_dir))
         current = _remote_identity(token, state_dir)
         if current != observed:
             continue
-        if _persist(
-            token,
-            state_dir,
-            message="runtime: Scheduled Worker A integration reconcile before selection",
-            paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json", "control/project-intake"],
-            allowed=allowed,
-        ):
+        if _persist(token, state_dir, message="runtime: Scheduled Worker A integration reconcile before selection", paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json", "control/project-intake", "control/handovers"], allowed=allowed):
             return
     raise IntegrationUnavailable("runtime CAS conflict during integration reconciliation")
 
 
-def _claim_selected(
-    token: str,
-    code_dir: Path,
-    state_dir: Path,
-    task_id: str,
-) -> tuple[str, dict[str, Any]] | None:
+def _claim_selected(token: str, code_dir: Path, state_dir: Path, task_id: str) -> tuple[str, dict[str, Any]] | None:
     parallel, queue_mod, _, _ = _private_modules(code_dir)
     allowed = {"control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"}
     for _ in range(MAX_CAS_ATTEMPTS):
@@ -298,44 +215,13 @@ def _claim_selected(
         if selected is None or selected.get("task_id") != task_id:
             return None
         observed = _identity(state_dir)
-        result = _run(
-            [
-                sys.executable,
-                str(code_dir / "dispatcher" / "cli.py"),
-                "claim",
-                "--queue",
-                str(state_dir / "control" / "DISPATCH_QUEUE.json"),
-                "--runs",
-                str(state_dir / "control" / "DISPATCH_RUNS.json"),
-                "--task-id",
-                task_id,
-                "--backend",
-                "github-actions/public-control-engine-project-integration-v1",
-                "--lease-minutes",
-                str(LEASE_MINUTES),
-            ],
-            check=False,
-        )
+        result = _run([sys.executable, str(code_dir / "dispatcher" / "cli.py"), "claim", "--queue", str(state_dir / "control" / "DISPATCH_QUEUE.json"), "--runs", str(state_dir / "control" / "DISPATCH_RUNS.json"), "--task-id", task_id, "--backend", "github-actions/public-control-engine-project-integration-v1", "--lease-minutes", str(LEASE_MINUTES)], check=False)
         if result.returncode != 0:
             raise IntegrationBlocked("canonical integration claim failed")
-        _run(
-            [
-                sys.executable,
-                str(code_dir / "dispatcher" / "cli.py"),
-                "validate",
-                "--queue",
-                str(state_dir / "control" / "DISPATCH_QUEUE.json"),
-            ]
-        )
+        _run([sys.executable, str(code_dir / "dispatcher" / "cli.py"), "validate", "--queue", str(state_dir / "control" / "DISPATCH_QUEUE.json")])
         if _remote_identity(token, state_dir) != observed:
             continue
-        if not _persist(
-            token,
-            state_dir,
-            message="runtime: Scheduled Worker A V2 claim PROJECT_INTEGRATION",
-            paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"],
-            allowed=allowed,
-        ):
+        if not _persist(token, state_dir, message="runtime: Scheduled Worker A V2 claim PROJECT_INTEGRATION", paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"], allowed=allowed):
             continue
         _reset_state(token, state_dir)
         queue = _load(state_dir / "control" / "DISPATCH_QUEUE.json")
@@ -343,14 +229,7 @@ def _claim_selected(
         run_id = task.get("active_run_id")
         if not isinstance(run_id, str) or not run_id:
             raise IntegrationBlocked("integration START_PROVEN run id missing")
-        parallel.assert_claim_current(
-            queue,
-            task_id=task_id,
-            role=queue_mod.ROLE_A,
-            worker_instance=parallel.INSTANCE_A1,
-            run_id=run_id,
-            now=datetime.now(timezone.utc),
-        )
+        parallel.assert_claim_current(queue, task_id=task_id, role=queue_mod.ROLE_A, worker_instance=parallel.INSTANCE_A1, run_id=run_id, now=datetime.now(timezone.utc))
         if task.get("operation") != "PROJECT_INTEGRATION":
             raise IntegrationBlocked("claimed task operation drifted")
         if queue.get("principal_manual_relay_count") != 0 or task.get("principal_manual_relay_count") != 0:
@@ -400,34 +279,18 @@ def _pr_snapshot(token: str, repository: str, pr_number: int) -> dict[str, Any]:
             break
         time.sleep(1)
     assert raw is not None
-    return {
-        "number": raw.get("number"),
-        "head_sha": (raw.get("head") or {}).get("sha"),
-        "base_sha": (raw.get("base") or {}).get("sha"),
-        "base_ref": (raw.get("base") or {}).get("ref"),
-        "state": raw.get("state"),
-        "merged": bool(raw.get("merged")),
-        "mergeable": raw.get("mergeable"),
-        "draft": bool(raw.get("draft")),
-        "merge_commit_sha": raw.get("merge_commit_sha"),
-    }
+    return {"number": raw.get("number"), "head_sha": (raw.get("head") or {}).get("sha"), "base_sha": (raw.get("base") or {}).get("sha"), "base_ref": (raw.get("base") or {}).get("ref"), "state": raw.get("state"), "merged": bool(raw.get("merged")), "mergeable": raw.get("mergeable"), "draft": bool(raw.get("draft")), "merge_commit_sha": raw.get("merge_commit_sha")}
 
 
 def _ci_green(token: str, repository: str, candidate_sha: str, handover: dict[str, Any]) -> bool:
     for run_id in _ci_run_ids(repository, candidate_sha, handover):
         run = _api(token, "GET", f"repos/{repository}/actions/runs/{run_id}")
-        if run.get("head_sha") != candidate_sha:
-            return False
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
+        if run.get("head_sha") != candidate_sha or run.get("status") != "completed" or run.get("conclusion") != "success":
             return False
     return True
 
 
-def _load_integration_evidence(
-    code_dir: Path,
-    state_dir: Path,
-    task: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_integration_evidence(code_dir: Path, state_dir: Path, task: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     _, queue_mod, _, handover_mod = _private_modules(code_dir)
     handover_id = task.get("handover_id")
     result_ref = task.get("assurance_result_ref")
@@ -445,14 +308,8 @@ def _load_integration_evidence(
     if errors:
         raise IntegrationBlocked("authoritative integration handover is invalid")
     candidate_sha = task.get("candidate_sha")
-    if handover.get("handover_type") != "ASSURANCE_REQUEST":
-        raise IntegrationBlocked("integration handover type is not ASSURANCE_REQUEST")
-    if handover.get("repository") != task.get("repository"):
-        raise IntegrationBlocked("integration handover repository mismatch")
-    if handover.get("candidate_pr") != task.get("candidate_pr"):
-        raise IntegrationBlocked("integration handover PR mismatch")
-    if handover.get("candidate_sha") != candidate_sha:
-        raise IntegrationBlocked("integration handover candidate mismatch")
+    if handover.get("handover_type") != "ASSURANCE_REQUEST" or handover.get("repository") != task.get("repository") or handover.get("candidate_pr") != task.get("candidate_pr") or handover.get("candidate_sha") != candidate_sha:
+        raise IntegrationBlocked("integration handover binding mismatch")
     if result.get("run_id") != handover_id or result.get("role") != queue_mod.ROLE_B:
         raise IntegrationBlocked("assurance result identity mismatch")
     if result.get("outcome") != "PASS" or result.get("candidate_sha") != candidate_sha:
@@ -464,14 +321,7 @@ def _assert_claim_still_current(code_dir: Path, state_dir: Path, task_id: str, r
     parallel, queue_mod, _, _ = _private_modules(code_dir)
     queue = _load(state_dir / "control" / "DISPATCH_QUEUE.json")
     task = _find_task(queue, task_id)
-    parallel.assert_claim_current(
-        queue,
-        task_id=task_id,
-        role=queue_mod.ROLE_A,
-        worker_instance=parallel.INSTANCE_A1,
-        run_id=run_id,
-        now=datetime.now(timezone.utc),
-    )
+    parallel.assert_claim_current(queue, task_id=task_id, role=queue_mod.ROLE_A, worker_instance=parallel.INSTANCE_A1, run_id=run_id, now=datetime.now(timezone.utc))
     return task
 
 
@@ -485,17 +335,7 @@ def _close_run(runs: dict[str, Any], run_id: str, outcome: str, stamp: str) -> N
     run["finished_at"] = stamp
 
 
-def _finalize_claim(
-    token: str,
-    code_dir: Path,
-    state_dir: Path,
-    *,
-    task_id: str,
-    run_id: str,
-    next_state: str,
-    findings: list[str],
-    merge_sha: str | None = None,
-) -> None:
+def _finalize_claim(token: str, code_dir: Path, state_dir: Path, *, task_id: str, run_id: str, next_state: str, findings: list[str], merge_sha: str | None = None) -> None:
     parallel, queue_mod, _, _ = _private_modules(code_dir)
     allowed = {"control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"}
     for _ in range(MAX_CAS_ATTEMPTS):
@@ -503,24 +343,9 @@ def _finalize_claim(
         queue = _load(state_dir / "control" / "DISPATCH_QUEUE.json")
         runs = _load(state_dir / "control" / "DISPATCH_RUNS.json")
         task = _find_task(queue, task_id)
-        parallel.assert_claim_current(
-            queue,
-            task_id=task_id,
-            role=queue_mod.ROLE_A,
-            worker_instance=parallel.INSTANCE_A1,
-            run_id=run_id,
-            now=datetime.now(timezone.utc),
-        )
+        parallel.assert_claim_current(queue, task_id=task_id, role=queue_mod.ROLE_A, worker_instance=parallel.INSTANCE_A1, run_id=run_id, now=datetime.now(timezone.utc))
         observed = _identity(state_dir)
-        completed = parallel.complete_claim_for_instance(
-            queue,
-            task_id=task_id,
-            role=queue_mod.ROLE_A,
-            worker_instance=parallel.INSTANCE_A1,
-            run_id=run_id,
-            next_state=next_state,
-            now=datetime.now(timezone.utc),
-        )
+        completed = parallel.complete_claim_for_instance(queue, task_id=task_id, role=queue_mod.ROLE_A, worker_instance=parallel.INSTANCE_A1, run_id=run_id, next_state=next_state, now=datetime.now(timezone.utc))
         updated = _find_task(completed, task_id)
         updated["last_findings"] = list(findings)
         if next_state == "EXECUTION_UNAVAILABLE":
@@ -535,24 +360,12 @@ def _finalize_claim(
         _write(state_dir / "control" / "DISPATCH_RUNS.json", runs)
         if _remote_identity(token, state_dir) != observed:
             continue
-        if not _persist(
-            token,
-            state_dir,
-            message="runtime: Scheduled Worker A V2 finalize PROJECT_INTEGRATION",
-            paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"],
-            allowed=allowed,
-        ):
+        if not _persist(token, state_dir, message="runtime: Scheduled Worker A V2 finalize PROJECT_INTEGRATION", paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"], allowed=allowed):
             continue
         _reset_state(token, state_dir)
-        readback = _load(state_dir / "control" / "DISPATCH_QUEUE.json")
-        final_task = _find_task(readback, task_id)
-        if final_task.get("state") != next_state:
-            raise IntegrationBlocked("integration finalization readback state mismatch")
-        if any(
-            final_task.get(key) is not None
-            for key in ("active_run_id", "active_role", "active_worker_instance", "claim_started_at", "claim_expires_at")
-        ):
-            raise IntegrationBlocked("integration finalization left ghost ownership")
+        final_task = _find_task(_load(state_dir / "control" / "DISPATCH_QUEUE.json"), task_id)
+        if final_task.get("state") != next_state or any(final_task.get(key) is not None for key in ("active_run_id", "active_role", "active_worker_instance", "claim_started_at", "claim_expires_at")):
+            raise IntegrationBlocked("integration finalization readback mismatch")
         if merge_sha is not None and final_task.get("merge_sha") != merge_sha:
             raise IntegrationBlocked("integration merge SHA readback mismatch")
         return
@@ -563,49 +376,27 @@ def _perform_expected_head_merge(token: str, repository: str, pr_number: int, ca
     repo = _api(token, "GET", f"repos/{repository}")
     if repo.get("allow_merge_commit") is not True:
         raise IntegrationBlocked("repository does not allow exact merge-commit integration")
-    response = _api(
-        token,
-        "PUT",
-        f"repos/{repository}/pulls/{pr_number}/merge",
-        {"sha": candidate_sha, "merge_method": "merge"},
-    )
+    response = _api(token, "PUT", f"repos/{repository}/pulls/{pr_number}/merge", {"sha": candidate_sha, "merge_method": "merge"})
     merge_sha = response.get("sha")
     if response.get("merged") is not True or not isinstance(merge_sha, str) or not SHA_RE.fullmatch(merge_sha):
         raise IntegrationBlocked("expected-head merge was not accepted")
     return merge_sha
 
 
-def _validate_merged_state(
-    token: str,
-    repository: str,
-    pr_number: int,
-    candidate_sha: str,
-    trusted_base_sha: str,
-    target_branch: str,
-    merge_sha: str,
-) -> None:
+def _validate_merged_state(token: str, repository: str, pr_number: int, candidate_sha: str, trusted_base_sha: str, target_branch: str, merge_sha: str) -> None:
     post = _pr_snapshot(token, repository, pr_number)
-    if post.get("merged") is not True or post.get("head_sha") != candidate_sha:
+    if post.get("merged") is not True or post.get("head_sha") != candidate_sha or post.get("merge_commit_sha") != merge_sha:
         raise IntegrationBlocked("post-merge PR identity mismatch")
-    if post.get("merge_commit_sha") != merge_sha:
-        raise IntegrationBlocked("post-merge commit SHA mismatch")
-
     commit = _api(token, "GET", f"repos/{repository}/git/commits/{merge_sha}")
     parents = [item.get("sha") for item in commit.get("parents", []) if isinstance(item, dict)]
     if parents != [trusted_base_sha, candidate_sha]:
         raise IntegrationBlocked("merge commit parents do not bind trusted base plus assured head")
-
     compare = _api(token, "GET", f"repos/{repository}/compare/{merge_sha}...{target_branch}")
     if compare.get("status") not in {"identical", "ahead"}:
         raise IntegrationBlocked("target branch does not contain exact merge commit")
 
 
-def _detect_completed_merge(
-    token: str,
-    repository: str | None,
-    pr_number: int | None,
-    candidate_sha: str | None,
-) -> str | None:
+def _detect_completed_merge(token: str, repository: str | None, pr_number: int | None, candidate_sha: str | None) -> str | None:
     if not isinstance(repository, str) or not isinstance(pr_number, int) or not isinstance(candidate_sha, str):
         return None
     try:
@@ -613,12 +404,7 @@ def _detect_completed_merge(
     except Exception:
         return None
     merge_sha = snapshot.get("merge_commit_sha")
-    if (
-        snapshot.get("merged") is True
-        and snapshot.get("head_sha") == candidate_sha
-        and isinstance(merge_sha, str)
-        and SHA_RE.fullmatch(merge_sha)
-    ):
+    if snapshot.get("merged") is True and snapshot.get("head_sha") == candidate_sha and isinstance(merge_sha, str) and SHA_RE.fullmatch(merge_sha):
         return merge_sha
     return None
 
@@ -628,29 +414,23 @@ def main() -> int:
     if not token:
         _status("EXECUTION_UNAVAILABLE_PRIVATE_GITHUB_CREDENTIAL", handled=False)
         return 78
-
     if os.environ.get("GITHUB_REPOSITORY") != "market-predictions/control-engine" or os.environ.get("GITHUB_REF") != "refs/heads/main":
         _status("FAIL_CLOSED_PUBLIC_EXECUTION_IDENTITY", handled=False)
         return 2
-
     root = Path(tempfile.mkdtemp(prefix="control-project-integration-", dir=os.environ.get("RUNNER_TEMP")))
     root.chmod(0o700)
-    code_dir = root / "code"
-    state_dir = root / "state"
-    private_tmp = root / "private"
+    code_dir, state_dir, private_tmp = root / "code", root / "state", root / "private"
     private_tmp.mkdir(mode=0o700)
     claimed: tuple[str, str] | None = None
     repository: str | None = None
     pr_number: int | None = None
     candidate_sha: str | None = None
     merge_sha: str | None = None
-
     try:
         _fetch_code(token, code_dir)
         _init_repo(state_dir, f"https://github.com/{CONTROL_REPOSITORY}.git")
         _run(["git", "config", "user.name", "control-scheduled-a-v2[bot]"], cwd=state_dir)
         _run(["git", "config", "user.email", "control-scheduled-a-v2[bot]@users.noreply.github.com"], cwd=state_dir)
-
         if str(Path.cwd()) not in sys.path:
             sys.path.insert(0, str(Path.cwd()))
         _reconcile_once(token, code_dir, state_dir, private_tmp)
@@ -660,93 +440,42 @@ def main() -> int:
             _status("NO_PROJECT_INTEGRATION_SELECTED", handled=False)
             return 0
         task_id = selected["task_id"]
-
         claim = _claim_selected(token, code_dir, state_dir, task_id)
         if claim is None:
             _status("A1_SELECTION_MOVED", handled=False)
             return 0
         run_id, task = claim
         claimed = (task_id, run_id)
-
         _reset_state(token, state_dir)
         current_task = _assert_claim_still_current(code_dir, state_dir, task_id, run_id)
         handover, assurance_result = _load_integration_evidence(code_dir, state_dir, current_task)
-        repository = current_task.get("repository")
-        pr_number = current_task.get("candidate_pr")
-        candidate_sha = current_task.get("candidate_sha")
-        target_branch = current_task.get("target_branch")
-        if not isinstance(repository, str) or repository.count("/") != 1:
-            raise IntegrationBlocked("integration repository binding invalid")
-        if not isinstance(pr_number, int) or isinstance(pr_number, bool):
-            raise IntegrationBlocked("integration PR binding invalid")
-        if not isinstance(candidate_sha, str) or not SHA_RE.fullmatch(candidate_sha):
-            raise IntegrationBlocked("integration candidate binding invalid")
-        if not isinstance(target_branch, str) or not target_branch:
-            raise IntegrationBlocked("integration target branch binding invalid")
-
+        repository, pr_number, candidate_sha, target_branch = current_task.get("repository"), current_task.get("candidate_pr"), current_task.get("candidate_sha"), current_task.get("target_branch")
+        if not isinstance(repository, str) or repository.count("/") != 1 or not isinstance(pr_number, int) or isinstance(pr_number, bool) or not isinstance(candidate_sha, str) or not SHA_RE.fullmatch(candidate_sha) or not isinstance(target_branch, str) or not target_branch:
+            raise IntegrationBlocked("integration execution binding invalid")
         trusted_base_sha = _trusted_base_sha(repository, handover)
         snapshot = _pr_snapshot(token, repository, pr_number)
         if snapshot.get("base_ref") != target_branch or snapshot.get("base_sha") != trusted_base_sha:
             raise IntegrationBlocked("live PR base moved from trusted assurance base")
         ci_green = _ci_green(token, repository, candidate_sha, handover)
         _, _, gate_mod, _ = _private_modules(code_dir)
-        decision = gate_mod.evaluate_claimed_project_integration(
-            current_task,
-            assurance_result,
-            snapshot,
-            exact_head_ci_green=ci_green,
-            now=datetime.now(timezone.utc),
-        )
+        decision = gate_mod.evaluate_claimed_project_integration(current_task, assurance_result, snapshot, exact_head_ci_green=ci_green, now=datetime.now(timezone.utc))
         if not decision.allowed:
             raise IntegrationBlocked("claim-backed project integration gate rejected live state")
-
-        # Re-read both canonical claim and live PR/CI immediately before mutation.
         _reset_state(token, state_dir)
         current_task = _assert_claim_still_current(code_dir, state_dir, task_id, run_id)
         snapshot = _pr_snapshot(token, repository, pr_number)
-        if snapshot.get("base_ref") != target_branch or snapshot.get("base_sha") != trusted_base_sha:
-            raise IntegrationBlocked("live PR base moved before merge")
-        if not _ci_green(token, repository, candidate_sha, handover):
-            raise IntegrationBlocked("exact-head CI moved from green before merge")
-        decision = gate_mod.evaluate_claimed_project_integration(
-            current_task,
-            assurance_result,
-            snapshot,
-            exact_head_ci_green=True,
-            now=datetime.now(timezone.utc),
-        )
+        if snapshot.get("base_ref") != target_branch or snapshot.get("base_sha") != trusted_base_sha or not _ci_green(token, repository, candidate_sha, handover):
+            raise IntegrationBlocked("live integration evidence moved before merge")
+        decision = gate_mod.evaluate_claimed_project_integration(current_task, assurance_result, snapshot, exact_head_ci_green=True, now=datetime.now(timezone.utc))
         if not decision.allowed:
             raise IntegrationBlocked("final claim-backed integration gate rejected live state")
-
         merge_sha = _perform_expected_head_merge(token, repository, pr_number, candidate_sha)
-        _validate_merged_state(
-            token,
-            repository,
-            pr_number,
-            candidate_sha,
-            trusted_base_sha,
-            target_branch,
-            merge_sha,
-        )
-        _finalize_claim(
-            token,
-            code_dir,
-            state_dir,
-            task_id=task_id,
-            run_id=run_id,
-            next_state="COMPLETED_WITHOUT_ASSURANCE",
-            findings=[],
-            merge_sha=merge_sha,
-        )
+        _validate_merged_state(token, repository, pr_number, candidate_sha, trusted_base_sha, target_branch, merge_sha)
+        _finalize_claim(token, code_dir, state_dir, task_id=task_id, run_id=run_id, next_state="COMPLETED_WITHOUT_ASSURANCE", findings=[], merge_sha=merge_sha)
         claimed = None
         _status("COMPLETED_ONE_PROJECT_INTEGRATION", handled=True)
         return 0
-
     except IntegrationUnavailable:
-        # A merge API timeout can be ambiguous. Before any lifecycle mutation,
-        # independently re-read the PR. If the assured head is already merged,
-        # keep the exact A1 claim intact for deterministic recovery/finalization;
-        # never resume into a path that could attempt a second merge.
         if merge_sha is None:
             merge_sha = _detect_completed_merge(token, repository, pr_number, candidate_sha)
         if merge_sha is not None:
@@ -754,24 +483,13 @@ def main() -> int:
             return 78
         if claimed is not None:
             try:
-                _finalize_claim(
-                    token,
-                    code_dir,
-                    state_dir,
-                    task_id=claimed[0],
-                    run_id=claimed[1],
-                    next_state="EXECUTION_UNAVAILABLE",
-                    findings=["Deterministic project integration execution unavailable; no completed merge could be proven."],
-                )
+                _finalize_claim(token, code_dir, state_dir, task_id=claimed[0], run_id=claimed[1], next_state="EXECUTION_UNAVAILABLE", findings=["Deterministic project integration execution unavailable; no completed merge could be proven."])
                 claimed = None
             except Exception:
                 pass
         _status("EXECUTION_UNAVAILABLE_PROJECT_INTEGRATION", handled=True)
         return 78
     except Exception:
-        # Once a merge is known to have completed, never rewrite the same task as
-        # pre-merge BLOCKED. Preserve claim/history for the canonical missed-
-        # finalization recovery path instead of risking a second integration.
         if merge_sha is None:
             merge_sha = _detect_completed_merge(token, repository, pr_number, candidate_sha)
         if merge_sha is not None:
@@ -779,15 +497,7 @@ def main() -> int:
             return 2
         if claimed is not None:
             try:
-                _finalize_claim(
-                    token,
-                    code_dir,
-                    state_dir,
-                    task_id=claimed[0],
-                    run_id=claimed[1],
-                    next_state="BLOCKED",
-                    findings=["Deterministic project integration failed closed before any completed merge could be proven."],
-                )
+                _finalize_claim(token, code_dir, state_dir, task_id=claimed[0], run_id=claimed[1], next_state="BLOCKED", findings=["Deterministic project integration failed closed before any completed merge could be proven."])
                 claimed = None
             except Exception:
                 pass
