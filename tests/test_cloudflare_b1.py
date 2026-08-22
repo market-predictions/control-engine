@@ -247,6 +247,30 @@ def test_workers_ai_transport_is_exactly_one_request_and_bounded(monkeypatch):
     }
 
 
+def test_http_200_invalid_utf8_is_response_unparseable(monkeypatch):
+    from control_engine import cloudflare_b1
+
+    class InvalidUtf8Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, limit):
+            assert limit == 1_000_001
+            return b'\xff{"choices":[]}'
+
+    monkeypatch.setattr(cloudflare_b1.urllib.request, "urlopen", lambda *_args, **_kwargs: InvalidUtf8Response())
+    with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
+        cloudflare_b1.run_workers_ai_once(
+            account_id="account_1",
+            api_token="secret-token",
+            messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+        )
+    assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_UNPARSEABLE"
+
+
 def test_remote_disconnect_is_execution_unavailable(monkeypatch):
     from control_engine import cloudflare_b1
 
