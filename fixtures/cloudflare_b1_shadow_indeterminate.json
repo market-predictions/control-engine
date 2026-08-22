@@ -1,0 +1,25 @@
+{
+  "fixture_id": "INDETERMINATE",
+  "task_id": "SHADOW-INDETERMINATE",
+  "handover_id": "SHADOW-INDETERMINATE-H1",
+  "candidate_sha": "3333333333333333333333333333333333333333",
+  "assurance_contract": "Review only the supplied bounded evidence. Do not repair or infer missing evidence. Emit exactly one PASS, FAIL, or INDETERMINATE.",
+  "acceptance_criteria": [
+    "PASS requires measured p95 latency at or below 100 ms on the exact candidate.",
+    "The measurement must be bound to the frozen candidate."
+  ],
+  "capsule": {
+    "authority": {"semantic_verdict_present": false},
+    "task": {"candidate_sha": "3333333333333333333333333333333333333333"},
+    "claim": {"start_proven": true},
+    "deterministic_contradictions": []
+  },
+  "diff": "diff --git a/src/cache.py b/src/cache.py\n--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1,2 @@\n CACHE=True\n+CACHE_TTL=60\n",
+  "bounded_evidence": {
+    "changed_files": ["src/cache.py"],
+    "ci": {"exact_candidate_conclusion": "success"},
+    "performance_measurement": null,
+    "candidate_mutated_after_freeze": false
+  },
+  "expected_verdict": "INDETERMINATE"
+}
