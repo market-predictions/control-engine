@@ -9,17 +9,26 @@ from control_engine.codex_b1 import (
 )
 
 CANDIDATE = "a" * 40
+REQUEST_AT = "2026-08-23T00:00:00Z"
+CURRENT_AT = "2026-08-23T00:01:00Z"
+OLD_AT = "2026-08-22T23:59:00Z"
 
 
 def bot(login="chatgpt-codex-connector[bot]"):
     return {"login": login}
 
 
-def review(review_id=1, sha=CANDIDATE):
-    return {"id": review_id, "user": bot(), "commit_id": sha, "body": "Codex Review"}
+def review(review_id=1, sha=CANDIDATE, *, submitted_at=CURRENT_AT):
+    return {
+        "id": review_id,
+        "user": bot(),
+        "commit_id": sha,
+        "body": "Codex Review",
+        "submitted_at": submitted_at,
+    }
 
 
-def comment(body, *, review_id=1, sha=CANDIDATE, path="src/x.py", line=7):
+def comment(body, *, review_id=1, sha=CANDIDATE, path="src/x.py", line=7, created_at=CURRENT_AT):
     return {
         "user": bot(),
         "pull_request_review_id": review_id,
@@ -27,11 +36,16 @@ def comment(body, *, review_id=1, sha=CANDIDATE, path="src/x.py", line=7):
         "body": body,
         "path": path,
         "line": line,
+        "created_at": created_at,
     }
 
 
 def reaction(content="+1"):
     return {"user": bot(), "content": content}
+
+
+def classify(**kwargs):
+    return classify_review_snapshot(request_created_at=REQUEST_AT, **kwargs)
 
 
 def test_request_is_bounded_exact_identity_and_review_only():
@@ -59,8 +73,19 @@ def test_request_rejects_invalid_identity_and_unbounded_criteria():
         )
 
 
+def test_classification_requires_valid_request_boundary():
+    with pytest.raises(CodexB1Error, match="request_created_at"):
+        classify_review_snapshot(
+            candidate_sha=CANDIDATE,
+            request_created_at="not-a-time",
+            reviews=[],
+            review_comments=[],
+            trigger_reactions=[],
+        )
+
+
 def test_clean_codex_reaction_on_exact_trigger_maps_to_pass():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[review()],
         review_comments=[],
@@ -72,7 +97,7 @@ def test_clean_codex_reaction_on_exact_trigger_maps_to_pass():
 
 
 def test_historical_clean_issue_comment_cannot_authorize_pass():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[],
         review_comments=[],
@@ -95,8 +120,9 @@ def test_unbound_historical_review_comment_cannot_create_finding():
         "body": "Old blocking finding with no commit metadata.",
         "path": "src/old.py",
         "line": 3,
+        "created_at": CURRENT_AT,
     }
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[],
         review_comments=[old],
@@ -107,7 +133,7 @@ def test_unbound_historical_review_comment_cannot_create_finding():
 
 
 def test_codex_finding_maps_to_fail():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[review()],
         review_comments=[comment("This branch can bypass the expected-head guard.")],
@@ -119,7 +145,7 @@ def test_codex_finding_maps_to_fail():
 
 
 def test_tagged_missing_evidence_maps_to_indeterminate():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[review()],
         review_comments=[comment(f"{INDETERMINATE_MARKER} required CI evidence is unavailable")],
@@ -130,7 +156,7 @@ def test_tagged_missing_evidence_maps_to_indeterminate():
 
 
 def test_definite_finding_takes_precedence_over_indeterminate():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[review()],
         review_comments=[
@@ -143,7 +169,7 @@ def test_definite_finding_takes_precedence_over_indeterminate():
 
 
 def test_stale_review_never_authorizes_pass_without_current_trigger_reaction():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[review(sha="b" * 40)],
         review_comments=[],
@@ -154,7 +180,7 @@ def test_stale_review_never_authorizes_pass_without_current_trigger_reaction():
 
 
 def test_current_trigger_reaction_is_request_bound_even_with_old_review_history():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[review(sha="b" * 40)],
         review_comments=[],
@@ -164,8 +190,55 @@ def test_current_trigger_reaction_is_request_bound_even_with_old_review_history(
     assert result.verdict == "PASS"
 
 
+def test_prior_same_head_finding_cannot_poison_new_request_clean_pass():
+    result = classify(
+        candidate_sha=CANDIDATE,
+        reviews=[
+            review(review_id=1, submitted_at=OLD_AT),
+            review(review_id=2, submitted_at=CURRENT_AT),
+        ],
+        review_comments=[
+            comment("Old blocking finding.", review_id=1, created_at=OLD_AT),
+        ],
+        trigger_reactions=[reaction()],
+    )
+    assert result.status == "COMPLETE"
+    assert result.verdict == "PASS"
+    assert result.findings == ()
+
+
+def test_current_same_head_finding_still_fails_current_request():
+    result = classify(
+        candidate_sha=CANDIDATE,
+        reviews=[
+            review(review_id=1, submitted_at=OLD_AT),
+            review(review_id=2, submitted_at=CURRENT_AT),
+        ],
+        review_comments=[
+            comment("Old blocking finding.", review_id=1, created_at=OLD_AT),
+            comment("Current blocking finding.", review_id=2, created_at=CURRENT_AT),
+        ],
+        trigger_reactions=[],
+    )
+    assert result.status == "COMPLETE"
+    assert result.verdict == "FAIL"
+    assert len(result.findings) == 1
+    assert "Current blocking finding" in result.findings[0]
+
+
+def test_timestamp_less_review_evidence_is_not_current_request_evidence():
+    result = classify(
+        candidate_sha=CANDIDATE,
+        reviews=[review(submitted_at=None)],
+        review_comments=[comment("Unscoped finding.", created_at=None)],
+        trigger_reactions=[],
+    )
+    assert result.status == "PENDING"
+    assert result.verdict is None
+
+
 def test_processing_reaction_is_pending_not_start_or_pass():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
         reviews=[],
         review_comments=[],
@@ -176,9 +249,14 @@ def test_processing_reaction_is_pending_not_start_or_pass():
 
 
 def test_non_codex_actor_is_ignored():
-    result = classify_review_snapshot(
+    result = classify(
         candidate_sha=CANDIDATE,
-        reviews=[{"id": 1, "user": {"login": "github-actions[bot]"}, "commit_id": CANDIDATE}],
+        reviews=[{
+            "id": 1,
+            "user": {"login": "github-actions[bot]"},
+            "commit_id": CANDIDATE,
+            "submitted_at": CURRENT_AT,
+        }],
         review_comments=[],
         trigger_reactions=[{"user": {"login": "github-actions[bot]"}, "content": "+1"}],
     )
