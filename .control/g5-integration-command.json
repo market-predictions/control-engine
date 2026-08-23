@@ -1,8 +1,8 @@
 {
   "version": "1.0",
-  "action": "claim",
+  "action": "complete",
   "task_id": "CONTROL-199-PR69-INTEGRATE-G5",
   "candidate_sha": "7674b04763d70b0d10635beafe539bc3097a56fb",
-  "active_run_id": null,
-  "merge_sha": null
+  "active_run_id": "run-410e9b43-13b5-44bc-a468-957c557b1401",
+  "merge_sha": "07ca785b21da1f1af2b2db1a620c15de5a1ae2b9"
 }
