@@ -36,77 +36,72 @@ def _review() -> dict:
     }
 
 
-def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
-    result = classify_review_snapshot(
+def _classify_with_comment(comment: dict, *, clean: bool = True):
+    return classify_review_snapshot(
         task_id=TASK_ID,
         handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         request_comment_id=100,
         issue_comments=[_request()],
         reviews=[_review()],
-        review_comments=[
-            {
-                "user": _bot(),
-                "pull_request_review_id": 1,
-                "commit_id": WRONG,
-                "body": "Wrong-head blocking finding.",
-                "path": "control_engine/codex_b1.py",
-                "line": 1,
-                "created_at": REVIEW_AT,
-            }
-        ],
-        trigger_reactions=[{"user": _bot(), "content": "+1"}],
+        review_comments=[comment],
+        trigger_reactions=[{"user": _bot(), "content": "+1"}] if clean else [],
     )
+
+
+def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
+    result = _classify_with_comment({
+        "user": _bot(),
+        "pull_request_review_id": 1,
+        "commit_id": WRONG,
+        "body": "Wrong-head blocking finding.",
+        "path": "control_engine/codex_b1.py",
+        "line": 1,
+        "created_at": REVIEW_AT,
+    })
     assert result.status == "COMPLETE"
     assert result.verdict == "PASS"
     assert result.findings == ()
 
 
 def test_malformed_explicit_commit_comment_cannot_bind_through_exact_review_id():
-    result = classify_review_snapshot(
-        task_id=TASK_ID,
-        handover_id=HANDOVER_ID,
-        candidate_sha=CANDIDATE,
-        request_comment_id=100,
-        issue_comments=[_request()],
-        reviews=[_review()],
-        review_comments=[
-            {
-                "user": _bot(),
-                "pull_request_review_id": 1,
-                "commit_id": "not-a-valid-sha",
-                "body": "Malformed-metadata blocking finding.",
-                "path": "control_engine/codex_b1.py",
-                "line": 1,
-                "created_at": REVIEW_AT,
-            }
-        ],
-        trigger_reactions=[{"user": _bot(), "content": "+1"}],
-    )
+    result = _classify_with_comment({
+        "user": _bot(),
+        "pull_request_review_id": 1,
+        "commit_id": "not-a-valid-sha",
+        "body": "Malformed-metadata blocking finding.",
+        "path": "control_engine/codex_b1.py",
+        "line": 1,
+        "created_at": REVIEW_AT,
+    })
+    assert result.status == "COMPLETE"
+    assert result.verdict == "PASS"
+    assert result.findings == ()
+
+
+def test_null_explicit_commit_comment_cannot_bind_through_exact_review_id():
+    result = _classify_with_comment({
+        "user": _bot(),
+        "pull_request_review_id": 1,
+        "commit_id": None,
+        "body": "Null-metadata blocking finding.",
+        "path": "control_engine/codex_b1.py",
+        "line": 1,
+        "created_at": REVIEW_AT,
+    })
     assert result.status == "COMPLETE"
     assert result.verdict == "PASS"
     assert result.findings == ()
 
 
 def test_commitless_comment_can_still_bind_through_exact_review_id():
-    result = classify_review_snapshot(
-        task_id=TASK_ID,
-        handover_id=HANDOVER_ID,
-        candidate_sha=CANDIDATE,
-        request_comment_id=100,
-        issue_comments=[_request()],
-        reviews=[_review()],
-        review_comments=[
-            {
-                "user": _bot(),
-                "pull_request_review_id": 1,
-                "body": "Current blocking finding without comment SHA.",
-                "path": "control_engine/codex_b1.py",
-                "line": 1,
-                "created_at": REVIEW_AT,
-            }
-        ],
-        trigger_reactions=[],
-    )
+    result = _classify_with_comment({
+        "user": _bot(),
+        "pull_request_review_id": 1,
+        "body": "Current blocking finding without comment SHA.",
+        "path": "control_engine/codex_b1.py",
+        "line": 1,
+        "created_at": REVIEW_AT,
+    }, clean=False)
     assert result.status == "COMPLETE"
     assert result.verdict == "FAIL"
