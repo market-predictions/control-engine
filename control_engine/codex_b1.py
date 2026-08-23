@@ -363,12 +363,17 @@ def classify_review_snapshot(
 
     indeterminate = [finding for finding, tagged in finding_records if tagged]
     definite = [finding for finding, tagged in finding_records if not tagged]
-    if definite:
+    changes_requested = [item for item in exact_reviews if item.get("state") == "CHANGES_REQUESTED"]
+    if definite or changes_requested:
+        failure_records = list(finding_records)
+        if changes_requested:
+            failure_records.append(("Codex terminal exact-head review state is CHANGES_REQUESTED.", False))
+        blocking_count = len(definite) + len(changes_requested)
         return CodexReviewDecision(
             status="COMPLETE",
             verdict="FAIL",
-            summary=f"Codex deep review found {len(definite)} blocking finding(s).",
-            findings=_bounded_records(finding_records, preserve_definite=True),
+            summary=f"Codex deep review found {blocking_count} blocking finding(s).",
+            findings=_bounded_records(failure_records, preserve_definite=True),
             reviewed_commit=candidate_sha,
         )
     if indeterminate:
