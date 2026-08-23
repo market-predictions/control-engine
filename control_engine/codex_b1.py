@@ -68,6 +68,13 @@ def _belongs_to_request(
     return request_end is None or timestamp < request_end
 
 
+def request_id(*, task_id: str, handover_id: str, candidate_sha: str) -> str:
+    if not task_id or not handover_id or not _valid_sha(candidate_sha):
+        raise CodexB1Error("Codex request identity is incomplete or invalid")
+    raw = f"{task_id}\n{handover_id}\n{candidate_sha}\n".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _request_candidate(item: dict[str, Any]) -> str | None:
     body = item.get("body")
     if not isinstance(body, str) or not body:
@@ -75,27 +82,65 @@ def _request_candidate(item: dict[str, Any]) -> str | None:
     lines = [line.strip() for line in body.splitlines()]
     if REQUEST_MARKER not in lines:
         return None
-    for line in lines:
-        if line.startswith("candidate_sha="):
-            candidate = line.split("=", 1)[1].strip()
-            return candidate if _valid_sha(candidate) else None
-    return None
+    candidate_lines = [line for line in lines if line.startswith("candidate_sha=")]
+    if len(candidate_lines) != 1:
+        return None
+    candidate = candidate_lines[0].split("=", 1)[1].strip()
+    return candidate if _valid_sha(candidate) else None
+
+
+def _request_identity(item: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    body = item.get("body")
+    if not isinstance(body, str) or not body:
+        return None
+    lines = [line.strip() for line in body.splitlines()]
+    if REQUEST_MARKER not in lines:
+        return None
+
+    values: dict[str, str] = {}
+    for key in ("request_id", "task_id", "handover_id", "candidate_sha"):
+        matches = [line.split("=", 1)[1].strip() for line in lines if line.startswith(f"{key}=")]
+        if len(matches) != 1 or not matches[0]:
+            return None
+        values[key] = matches[0]
+
+    candidate_sha = values["candidate_sha"]
+    if not _valid_sha(candidate_sha) or not re.fullmatch(r"[0-9a-f]{64}", values["request_id"]):
+        return None
+    expected = request_id(
+        task_id=values["task_id"],
+        handover_id=values["handover_id"],
+        candidate_sha=candidate_sha,
+    )
+    if values["request_id"] != expected:
+        return None
+    return values["request_id"], values["task_id"], values["handover_id"], candidate_sha
 
 
 def _request_window(
     *,
+    task_id: str,
+    handover_id: str,
     request_comment_id: int,
     candidate_sha: str,
     issue_comments: list[dict[str, Any]],
 ) -> tuple[datetime, datetime | None, bool]:
     if not isinstance(request_comment_id, int) or isinstance(request_comment_id, bool) or request_comment_id <= 0:
         raise CodexB1Error("request_comment_id must be a positive integer")
+    if not task_id or not handover_id:
+        raise CodexB1Error("expected Codex request identity is incomplete")
 
     current = next((item for item in issue_comments if item.get("id") == request_comment_id), None)
     if current is None:
         raise CodexB1Error("exact Codex request comment is absent from issue_comments")
-    if _request_candidate(current) != candidate_sha:
-        raise CodexB1Error("exact Codex request comment is not bound to candidate_sha")
+    expected_identity = (
+        request_id(task_id=task_id, handover_id=handover_id, candidate_sha=candidate_sha),
+        task_id,
+        handover_id,
+        candidate_sha,
+    )
+    if _request_identity(current) != expected_identity:
+        raise CodexB1Error("exact Codex request comment is not bound to the expected full request identity")
     request_start = _parse_timestamp(current.get("created_at"))
     if request_start is None:
         raise CodexB1Error("exact Codex request comment has no valid created_at timestamp")
@@ -126,13 +171,6 @@ def _request_window(
         return request_start, None, False
     request_end, _ = min(later_requests, key=lambda value: (value[0], value[1]))
     return request_start, request_end, request_end == request_start
-
-
-def request_id(*, task_id: str, handover_id: str, candidate_sha: str) -> str:
-    if not task_id or not handover_id or not _valid_sha(candidate_sha):
-        raise CodexB1Error("Codex request identity is incomplete or invalid")
-    raw = f"{task_id}\n{handover_id}\n{candidate_sha}\n".encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
 
 
 def build_review_request(
@@ -211,6 +249,8 @@ def _bounded_finding(item: dict[str, Any]) -> str | None:
 
 def classify_review_snapshot(
     *,
+    task_id: str,
+    handover_id: str,
     candidate_sha: str,
     request_comment_id: int,
     reviews: list[dict[str, Any]],
@@ -220,16 +260,19 @@ def classify_review_snapshot(
 ) -> CodexReviewDecision:
     if not _valid_sha(candidate_sha):
         raise CodexB1Error("candidate_sha is invalid")
+    if not task_id or not handover_id:
+        raise CodexB1Error("expected Codex request identity is incomplete")
     for collection in (reviews, review_comments, trigger_reactions, issue_comments):
         if not isinstance(collection, list) or any(not isinstance(item, dict) for item in collection):
             raise CodexB1Error("Codex snapshot collections must contain objects")
 
-    # Bind the review evidence to the exact GitHub request comment, not to a
-    # caller-supplied lower timestamp. The next request for the same candidate
-    # is an exclusive upper bound, preventing later same-head handshakes from
-    # poisoning this request. Same-timestamp adjacent requests are ambiguous in
-    # either direction and therefore fail closed instead of guessing ownership.
+    # Bind review evidence to the exact GitHub request comment and its full
+    # task/handover/candidate/request-hash identity. The next request for the
+    # same candidate is an exclusive upper bound, so later same-head handshakes
+    # cannot poison this request. Same-timestamp adjacent requests fail closed.
     request_start, request_end, ambiguous_window = _request_window(
+        task_id=task_id,
+        handover_id=handover_id,
         request_comment_id=request_comment_id,
         candidate_sha=candidate_sha,
         issue_comments=issue_comments,
@@ -264,7 +307,7 @@ def classify_review_snapshot(
         elif review_id not in exact_review_ids:
             continue
         body = item.get("body")
-        tagged_indeterminate = isinstance(body, str) and body.strip().startswith(INDETERMINATE_MARKER)
+        tagged_indeterminate = isinstance(body, str) and body.startswith(INDETERMINATE_MARKER)
         finding = _bounded_finding(item)
         if finding:
             finding_records.append((finding, tagged_indeterminate))
