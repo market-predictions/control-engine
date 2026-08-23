@@ -30,6 +30,8 @@ def command_request(args: argparse.Namespace) -> int:
 
 def command_classify(args: argparse.Namespace) -> int:
     decision = classify_review_snapshot(
+        task_id=args.task_id,
+        handover_id=args.handover_id,
         candidate_sha=args.candidate_sha,
         request_comment_id=args.request_comment_id,
         reviews=_load(args.reviews),
@@ -66,6 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
     request.set_defaults(func=command_request)
 
     classify = sub.add_parser("classify")
+    classify.add_argument("--task-id", required=True)
+    classify.add_argument("--handover-id", required=True)
     classify.add_argument("--candidate-sha", required=True)
     classify.add_argument("--request-comment-id", required=True, type=int)
     classify.add_argument("--reviews", required=True)
