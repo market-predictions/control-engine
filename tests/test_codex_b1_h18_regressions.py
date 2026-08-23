@@ -49,8 +49,15 @@ def _classify_with_comment(comment: dict, *, clean: bool = True):
     )
 
 
+def _assert_rejected(comment: dict):
+    result = _classify_with_comment(comment)
+    assert result.status == "COMPLETE"
+    assert result.verdict == "PASS"
+    assert result.findings == ()
+
+
 def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
-    result = _classify_with_comment({
+    _assert_rejected({
         "user": _bot(),
         "pull_request_review_id": 1,
         "commit_id": WRONG,
@@ -59,13 +66,10 @@ def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
         "line": 1,
         "created_at": REVIEW_AT,
     })
-    assert result.status == "COMPLETE"
-    assert result.verdict == "PASS"
-    assert result.findings == ()
 
 
 def test_malformed_explicit_commit_comment_cannot_bind_through_exact_review_id():
-    result = _classify_with_comment({
+    _assert_rejected({
         "user": _bot(),
         "pull_request_review_id": 1,
         "commit_id": "not-a-valid-sha",
@@ -74,13 +78,10 @@ def test_malformed_explicit_commit_comment_cannot_bind_through_exact_review_id()
         "line": 1,
         "created_at": REVIEW_AT,
     })
-    assert result.status == "COMPLETE"
-    assert result.verdict == "PASS"
-    assert result.findings == ()
 
 
 def test_null_explicit_commit_comment_cannot_bind_through_exact_review_id():
-    result = _classify_with_comment({
+    _assert_rejected({
         "user": _bot(),
         "pull_request_review_id": 1,
         "commit_id": None,
@@ -89,9 +90,32 @@ def test_null_explicit_commit_comment_cannot_bind_through_exact_review_id():
         "line": 1,
         "created_at": REVIEW_AT,
     })
-    assert result.status == "COMPLETE"
-    assert result.verdict == "PASS"
-    assert result.findings == ()
+
+
+def test_later_invalid_explicit_commit_key_rejects_record_even_after_valid_first_key():
+    _assert_rejected({
+        "user": _bot(),
+        "pull_request_review_id": 1,
+        "commit_id": CANDIDATE,
+        "original_commit_id": None,
+        "body": "Conflicting explicit metadata finding.",
+        "path": "control_engine/codex_b1.py",
+        "line": 1,
+        "created_at": REVIEW_AT,
+    })
+
+
+def test_conflicting_valid_explicit_commit_keys_reject_record():
+    _assert_rejected({
+        "user": _bot(),
+        "pull_request_review_id": 1,
+        "commit_id": CANDIDATE,
+        "original_commit_id": WRONG,
+        "body": "Conflicting valid SHAs finding.",
+        "path": "control_engine/codex_b1.py",
+        "line": 1,
+        "created_at": REVIEW_AT,
+    })
 
 
 def test_commitless_comment_can_still_bind_through_exact_review_id():
