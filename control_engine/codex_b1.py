@@ -80,8 +80,11 @@ def _request_candidate(item: dict[str, Any]) -> str | None:
     body = item.get("body")
     if not isinstance(body, str) or not body:
         return None
-    lines = [line.strip() for line in body.splitlines()]
-    if not lines or lines[0] != "@codex review" or REQUEST_MARKER not in lines:
+    raw_lines = body.splitlines()
+    if not raw_lines or raw_lines[0] != "@codex review":
+        return None
+    lines = [line.strip() for line in raw_lines]
+    if REQUEST_MARKER not in lines:
         return None
     candidate_lines = [line for line in lines if line.startswith("candidate_sha=")]
     if len(candidate_lines) != 1:
@@ -94,8 +97,11 @@ def _request_identity(item: dict[str, Any]) -> tuple[str, str, str, str] | None:
     body = item.get("body")
     if not isinstance(body, str) or not body:
         return None
-    lines = [line.strip() for line in body.splitlines()]
-    if not lines or lines[0] != "@codex review" or REQUEST_MARKER not in lines:
+    raw_lines = body.splitlines()
+    if not raw_lines or raw_lines[0] != "@codex review":
+        return None
+    lines = [line.strip() for line in raw_lines]
+    if REQUEST_MARKER not in lines:
         return None
 
     values: dict[str, str] = {}
