@@ -40,6 +40,7 @@ def _capsule() -> dict:
         },
         "task": {
             "task_id": "T1",
+            "repository": CONTROL_ENGINE_REPOSITORY,
             "handover_id": "H1",
             "candidate_sha": CANDIDATE,
             "acceptance_criteria_sha256": _json_digest(CRITERIA),
