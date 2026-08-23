@@ -98,6 +98,18 @@ def test_standard_control_routing_rejects_missing_b0_capsule():
         )
 
 
+def test_routing_rejects_repository_substitution_before_prefix_selection():
+    capsule = _capsule()
+    capsule["changed_files"] = ["control_engine/cloudflare_b1.py"]
+    with pytest.raises(CloudflareB1Error, match="repository does not match B0 routing evidence"):
+        classify_execution_surface(
+            repository="market-predictions/example",
+            changed_files=["control_engine/cloudflare_b1.py"],
+            budget=_budget(),
+            capsule=capsule,
+        )
+
+
 @pytest.mark.parametrize("invalid", [None, {}, ["UNRESOLVED"]])
 def test_semantic_pack_requires_explicit_empty_contradiction_list(invalid):
     capsule = _capsule()
