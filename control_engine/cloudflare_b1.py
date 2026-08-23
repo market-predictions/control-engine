@@ -411,7 +411,7 @@ def parse_verdict_response(api_response: dict[str, Any], *, candidate_sha: str) 
     raw = _unwrap_single_json_fence(response)
     try:
         payload = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
-    except (json.JSONDecodeError, _DuplicateJsonKey) as exc:
+    except (ValueError, RecursionError) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_NON_JSON") from exc
     if not isinstance(payload, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_VERDICT_KEYS")
@@ -498,7 +498,7 @@ def run_workers_ai_once(
     try:
         text = raw.decode("utf-8")
         payload = json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
-    except (json.JSONDecodeError, UnicodeDecodeError, _DuplicateJsonKey) as exc:
+    except (ValueError, RecursionError) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_UNPARSEABLE") from exc
     if not isinstance(payload, dict):
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_CONTRACT")
