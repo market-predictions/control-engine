@@ -1,0 +1,254 @@
+name: Gate 7 Production STANDARD H3 V1
+
+on:
+  push:
+    branches:
+      - control/g7-standard-production-actuator-v1
+    paths:
+      - .control/g7-standard-production-h3-command.json
+      - .github/workflows/g7-standard-production-h3-v1.yml
+      - scripts/g7_standard_production_h3.py
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-g7-standard-production-h3-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
+  CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
+  CONTROL_TASK_ID: CONTROL-199-G7-ETF-EU-PR103-ASSURE-H3
+  CONTROL_HANDOVER_ID: CONTROL-199-G7-ETF-EU-PR103-H3
+  TARGET_REPOSITORY: market-predictions/weekly-etf-eu
+  TARGET_PR: '103'
+  TARGET_BRANCH: agent/etf-eu-260814-markdown-parity-repair
+  TARGET_BASE_SHA: 7e20340eca82bfb9aad0b63ffeaae7291e7f14e6
+  TARGET_CANDIDATE_SHA: ec59414aedf90f88e2c6176bc419dae15ad23d61
+
+jobs:
+  assurance:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/g7-standard-production-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout integrated executor plus isolated H3 actuator
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate H3 command and actuator syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.version == "1.0" and .action == "run" and .task_id == env.CONTROL_TASK_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and .base_sha == env.TARGET_BASE_SHA' .control/g7-standard-production-h3-command.json >/dev/null
+          python -m py_compile scripts/g7_standard_production.py scripts/g7_standard_production_h3.py
+
+      - name: Preflight GitHub App
+        id: app-preflight
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-actions: 'read'
+          permission-pull-requests: 'read'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Reconcile H3 intake and claim preferred B1
+        id: claim
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          a_code="$RUNNER_TEMP/control-a-code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_B_CODE_REF" "$private_url" "$b_code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_A_CODE_REF" "$private_url" "$a_code"
+          [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_A_CODE_SHA" ]
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+
+          reconciled=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/state-reconcile-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            git -C "$state" config user.name 'control-g7-h3-actuator[bot]'
+            git -C "$state" config user.email 'control-g7-h3-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse 'HEAD:control/DISPATCH_QUEUE.json')"
+
+            python "$a_code/dispatcher/cli.py" reconcile --queue "$state/control/DISPATCH_QUEUE.json" --runs "$state/control/DISPATCH_RUNS.json" >/dev/null
+            python control_engine/scheduled_worker_a.py resume-a-unavailable --code-dir "$a_code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$RUNNER_TEMP/resume-a.json" >/dev/null
+            python "$a_code/tools/control_project_intake_reconcile_v1.py" --queue "$state/control/DISPATCH_QUEUE.json" --intake-dir "$state/control/project-intake" --handover-dir "$state/control/handovers" --worker-result-dir "$state/control/worker-results" --write --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+            python "$a_code/dispatcher/cli.py" validate --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
+
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            current_ref="$(git -C "$state" rev-parse FETCH_HEAD)"
+            current_blob="$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')"
+            if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+              continue
+            fi
+            if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
+              git -C "$state" commit --quiet -m 'runtime: reconcile CONTROL #199 Gate-7 H3 production assurance'
+              if ! git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+                continue
+              fi
+            fi
+            reconciled=true
+            break
+          done
+          [ "$reconciled" = true ]
+
+          state="$RUNNER_TEMP/state-claim"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          selection="$RUNNER_TEMP/selection.json"
+          python control_engine/scheduled_worker_b.py select-b1 --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$selection" >/dev/null
+          python - "$selection" "$state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          selection=json.load(open(sys.argv[1], encoding='utf-8'))
+          queue=json.load(open(sys.argv[2], encoding='utf-8'))
+          task_id=os.environ['CONTROL_TASK_ID']
+          if selection.get('selected') is not True or selection.get('task_id') != task_id:
+              raise SystemExit('Gate-7 H3 task is not deterministic preferred B1')
+          matches=[item for item in queue.get('tasks',[]) if item.get('task_id') == task_id]
+          if len(matches) != 1: raise SystemExit('canonical task identity mismatch')
+          task=matches[0]
+          if task.get('candidate_sha') != os.environ['TARGET_CANDIDATE_SHA']: raise SystemExit('candidate mismatch')
+          if task.get('handover_id') != os.environ['CONTROL_HANDOVER_ID']: raise SystemExit('handover mismatch')
+          if task.get('merge_policy') != 'NEVER': raise SystemExit('Gate-7 H3 merge policy mismatch')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
+            --runtime-root "$state" \
+            --runtime-ref "$CONTROL_RUNTIME_REF" \
+            --task-id "$CONTROL_TASK_ID" \
+            --worker-instance B1 \
+            --backend github-actions/g7-standard-production-h3-v1 \
+            --lease-seconds 900 > "$RUNNER_TEMP/claim.json"
+          run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
+          [ -n "$run_id" ] && [ "$run_id" != null ]
+          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Collect exact evidence and invoke one provenance-fenced STANDARD call
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
+          CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
+          ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+          CONTROL_G7_PROVENANCE_PATH: ${{ runner.temp }}/g7-h3-provenance.json
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          target_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${TARGET_REPOSITORY}.git"
+          target="$RUNNER_TEMP/target"
+          git init -q "$target"
+          git -C "$target" remote add origin "$target_url"
+          git -C "$target" fetch --quiet origin "$TARGET_BASE_SHA" "$TARGET_CANDIDATE_SHA"
+          [ "$(git -C "$target" ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')" = "$TARGET_CANDIDATE_SHA" ]
+          git -C "$target" diff --name-only "$TARGET_BASE_SHA" "$TARGET_CANDIDATE_SHA" > "$RUNNER_TEMP/changed-files.txt"
+          cat > "$RUNNER_TEMP/expected-files.txt" <<'EOF'
+          output/fresh_generation/weekly_etf_eu_review_260814.md
+          output/fresh_generation/weekly_etf_eu_review_nl_260814.md
+          runtime/reconcile_etf_eu_funded_markdown.py
+          tools/validate_etf_eu_markdown_delivery_artifacts.py
+          EOF
+          sed -i 's/^          //' "$RUNNER_TEMP/expected-files.txt"
+          cmp "$RUNNER_TEMP/changed-files.txt" "$RUNNER_TEMP/expected-files.txt"
+          git -C "$target" diff --no-ext-diff --unified=3 "$TARGET_BASE_SHA" "$TARGET_CANDIDATE_SHA" > "$RUNNER_TEMP/candidate.diff"
+
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr.json"
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs?head_sha=${TARGET_CANDIDATE_SHA}&per_page=100" > "$RUNNER_TEMP/workflow-runs.json"
+
+          state="$RUNNER_TEMP/state-review"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          observed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          python scripts/g7_standard_production_h3.py \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --pr-json "$RUNNER_TEMP/pr.json" \
+            --workflow-runs "$RUNNER_TEMP/workflow-runs.json" \
+            --diff "$RUNNER_TEMP/candidate.diff" \
+            --changed-files "$RUNNER_TEMP/changed-files.txt" \
+            --task-id "$CONTROL_TASK_ID" \
+            --candidate-sha "$TARGET_CANDIDATE_SHA" \
+            --base-sha "$TARGET_BASE_SHA" \
+            --active-run-id "$ACTIVE_RUN_ID" \
+            --observed-at "$observed_at" \
+            --output "$RUNNER_TEMP/result.json"
+
+          jq -e '.version == "1.0" and .task_id == env.CONTROL_TASK_ID and .run_id == env.ACTIVE_RUN_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE" or .outcome == "EXECUTION_UNAVAILABLE" or .outcome == "BLOCKED")' "$RUNNER_TEMP/result.json" >/dev/null
+          outcome="$(jq -r '.outcome' "$RUNNER_TEMP/result.json")"
+          if [ "$outcome" = PASS ] || [ "$outcome" = FAIL ] || [ "$outcome" = INDETERMINATE ]; then
+            jq -e '.protocol_id == "CONTROL_STANDARD_EXECUTOR_PROVENANCE_V1" and .executor == "@cf/openai/gpt-oss-120b" and .call_count == 1 and .max_tokens == 1024 and .tools_enabled == false and .retry_count == 0 and .provider_switches == 0 and .model_switches == 0 and .paid_fallback == false and .response_received == true' "$CONTROL_G7_PROVENANCE_PATH" >/dev/null
+            grep -q '^CONTROL_STANDARD_EXECUTOR_PROVENANCE_V1:' < <(jq -r '.evidence[]' "$RUNNER_TEMP/result.json")
+          fi
+
+      - name: Revalidate production head and persist canonical terminal result
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
+          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          success=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/state-complete-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+              --runtime-root "$state" \
+              --runtime-ref "$CONTROL_RUNTIME_REF" \
+              --github-repository "$CONTROL_PLANE_REPOSITORY" \
+              --task-id "$CONTROL_TASK_ID" \
+              --worker-instance B1 \
+              --active-run-id "$ACTIVE_RUN_ID" \
+              --result "$RUNNER_TEMP/result.json" > "$RUNNER_TEMP/complete-${cas_attempt}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then success=true; break; fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/complete-${cas_attempt}.log"; then continue; fi
+            cat "$RUNNER_TEMP/complete-${cas_attempt}.log"
+            exit 2
+          done
+          [ "$success" = true ]
+
+      - name: Publish bounded H3 liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          state=failure
+          [ "$JOB_STATUS" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context='control/g7-standard-production-h3' -f description="G7_H3_STANDARD_${JOB_STATUS}" >/dev/null
