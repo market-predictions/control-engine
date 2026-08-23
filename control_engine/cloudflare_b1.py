@@ -187,6 +187,24 @@ def classify_execution_surface(
     if not isinstance(max_diff_bytes, int) or max_diff_bytes < 0:
         raise CloudflareB1Error("max_diff_bytes must be a non-negative integer")
 
+    # If B0 evidence is supplied, repository identity is part of the same
+    # canonical routing binding as changed_files. Validate it before selecting
+    # prefixes so a caller cannot relabel a Control candidate as another repo.
+    if capsule is not None:
+        if not isinstance(capsule, dict):
+            raise CloudflareB1Error("B0 routing capsule must be an object")
+        if capsule.get("protocol_id") != B0_PROTOCOL_ID or capsule.get("version") != B0_VERSION:
+            raise CloudflareB1Error("unsupported B0 capsule protocol for routing")
+        routing_task = capsule.get("task")
+        if (
+            not isinstance(routing_task, dict)
+            or not isinstance(routing_task.get("repository"), str)
+            or not routing_task.get("repository")
+        ):
+            raise CloudflareB1Error("B0 routing repository evidence is missing or invalid")
+        if routing_task.get("repository") != repository:
+            raise CloudflareB1Error("repository does not match B0 routing evidence")
+
     normalized_changed_files = sorted(set(changed_files))
     reasons: list[str] = []
     if explicit_work_required:
@@ -218,8 +236,6 @@ def classify_execution_surface(
     if control_repository and not reasons:
         if not isinstance(capsule, dict):
             raise CloudflareB1Error("B0 capsule is required before STANDARD Control routing")
-        if capsule.get("protocol_id") != B0_PROTOCOL_ID or capsule.get("version") != B0_VERSION:
-            raise CloudflareB1Error("unsupported B0 capsule protocol for routing")
         evidence_changed_files = capsule.get("changed_files")
         if (
             not isinstance(evidence_changed_files, list)
