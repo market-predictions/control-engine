@@ -1,9 +1,11 @@
-from control_engine.codex_b1 import REQUEST_MARKER, classify_review_snapshot
+from control_engine.codex_b1 import REQUEST_MARKER, classify_review_snapshot, request_id
 
 CANDIDATE = "a" * 40
 WRONG = "b" * 40
 REQUEST_AT = "2026-08-23T00:00:00Z"
 REVIEW_AT = "2026-08-23T00:01:00Z"
+TASK_ID = "T1"
+HANDOVER_ID = "H1"
 
 
 def _bot() -> dict:
@@ -11,15 +13,24 @@ def _bot() -> dict:
 
 
 def _request() -> dict:
+    rid = request_id(task_id=TASK_ID, handover_id=HANDOVER_ID, candidate_sha=CANDIDATE)
     return {
         "id": 100,
-        "body": f"@codex review\n\n{REQUEST_MARKER}\ncandidate_sha={CANDIDATE}\n",
+        "body": (
+            f"@codex review\n\n{REQUEST_MARKER}\n"
+            f"request_id={rid}\n"
+            f"task_id={TASK_ID}\n"
+            f"handover_id={HANDOVER_ID}\n"
+            f"candidate_sha={CANDIDATE}\n"
+        ),
         "created_at": REQUEST_AT,
     }
 
 
 def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
     result = classify_review_snapshot(
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         request_comment_id=100,
         issue_comments=[_request()],
@@ -51,6 +62,8 @@ def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
 
 def test_commitless_comment_can_still_bind_through_exact_review_id():
     result = classify_review_snapshot(
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         request_comment_id=100,
         issue_comments=[_request()],
