@@ -1,0 +1,346 @@
+name: H6 Interactive B1 Actuator V1
+
+# Temporary deterministic Gate-4 actuator for CONTROL-199 H6.
+# GitHub owns intake reconciliation, claim, lease renewal, result and finalization.
+# This workflow performs no semantic inference and never modifies main or PR #69.
+
+on:
+  push:
+    branches:
+      - control/h5-interactive-b1-actuator-v1
+    paths:
+      - .control/h6-interactive-command.json
+      - .github/workflows/h6-interactive-b1-actuator-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-h6-interactive-b1-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_A_CODE_REF: recovery/187-policy-metadata-r1
+  CONTROL_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
+  CONTROL_TASK_ID: CONTROL-199-PR69-INDEPENDENT-B1-ASSURE-H6
+  CONTROL_CANDIDATE_SHA: 7674b04763d70b0d10635beafe539bc3097a56fb
+
+jobs:
+  actuator:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/h5-interactive-b1-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate public command envelope
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=.control/h6-interactive-command.json
+          jq -e '
+            .version == "1.0" and
+            (.action == "hold" or .action == "claim" or .action == "renew" or .action == "complete") and
+            .task_id == env.CONTROL_TASK_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.nonce | type == "string") and (.nonce | length > 0)
+          ' "$file" >/dev/null
+          action="$(jq -r '.action' "$file")"
+          printf 'action=%s\n' "$action" >> "$GITHUB_OUTPUT"
+          if [ "$action" = renew ] || [ "$action" = complete ]; then
+            jq -e '(.active_run_id | type == "string") and (.active_run_id | test("^run-[0-9a-f-]+$"))' "$file" >/dev/null
+          fi
+          if [ "$action" = complete ]; then
+            jq -e '(.review_comment_id | type == "number") and .review_comment_id > 0' "$file" >/dev/null
+          fi
+
+      - name: Hold without private mutation
+        if: steps.command.outputs.action == 'hold'
+        run: echo 'H6_ACTUATOR=HOLD'
+
+      - name: Preflight GitHub App identity and installation
+        id: app-preflight
+        if: steps.command.outputs.action != 'hold'
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control GitHub App token
+        id: app-token
+        if: steps.command.outputs.action != 'hold'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-issues: 'read'
+
+      - name: Bind actuator token
+        if: steps.command.outputs.action != 'hold'
+        shell: bash
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          [ -n "$TOKEN" ]
+          echo "::add-mask::$TOKEN"
+          printf 'CONTROL_TOKEN=%s\n' "$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        if: steps.command.outputs.action != 'hold'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Fetch pinned private runtime code
+        if: steps.command.outputs.action != 'hold'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$url" "$b_code"
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+          if [ "${{ steps.command.outputs.action }}" = claim ]; then
+            a_code="$RUNNER_TEMP/control-a-code"
+            git clone --quiet --single-branch --branch "$CONTROL_A_CODE_REF" "$url" "$a_code"
+            [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_A_CODE_SHA" ]
+            printf 'CONTROL_A_CODE_DIR=%s\n' "$a_code" >> "$GITHUB_ENV"
+          fi
+
+      - name: Reconcile managed intake and claim exact preferred H6 B1 task
+        if: steps.command.outputs.action == 'claim'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          reconciled=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-reconcile-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-h6-actuator[bot]'
+            git -C "$state" config user.email 'control-h6-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse "HEAD:control/DISPATCH_QUEUE.json")"
+
+            python "$CONTROL_A_CODE_DIR/dispatcher/cli.py" reconcile \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --runs "$state/control/DISPATCH_RUNS.json" >/dev/null
+            python control_engine/scheduled_worker_a.py resume-a-unavailable \
+              --code-dir "$CONTROL_A_CODE_DIR" \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --output "$RUNNER_TEMP/resume-a.json" >/dev/null
+            python "$CONTROL_A_CODE_DIR/tools/control_project_intake_reconcile_v1.py" \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --intake-dir "$state/control/project-intake" \
+              --handover-dir "$state/control/handovers" \
+              --worker-result-dir "$state/control/worker-results" \
+              --write \
+              --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+            python "$CONTROL_A_CODE_DIR/dispatcher/cli.py" validate \
+              --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
+
+            bad="$( { git -C "$state" diff --name-only; git -C "$state" ls-files --others --exclude-standard; } | sort -u | grep -Ev '^(control/DISPATCH_QUEUE\.json|control/DISPATCH_RUNS\.json|control/project-intake/[^/]+\.json)$' || true )"
+            [ -z "$bad" ]
+
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            current_ref="$(git -C "$state" rev-parse FETCH_HEAD)"
+            current_blob="$(git -C "$state" rev-parse "FETCH_HEAD:control/DISPATCH_QUEUE.json")"
+            if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+              continue
+            fi
+
+            if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
+              git -C "$state" commit --quiet -m 'runtime: H6 actuator reconcile before B1 claim'
+              if ! git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+                continue
+              fi
+            fi
+            reconciled=true
+            break
+          done
+          [ "$reconciled" = true ]
+
+          state="$RUNNER_TEMP/control-state-claim"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+          selection="$RUNNER_TEMP/h6-selection.json"
+          python control_engine/scheduled_worker_b.py select-b1 \
+            --code-dir "$CONTROL_B_CODE_DIR" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --output "$selection" >/dev/null
+          python - "$selection" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          if value.get('selected') is not True:
+              raise SystemExit('H6 is not currently selectable')
+          if value.get('task_id') != os.environ['CONTROL_TASK_ID']:
+              raise SystemExit('H6 is not deterministic preferred B1 task')
+          if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('H6 candidate binding mismatch')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+            python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" claim \
+              --runtime-root "$state" \
+              --runtime-ref "$CONTROL_RUNTIME_REF" \
+              --task-id "$CONTROL_TASK_ID" \
+              --worker-instance B1 \
+              --backend github-actions/interactive-b1-actuator-v1 \
+              --lease-seconds 900 \
+              > "$RUNNER_TEMP/h6-claim-private.json"
+          echo 'H6_ACTUATOR=CLAIM_PERSISTED'
+
+      - name: Renew same exact H6 claim
+        if: steps.command.outputs.action == 'renew'
+        shell: bash
+        run: |
+          set -euo pipefail
+          active_run_id="$(jq -r '.active_run_id' .control/h6-interactive-command.json)"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          renewed=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-renew-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-h6-actuator[bot]'
+            git -C "$state" config user.email 'control-h6-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse 'HEAD:control/DISPATCH_QUEUE.json')"
+
+            PYTHONPATH="$CONTROL_B_CODE_DIR" python - "$state/control/DISPATCH_QUEUE.json" "$active_run_id" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from tools.control_parallel_execution_v1 import renew_claim, validate_parallel_queue
+          from tools.control_queue_v1 import ROLE_B
+          path = Path(sys.argv[1])
+          run_id = sys.argv[2]
+          queue = json.loads(path.read_text(encoding='utf-8'))
+          task_id = os.environ['CONTROL_TASK_ID']
+          candidate = os.environ['CONTROL_CANDIDATE_SHA']
+          matches = [t for t in queue['tasks'] if t.get('task_id') == task_id]
+          if len(matches) != 1 or matches[0].get('candidate_sha') != candidate:
+              raise SystemExit('H6 identity mismatch')
+          before_attempt = matches[0].get('attempt')
+          before_count = matches[0].get('claim_count')
+          queue = renew_claim(queue, task_id=task_id, role=ROLE_B, worker_instance='B1', run_id=run_id, now=datetime.now(timezone.utc), lease_seconds=900)
+          task = [t for t in queue['tasks'] if t.get('task_id') == task_id][0]
+          if task.get('attempt') != before_attempt or task.get('claim_count') != before_count:
+              raise SystemExit('renew changed attempt or claim_count')
+          validate_parallel_queue(queue)
+          path.write_text(json.dumps(queue, indent=2) + '\n', encoding='utf-8')
+          PY
+
+            changed="$(git -C "$state" diff --name-only)"
+            [ "$changed" = 'control/DISPATCH_QUEUE.json' ]
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            [ "$(git -C "$state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
+            [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
+            git -C "$state" add -- control/DISPATCH_QUEUE.json
+            git -C "$state" commit --quiet -m 'runtime: renew B1 CONTROL-199-PR69-INDEPENDENT-B1-ASSURE-H6'
+            if ! git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+              continue
+            fi
+            renewed=true
+            break
+          done
+          [ "$renewed" = true ]
+          echo 'H6_ACTUATOR=RENEW_PERSISTED'
+
+      - name: Read and validate independent semantic verdict
+        if: steps.command.outputs.action == 'complete'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command=.control/h6-interactive-command.json
+          comment_id="$(jq -r '.review_comment_id' "$command")"
+          active_run_id="$(jq -r '.active_run_id' "$command")"
+          result="$RUNNER_TEMP/h6-reviewer-result.json"
+          GH_TOKEN="$CONTROL_TOKEN" gh api \
+            "repos/${CONTROL_PLANE_REPOSITORY}/issues/comments/${comment_id}" \
+            --jq '.body' > "$result"
+          jq -e --arg task "$CONTROL_TASK_ID" --arg candidate "$CONTROL_CANDIDATE_SHA" --arg run "$active_run_id" '
+            .version == "1.0" and
+            .task_id == $task and
+            .run_id == $run and
+            .role == "governance_release_assurance" and
+            (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE") and
+            .candidate_sha == $candidate and
+            (.summary | type == "string") and
+            (.findings | type == "array") and all(.findings[]; type == "string") and
+            (.evidence | type == "array") and all(.evidence[]; type == "string") and
+            (keys | sort) == (["candidate_sha","evidence","findings","outcome","role","run_id","summary","task_id","version"] | sort)
+          ' "$result" >/dev/null
+          printf 'ACTIVE_RUN_ID=%s\n' "$active_run_id" >> "$GITHUB_ENV"
+          printf 'REVIEWER_RESULT=%s\n' "$result" >> "$GITHUB_ENV"
+
+      - name: Complete same exact H6 claim through connected runtime
+        if: steps.command.outputs.action == 'complete'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          success=false
+          for attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-complete-${attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+              python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+                --runtime-root "$state" \
+                --runtime-ref "$CONTROL_RUNTIME_REF" \
+                --github-repository "$CONTROL_PLANE_REPOSITORY" \
+                --task-id "$CONTROL_TASK_ID" \
+                --worker-instance B1 \
+                --active-run-id "$ACTIVE_RUN_ID" \
+                --result "$REVIEWER_RESULT" \
+                > "$RUNNER_TEMP/h6-complete-${attempt}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then
+              success=true
+              break
+            fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/h6-complete-${attempt}.log"; then
+              continue
+            fi
+            echo 'H6_ACTUATOR=COMPLETE_FAILED_CLOSED'
+            exit 2
+          done
+          [ "$success" = true ] || { echo 'H6_ACTUATOR=COMPLETE_CAS_EXHAUSTED'; exit 2; }
+          echo 'H6_ACTUATOR=COMPLETE_PERSISTED'
+
+      - name: Publish bounded actuator liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION: ${{ steps.command.outputs.action }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          action="${ACTION:-unknown}"
+          job_status="${JOB_STATUS:-failure}"
+          state=failure
+          [ "$job_status" = success ] && state=success
+          description="H6_${action}_${job_status}"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/h6-interactive-actuator" \
+            -f description="$description" >/dev/null
