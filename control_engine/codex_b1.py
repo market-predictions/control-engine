@@ -124,7 +124,7 @@ def _request_window(
     request_comment_id: int,
     candidate_sha: str,
     issue_comments: list[dict[str, Any]],
-) -> tuple[datetime, datetime | None, bool]:
+) -> tuple[datetime, datetime | None, bool, bool]:
     if not isinstance(request_comment_id, int) or isinstance(request_comment_id, bool) or request_comment_id <= 0:
         raise CodexB1Error("request_comment_id must be a positive integer")
     if not task_id or not handover_id:
@@ -147,6 +147,7 @@ def _request_window(
 
     later_requests: list[tuple[datetime, int]] = []
     prior_same_timestamp = False
+    has_prior_request = False
     for item in issue_comments:
         other_id = item.get("id")
         if other_id == request_comment_id or _request_candidate(item) != candidate_sha:
@@ -162,15 +163,17 @@ def _request_window(
             later_requests.append((other_time, other_id))
         elif other_time > request_start:
             raise CodexB1Error("Codex request comment chronology is inconsistent")
-        elif other_time == request_start:
-            prior_same_timestamp = True
+        else:
+            has_prior_request = True
+            if other_time == request_start:
+                prior_same_timestamp = True
 
     if prior_same_timestamp:
-        return request_start, None, True
+        return request_start, None, True, has_prior_request
     if not later_requests:
-        return request_start, None, False
+        return request_start, None, False, has_prior_request
     request_end, _ = min(later_requests, key=lambda value: (value[0], value[1]))
-    return request_start, request_end, request_end == request_start
+    return request_start, request_end, request_end == request_start, has_prior_request
 
 
 def build_review_request(
@@ -274,7 +277,7 @@ def classify_review_snapshot(
         if not isinstance(collection, list) or any(not isinstance(item, dict) for item in collection):
             raise CodexB1Error("Codex snapshot collections must contain objects")
 
-    request_start, request_end, ambiguous_window = _request_window(
+    request_start, request_end, ambiguous_window, has_prior_request = _request_window(
         task_id=task_id,
         handover_id=handover_id,
         request_comment_id=request_comment_id,
@@ -286,6 +289,25 @@ def classify_review_snapshot(
             status="EXECUTION_UNAVAILABLE",
             verdict=None,
             summary="Adjacent Codex requests share a timestamp, so review ownership is ambiguous.",
+            findings=(),
+            reviewed_commit=None,
+        )
+
+    boundary_times: set[datetime] = set()
+    if has_prior_request:
+        boundary_times.add(request_start)
+    if request_end is not None:
+        boundary_times.add(request_end)
+    boundary_evidence = any(
+        _is_codex(item) and _event_timestamp(item) in boundary_times
+        for collection in (reviews, review_comments)
+        for item in collection
+    )
+    if boundary_evidence:
+        return CodexReviewDecision(
+            status="EXECUTION_UNAVAILABLE",
+            verdict=None,
+            summary="Codex review evidence falls on an adjacent request timestamp boundary, so ownership is ambiguous.",
             findings=(),
             reviewed_commit=None,
         )
