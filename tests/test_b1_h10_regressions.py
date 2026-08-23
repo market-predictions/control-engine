@@ -86,6 +86,7 @@ def _review():
     return {
         "id": 1,
         "user": _bot(),
+        "state": "COMMENTED",
         "commit_id": CANDIDATE,
         "body": "Codex Review",
         "submitted_at": CURRENT_AT,
