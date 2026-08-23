@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: control-h5-interactive-b1-actuator-v1
@@ -215,3 +216,22 @@ jobs:
           done
           [ "$success" = true ] || { echo 'H5_ACTUATOR=COMPLETE_CAS_EXHAUSTED'; exit 2; }
           echo 'H5_ACTUATOR=COMPLETE_PERSISTED'
+
+      - name: Publish bounded actuator liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION: ${{ steps.command.outputs.action }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          action="${ACTION:-unknown}"
+          job_status="${JOB_STATUS:-failure}"
+          state=failure
+          [ "$job_status" = success ] && state=success
+          description="H5_${action}_${job_status}"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/h5-interactive-actuator" \
+            -f description="$description" >/dev/null
