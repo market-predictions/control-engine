@@ -2,6 +2,7 @@ import pytest
 
 from control_engine.codex_b1 import (
     INDETERMINATE_MARKER,
+    REQUEST_MARKER,
     CodexB1Error,
     build_review_request,
     classify_review_snapshot,
@@ -9,8 +10,11 @@ from control_engine.codex_b1 import (
 )
 
 CANDIDATE = "a" * 40
+REQUEST_COMMENT_ID = 100
 REQUEST_AT = "2026-08-23T00:00:00Z"
 CURRENT_AT = "2026-08-23T00:01:00Z"
+NEXT_AT = "2026-08-23T00:02:00Z"
+LATER_AT = "2026-08-23T00:03:00Z"
 OLD_AT = "2026-08-22T23:59:00Z"
 
 
@@ -44,8 +48,26 @@ def reaction(content="+1"):
     return {"user": bot(), "content": content}
 
 
+def request_comment(
+    comment_id=REQUEST_COMMENT_ID,
+    *,
+    candidate=CANDIDATE,
+    created_at=REQUEST_AT,
+):
+    return {
+        "id": comment_id,
+        "body": f"@codex review\n\n{REQUEST_MARKER}\ncandidate_sha={candidate}\n",
+        "created_at": created_at,
+    }
+
+
 def classify(**kwargs):
-    return classify_review_snapshot(request_created_at=REQUEST_AT, **kwargs)
+    issue_comments = kwargs.pop("issue_comments", [request_comment()])
+    return classify_review_snapshot(
+        request_comment_id=REQUEST_COMMENT_ID,
+        issue_comments=issue_comments,
+        **kwargs,
+    )
 
 
 def test_request_is_bounded_exact_identity_and_review_only():
@@ -73,14 +95,24 @@ def test_request_rejects_invalid_identity_and_unbounded_criteria():
         )
 
 
-def test_classification_requires_valid_request_boundary():
-    with pytest.raises(CodexB1Error, match="request_created_at"):
+def test_classification_requires_exact_request_comment_identity():
+    with pytest.raises(CodexB1Error, match="absent"):
         classify_review_snapshot(
             candidate_sha=CANDIDATE,
-            request_created_at="not-a-time",
+            request_comment_id=REQUEST_COMMENT_ID,
             reviews=[],
             review_comments=[],
             trigger_reactions=[],
+            issue_comments=[],
+        )
+    with pytest.raises(CodexB1Error, match="candidate_sha"):
+        classify_review_snapshot(
+            candidate_sha=CANDIDATE,
+            request_comment_id=REQUEST_COMMENT_ID,
+            reviews=[],
+            review_comments=[],
+            trigger_reactions=[],
+            issue_comments=[request_comment(candidate="b" * 40)],
         )
 
 
@@ -103,10 +135,13 @@ def test_historical_clean_issue_comment_cannot_authorize_pass():
         review_comments=[],
         trigger_reactions=[],
         issue_comments=[
+            request_comment(),
             {
+                "id": 99,
                 "user": bot(),
                 "body": "Codex Review: Didn't find any major issues",
-            }
+                "created_at": OLD_AT,
+            },
         ],
     )
     assert result.status == "PENDING"
@@ -207,23 +242,58 @@ def test_prior_same_head_finding_cannot_poison_new_request_clean_pass():
     assert result.findings == ()
 
 
-def test_current_same_head_finding_still_fails_current_request():
+def test_later_same_head_finding_cannot_poison_exact_request_clean_pass():
+    result = classify(
+        candidate_sha=CANDIDATE,
+        reviews=[review(review_id=2, submitted_at=LATER_AT)],
+        review_comments=[comment("Later request blocking finding.", review_id=2, created_at=LATER_AT)],
+        trigger_reactions=[reaction()],
+        issue_comments=[
+            request_comment(),
+            request_comment(101, created_at=NEXT_AT),
+        ],
+    )
+    assert result.status == "COMPLETE"
+    assert result.verdict == "PASS"
+    assert result.findings == ()
+
+
+def test_current_same_head_finding_still_fails_current_request_and_later_is_excluded():
     result = classify(
         candidate_sha=CANDIDATE,
         reviews=[
-            review(review_id=1, submitted_at=OLD_AT),
-            review(review_id=2, submitted_at=CURRENT_AT),
+            review(review_id=1, submitted_at=CURRENT_AT),
+            review(review_id=2, submitted_at=LATER_AT),
         ],
         review_comments=[
-            comment("Old blocking finding.", review_id=1, created_at=OLD_AT),
-            comment("Current blocking finding.", review_id=2, created_at=CURRENT_AT),
+            comment("Current blocking finding.", review_id=1, created_at=CURRENT_AT),
+            comment("Later blocking finding.", review_id=2, created_at=LATER_AT),
         ],
         trigger_reactions=[],
+        issue_comments=[
+            request_comment(),
+            request_comment(101, created_at=NEXT_AT),
+        ],
     )
     assert result.status == "COMPLETE"
     assert result.verdict == "FAIL"
     assert len(result.findings) == 1
     assert "Current blocking finding" in result.findings[0]
+
+
+def test_same_timestamp_adjacent_requests_fail_closed():
+    result = classify(
+        candidate_sha=CANDIDATE,
+        reviews=[],
+        review_comments=[],
+        trigger_reactions=[],
+        issue_comments=[
+            request_comment(),
+            request_comment(101, created_at=REQUEST_AT),
+        ],
+    )
+    assert result.status == "EXECUTION_UNAVAILABLE"
+    assert result.verdict is None
 
 
 def test_timestamp_less_review_evidence_is_not_current_request_evidence():
