@@ -226,6 +226,15 @@ def _is_codex(item: dict[str, Any]) -> bool:
     return _login(item) in CODEX_BOT_LOGINS
 
 
+def _review_is_terminal(item: dict[str, Any]) -> bool:
+    state = item.get("state")
+    if state == "PENDING":
+        return False
+    if state is not None and state not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+        return False
+    return _parse_timestamp(item.get("submitted_at")) is not None
+
+
 def _commit(item: dict[str, Any]) -> str | None:
     present_values: list[str] = []
     for key in ("commit_id", "original_commit_id", "reviewed_commit"):
@@ -320,20 +329,23 @@ def classify_review_snapshot(
         for item in reviews
         if _is_codex(item) and _belongs_to_request(item, request_start, request_end)
     ]
-    exact_reviews = [item for item in codex_reviews if _commit(item) == candidate_sha]
-    stale_reviews = [item for item in codex_reviews if _commit(item) not in (None, candidate_sha)]
+    terminal_reviews = [item for item in codex_reviews if _review_is_terminal(item)]
+    exact_reviews = [item for item in terminal_reviews if _commit(item) == candidate_sha]
+    stale_reviews = [item for item in terminal_reviews if _commit(item) not in (None, candidate_sha)]
 
     exact_review_ids = {item.get("id") for item in exact_reviews if item.get("id") is not None}
     finding_records: list[tuple[str, bool]] = []
+    nonterminal_comment_evidence = False
     for item in review_comments:
         if not _is_codex(item) or not _belongs_to_request(item, request_start, request_end):
             continue
         item_commit = _commit(item)
         review_id = item.get("pull_request_review_id")
-        if item_commit is not None:
-            if item_commit != candidate_sha:
-                continue
-        elif review_id not in exact_review_ids:
+        if review_id not in exact_review_ids:
+            if item_commit in (None, candidate_sha):
+                nonterminal_comment_evidence = True
+            continue
+        if item_commit is not None and item_commit != candidate_sha:
             continue
         body = item.get("body")
         tagged_indeterminate = isinstance(body, str) and body.startswith(INDETERMINATE_MARKER)
@@ -368,6 +380,14 @@ def classify_review_snapshot(
             summary="Codex deep review reported missing or conflicting required evidence.",
             findings=tuple(findings),
             reviewed_commit=candidate_sha,
+        )
+    if nonterminal_comment_evidence:
+        return CodexReviewDecision(
+            status="PENDING",
+            verdict=None,
+            summary="Codex review comment evidence is not yet bound to a terminal exact-head review.",
+            findings=(),
+            reviewed_commit=None,
         )
 
     clean_reaction = any(
