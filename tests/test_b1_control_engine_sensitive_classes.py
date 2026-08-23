@@ -11,6 +11,14 @@ def _budget() -> SemanticBudgetMeasurement:
     return SemanticBudgetMeasurement(diff_bytes=100, contract_bytes=100, evidence_bytes=100, pack_bytes=1000)
 
 
+def _routing_capsule(*paths: str) -> dict:
+    return {
+        "protocol_id": "CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1",
+        "version": "1.0",
+        "changed_files": sorted(set(paths)),
+    }
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -35,11 +43,12 @@ def test_control_engine_infrastructure_classes_route_deep_by_default(path):
 
 
 @pytest.mark.parametrize("path", ["tests/test_widget.py", "fixtures/example.json"])
-def test_non_authority_test_and_fixture_paths_remain_standard_when_otherwise_safe(path):
+def test_non_authority_test_and_fixture_paths_remain_standard_when_b0_bound(path):
     decision = classify_execution_surface(
         repository=CONTROL_ENGINE_REPOSITORY,
         changed_files=[path],
         budget=_budget(),
+        capsule=_routing_capsule(path),
     )
     assert decision.cloudflare_eligible is True
     assert decision.reasons == ()
