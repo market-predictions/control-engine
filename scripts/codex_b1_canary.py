@@ -31,7 +31,7 @@ def command_request(args: argparse.Namespace) -> int:
 def command_classify(args: argparse.Namespace) -> int:
     decision = classify_review_snapshot(
         candidate_sha=args.candidate_sha,
-        request_created_at=args.request_created_at,
+        request_comment_id=args.request_comment_id,
         reviews=_load(args.reviews),
         review_comments=_load(args.review_comments),
         trigger_reactions=_load(args.reactions),
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     classify = sub.add_parser("classify")
     classify.add_argument("--candidate-sha", required=True)
-    classify.add_argument("--request-created-at", required=True)
+    classify.add_argument("--request-comment-id", required=True, type=int)
     classify.add_argument("--reviews", required=True)
     classify.add_argument("--review-comments", required=True)
     classify.add_argument("--reactions", required=True)
