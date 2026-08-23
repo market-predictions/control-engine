@@ -1,0 +1,242 @@
+name: Gate 8 External DEEP Assurance V1
+
+on:
+  push:
+    branches:
+      - control/g8-deep-assurance-actuator-v1
+    paths:
+      - .control/g8-deep-assurance-command.json
+      - .github/workflows/g8-deep-assurance-actuator-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-g8-deep-assurance-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
+  CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H1
+  CONTROL_HANDOVER_ID: CONTROL-199-G8-ACTIVATION-H1
+  TARGET_REPOSITORY: market-predictions/control-engine
+  TARGET_PR: '70'
+  TARGET_CANDIDATE_SHA: b9e033a5421149de21ac98ae741d74673e001da5
+
+jobs:
+  deep-assurance:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/g8-deep-assurance-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted external actuator
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate bounded command and integrated strict adapter
+        run: |
+          set -euo pipefail
+          jq -e '.version == "1.0" and .action == "run" and .task_id == env.CONTROL_TASK_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.candidate_pr|tostring) == env.TARGET_PR' .control/g8-deep-assurance-command.json >/dev/null
+          python -m py_compile control_engine/codex_b1.py control_engine/codex_b1_strict.py scripts/codex_b1_canary.py control_engine/scheduled_worker_b.py
+
+      - name: Preflight GitHub App
+        id: app-preflight
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-actions: 'read'
+          permission-pull-requests: 'read'
+          permission-issues: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Reconcile Gate-8 intake and take exact preferred B1 claim
+        id: claim
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          a_code="$RUNNER_TEMP/control-a-code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_B_CODE_REF" "$private_url" "$b_code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_A_CODE_REF" "$private_url" "$a_code"
+          [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_A_CODE_SHA" ]
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+
+          reconciled=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/reconcile-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            git -C "$state" config user.name 'control-g8-deep-actuator[bot]'
+            git -C "$state" config user.email 'control-g8-deep-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse 'HEAD:control/DISPATCH_QUEUE.json')"
+            python "$a_code/dispatcher/cli.py" reconcile --queue "$state/control/DISPATCH_QUEUE.json" --runs "$state/control/DISPATCH_RUNS.json" >/dev/null
+            python "$a_code/tools/control_project_intake_reconcile_v1.py" --queue "$state/control/DISPATCH_QUEUE.json" --intake-dir "$state/control/project-intake" --handover-dir "$state/control/handovers" --worker-result-dir "$state/control/worker-results" --write --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+            python "$a_code/dispatcher/cli.py" validate --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            [ "$(git -C "$state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
+            [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
+            if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
+              git -C "$state" commit --quiet -m 'runtime: reconcile Gate-8 DEEP assurance intake'
+              git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}" || continue
+            fi
+            reconciled=true
+            break
+          done
+          [ "$reconciled" = true ]
+
+          state="$RUNNER_TEMP/claim-state"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          selection="$RUNNER_TEMP/selection.json"
+          python control_engine/scheduled_worker_b.py select-b1 --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$selection" >/dev/null
+          jq -e '.selected == true and .task_id == env.CONTROL_TASK_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.candidate_pr|tostring) == env.TARGET_PR' "$selection" >/dev/null
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
+            --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$CONTROL_TASK_ID" \
+            --worker-instance B1 --backend github-actions/g8-deep-assurance-actuator-v1 --lease-seconds 900 > "$RUNNER_TEMP/claim.json"
+          run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
+          [ -n "$run_id" ] && [ "$run_id" != null ]
+
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python control_engine/scheduled_worker_b.py assert-claim --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --task-id "$CONTROL_TASK_ID" --output "$RUNNER_TEMP/claim-readback.json" >/dev/null
+          [ "$(jq -r '.run_id' "$RUNNER_TEMP/claim-readback.json")" = "$run_id" ]
+          [ "$(jq -r '.candidate_sha' "$RUNNER_TEMP/claim-readback.json")" = "$TARGET_CANDIDATE_SHA" ]
+          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Post exact trusted Codex request and classify terminal exact-head review
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
+          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
+
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          state="$RUNNER_TEMP/review-state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          jq -e --arg task "$CONTROL_TASK_ID" --arg run "$ACTIVE_RUN_ID" --arg candidate "$TARGET_CANDIDATE_SHA" '
+            [.tasks[] | select(.task_id == $task)] | length == 1 and
+            ([.tasks[] | select(.task_id == $task)][0] |
+              .state == "ASSURANCE_EXECUTING" and .active_role == "governance_release_assurance" and
+              .active_worker_instance == "B1" and .active_run_id == $run and .candidate_sha == $candidate and
+              .handover_id == env.CONTROL_HANDOVER_ID)
+          ' "$state/control/DISPATCH_QUEUE.json" >/dev/null
+          jq --arg task "$CONTROL_TASK_ID" '[.tasks[] | select(.task_id == $task)][0].acceptance_criteria' "$state/control/DISPATCH_QUEUE.json" > "$RUNNER_TEMP/criteria.json"
+
+          python scripts/codex_b1_canary.py request \
+            --task-id "$CONTROL_TASK_ID" --handover-id "$CONTROL_HANDOVER_ID" --candidate-sha "$TARGET_CANDIDATE_SHA" \
+            --criteria "$RUNNER_TEMP/criteria.json" --output "$RUNNER_TEMP/request.txt"
+          body="$(cat "$RUNNER_TEMP/request.txt")"
+          GH_TOKEN="$CONTROL_TOKEN" gh api -X POST "repos/${TARGET_REPOSITORY}/issues/${TARGET_PR}/comments" -f body="$body" > "$RUNNER_TEMP/request-comment.json"
+          comment_id="$(jq -r '.id' "$RUNNER_TEMP/request-comment.json")"
+          actuator_login="$(jq -r '.user.login' "$RUNNER_TEMP/request-comment.json")"
+          [[ "$comment_id" =~ ^[0-9]+$ ]]
+          [ -n "$actuator_login" ] && [ "$actuator_login" != null ]
+
+          terminal=false
+          for poll in $(seq 1 28); do
+            [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ] || { echo 'candidate moved'; exit 2; }
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}/reviews?per_page=100" > "$RUNNER_TEMP/reviews.json"
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}/comments?per_page=100" > "$RUNNER_TEMP/review-comments.json"
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/issues/comments/${comment_id}/reactions?per_page=100" > "$RUNNER_TEMP/reactions.json"
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/issues/${TARGET_PR}/comments?per_page=100" > "$RUNNER_TEMP/issue-comments.json"
+            python scripts/codex_b1_canary.py classify \
+              --task-id "$CONTROL_TASK_ID" --handover-id "$CONTROL_HANDOVER_ID" --candidate-sha "$TARGET_CANDIDATE_SHA" \
+              --request-comment-id "$comment_id" --criteria "$RUNNER_TEMP/criteria.json" --trusted-actuator-login "$actuator_login" \
+              --reviews "$RUNNER_TEMP/reviews.json" --review-comments "$RUNNER_TEMP/review-comments.json" \
+              --reactions "$RUNNER_TEMP/reactions.json" --issue-comments "$RUNNER_TEMP/issue-comments.json" \
+              --output "$RUNNER_TEMP/decision.json"
+            status="$(jq -r '.status' "$RUNNER_TEMP/decision.json")"
+            if [ "$status" = COMPLETE ]; then terminal=true; break; fi
+            if [ "$status" = EXECUTION_UNAVAILABLE ]; then break; fi
+            sleep 15
+          done
+
+          if [ "$terminal" = true ]; then
+            jq -n \
+              --arg task "$CONTROL_TASK_ID" --arg run "$ACTIVE_RUN_ID" --arg candidate "$TARGET_CANDIDATE_SHA" \
+              --arg outcome "$(jq -r '.verdict' "$RUNNER_TEMP/decision.json")" --arg summary "$(jq -r '.summary' "$RUNNER_TEMP/decision.json")" \
+              --arg comment_id "$comment_id" --arg reviewed_commit "$(jq -r '.reviewed_commit // ""' "$RUNNER_TEMP/decision.json")" \
+              --slurpfile decision "$RUNNER_TEMP/decision.json" \
+              '{version:"1.0",task_id:$task,run_id:$run,role:"governance_release_assurance",outcome:$outcome,summary:$summary,candidate_sha:$candidate,findings:$decision[0].findings,evidence:["route=DEEP; semantic_authority=native Codex review","request_comment_id="+$comment_id,"reviewed_commit="+$reviewed_commit]}' \
+              > "$RUNNER_TEMP/result.json"
+          else
+            summary="$(jq -r '.summary // "No terminal trusted Codex review evidence before bounded deadline."' "$RUNNER_TEMP/decision.json" 2>/dev/null || echo 'No terminal trusted Codex review evidence before bounded deadline.')"
+            jq -n --arg task "$CONTROL_TASK_ID" --arg run "$ACTIVE_RUN_ID" --arg candidate "$TARGET_CANDIDATE_SHA" --arg summary "$summary" \
+              '{version:"1.0",task_id:$task,run_id:$run,role:"governance_release_assurance",outcome:"EXECUTION_UNAVAILABLE",summary:$summary,candidate_sha:$candidate,findings:["EXECUTION_UNAVAILABLE_CODEX_DEEP_TERMINAL_EVIDENCE"],evidence:["No semantic verdict was fabricated."]}' \
+              > "$RUNNER_TEMP/result.json"
+          fi
+
+      - name: Revalidate exact head and terminally complete same claim
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
+          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          success=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/complete-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+              --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
+              --task-id "$CONTROL_TASK_ID" --worker-instance B1 --active-run-id "$ACTIVE_RUN_ID" --result "$RUNNER_TEMP/result.json" \
+              > "$RUNNER_TEMP/complete-${cas_attempt}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then success=true; break; fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/complete-${cas_attempt}.log"; then continue; fi
+            cat "$RUNNER_TEMP/complete-${cas_attempt}.log"
+            exit 2
+          done
+          [ "$success" = true ]
+          final="$RUNNER_TEMP/final-state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$final"
+          python control_engine/scheduled_worker_b.py assert-finalized --code-dir "$CONTROL_B_CODE_DIR" --queue "$final/control/DISPATCH_QUEUE.json" --task-id "$CONTROL_TASK_ID" --run-id "$ACTIVE_RUN_ID" >/dev/null
+
+      - name: Publish bounded actuator liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          state=failure
+          [ "$JOB_STATUS" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context='control/g8-external-deep-assurance' -f description="G8_DEEP_${JOB_STATUS}" >/dev/null
