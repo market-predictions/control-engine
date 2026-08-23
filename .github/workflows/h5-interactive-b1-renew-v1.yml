@@ -1,0 +1,160 @@
+name: H5 Interactive B1 Renew V1
+
+# Temporary deterministic renewal surface for the already-owned H5 B1 claim.
+# Uses the pinned canonical renew_claim primitive; no semantic inference, new claim, or new attempt.
+
+on:
+  push:
+    branches:
+      - control/h5-interactive-b1-actuator-v1
+    paths:
+      - .control/h5-renew-command.json
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-h5-interactive-b1-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_TASK_ID: CONTROL-199-PR69-INDEPENDENT-B1-ASSURE-H5
+  CONTROL_CANDIDATE_SHA: 7674b04763d70b0d10635beafe539bc3097a56fb
+
+jobs:
+  renew:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/h5-interactive-b1-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout isolated actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact renew command
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=.control/h5-renew-command.json
+          jq -e '
+            .version == "1.0" and
+            .action == "renew" and
+            .task_id == env.CONTROL_TASK_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.active_run_id | type == "string") and
+            (.active_run_id | test("^run-[0-9a-f-]+$"))
+          ' "$file" >/dev/null
+          printf 'active_run_id=%s\n' "$(jq -r '.active_run_id' "$file")" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight GitHub App identity and installation
+        id: app-preflight
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived contents-write token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Renew same exact H5 claim with canonical primitive
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIVE_RUN_ID: ${{ steps.command.outputs.active_run_id }}
+        run: |
+          set -euo pipefail
+          code="$RUNNER_TEMP/control-code"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          git clone --quiet --single-branch --branch "$CONTROL_CODE_REF" "$url" "$code"
+
+          success=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-h5-actuator[bot]'
+            git -C "$state" config user.email 'control-h5-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse "HEAD:control/DISPATCH_QUEUE.json")"
+
+            PYTHONPATH="$code" python - "$state/control/DISPATCH_QUEUE.json" "$ACTIVE_RUN_ID" <<'PY'
+          from datetime import datetime, timezone
+          import json, os, pathlib, sys
+          from tools.control_parallel_execution_v1 import renew_claim, validate_parallel_queue
+          from tools.control_queue_v1 import ROLE_B
+
+          path = pathlib.Path(sys.argv[1])
+          run_id = sys.argv[2]
+          queue = json.loads(path.read_text(encoding='utf-8'))
+          validate_parallel_queue(queue)
+          matches = [t for t in queue['tasks'] if t.get('task_id') == os.environ['CONTROL_TASK_ID']]
+          if len(matches) != 1:
+              raise SystemExit('exact H5 task not found')
+          task = matches[0]
+          if task.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('candidate mismatch')
+          renewed = renew_claim(
+              queue,
+              task_id=os.environ['CONTROL_TASK_ID'],
+              role=ROLE_B,
+              worker_instance='B1',
+              run_id=run_id,
+              now=datetime.now(timezone.utc),
+              lease_seconds=900,
+          )
+          validate_parallel_queue(renewed)
+          before = task
+          after = next(t for t in renewed['tasks'] if t['task_id'] == os.environ['CONTROL_TASK_ID'])
+          immutable = ['state','active_run_id','active_role','active_worker_instance','claim_started_at','claim_count','attempt','candidate_sha','handover_id']
+          for key in immutable:
+              if after.get(key) != before.get(key):
+                  raise SystemExit(f'renew mutated forbidden field: {key}')
+          path.write_text(json.dumps(renewed, indent=2) + '\n', encoding='utf-8')
+          PY
+
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            current_ref="$(git -C "$state" rev-parse FETCH_HEAD)"
+            current_blob="$(git -C "$state" rev-parse "FETCH_HEAD:control/DISPATCH_QUEUE.json")"
+            if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+              continue
+            fi
+            changed="$(git -C "$state" diff --name-only)"
+            [ "$changed" = 'control/DISPATCH_QUEUE.json' ]
+            git -C "$state" add -- control/DISPATCH_QUEUE.json
+            git -C "$state" commit --quiet -m "runtime: renew B1 ${CONTROL_TASK_ID}"
+            if git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+              success=true
+              break
+            fi
+          done
+          [ "$success" = true ]
+          echo 'H5_RENEW=SUCCESS'
+
+      - name: Publish bounded renewal liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          [ "${JOB_STATUS:-failure}" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/h5-interactive-renew" \
+            -f description="H5_renew_${JOB_STATUS:-failure}" >/dev/null
