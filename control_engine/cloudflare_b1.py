@@ -169,6 +169,7 @@ def classify_execution_surface(
     repository: str,
     changed_files: list[str],
     budget: SemanticBudgetMeasurement,
+    capsule: dict[str, Any] | None = None,
     explicit_work_required: bool = False,
     max_diff_bytes: int = MAX_DIFF_BYTES,
 ) -> ExecutionSurfaceDecision:
@@ -186,6 +187,7 @@ def classify_execution_surface(
     if not isinstance(max_diff_bytes, int) or max_diff_bytes < 0:
         raise CloudflareB1Error("max_diff_bytes must be a non-negative integer")
 
+    normalized_changed_files = sorted(set(changed_files))
     reasons: list[str] = []
     if explicit_work_required:
         reasons.append("EXPLICIT_WORK_REQUIRED")
@@ -199,14 +201,33 @@ def classify_execution_surface(
         reasons.append("SEMANTIC_PACK_BUDGET_EXCEEDED")
 
     prefixes: tuple[str, ...] = ()
+    control_repository = repository in {CONTROL_PLANE_REPOSITORY, CONTROL_ENGINE_REPOSITORY}
     if repository == CONTROL_PLANE_REPOSITORY:
         prefixes = _CONTROL_PLANE_SENSITIVE_PREFIXES
     elif repository == CONTROL_ENGINE_REPOSITORY:
         prefixes = _CONTROL_ENGINE_SENSITIVE_PREFIXES
 
-    for path in sorted(set(changed_files)):
+    for path in normalized_changed_files:
         if any(path.startswith(prefix) for prefix in prefixes):
             reasons.append(f"CONTROL_AUTHORITY_PATH:{path}")
+
+    # A Control candidate may be STANDARD only when the exact routing paths are
+    # bound to B0 evidence. DEEP decisions already fail safely, so historical
+    # callers that deterministically route DEEP do not need weaker synthetic
+    # capsule data merely to preserve the conservative outcome.
+    if control_repository and not reasons:
+        if not isinstance(capsule, dict):
+            raise CloudflareB1Error("B0 capsule is required before STANDARD Control routing")
+        if capsule.get("protocol_id") != B0_PROTOCOL_ID or capsule.get("version") != B0_VERSION:
+            raise CloudflareB1Error("unsupported B0 capsule protocol for routing")
+        evidence_changed_files = capsule.get("changed_files")
+        if (
+            not isinstance(evidence_changed_files, list)
+            or any(not isinstance(path, str) or not path for path in evidence_changed_files)
+            or evidence_changed_files != sorted(set(evidence_changed_files))
+            or evidence_changed_files != normalized_changed_files
+        ):
+            raise CloudflareB1Error("changed_files do not match B0 routing evidence")
 
     return ExecutionSurfaceDecision(work_required=bool(reasons), reasons=tuple(sorted(set(reasons))))
 
@@ -290,8 +311,8 @@ def build_semantic_pack(
     ):
         raise CloudflareB1Error("diff does not match B0 evidence digest")
 
-    if capsule.get("deterministic_contradictions"):
-        raise CloudflareB1Error("semantic Cloudflare path is forbidden with deterministic contradictions")
+    if capsule.get("deterministic_contradictions") != []:
+        raise CloudflareB1Error("semantic Cloudflare path requires an explicit empty contradiction list")
 
     budget = measure_semantic_budget(
         task_id=task_id,
@@ -459,7 +480,8 @@ def run_workers_ai_once(
     if len(raw) > 1_000_000:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_TOO_LARGE")
     try:
-        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+        text = raw.decode("utf-8")
+        payload = json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
     except (json.JSONDecodeError, UnicodeDecodeError, _DuplicateJsonKey) as exc:
         raise CloudflareB1ExecutionUnavailable("EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_UNPARSEABLE") from exc
     if not isinstance(payload, dict):
