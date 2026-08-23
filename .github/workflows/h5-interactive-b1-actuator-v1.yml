@@ -1,8 +1,8 @@
 name: H5 Interactive B1 Actuator V1
 
 # Temporary deterministic Gate-4 actuator for CONTROL-199 H5.
-# GitHub owns claim/result/finalization; this workflow performs no semantic inference.
-# It lives only on the isolated actuator branch and does not change main or PR #69.
+# GitHub owns intake reconciliation, claim, result and finalization.
+# This workflow performs no semantic inference and never modifies main or PR #69.
 
 on:
   push:
@@ -23,10 +23,11 @@ concurrency:
 env:
   CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
   CONTROL_RUNTIME_REF: control-runtime-state
-  CONTROL_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_A_CODE_REF: recovery/187-policy-metadata-r1
+  CONTROL_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
   CONTROL_TASK_ID: CONTROL-199-PR69-INDEPENDENT-B1-ASSURE-H5
   CONTROL_CANDIDATE_SHA: 7674b04763d70b0d10635beafe539bc3097a56fb
-  CONTROL_ISSUE_NUMBER: '199'
 
 jobs:
   actuator:
@@ -76,9 +77,19 @@ jobs:
           CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
         run: bash scripts/github_app_preflight.sh
 
-      - name: Create short-lived Control GitHub App token
-        id: app-token
-        if: steps.command.outputs.action != 'hold'
+      - name: Create claim-only GitHub App token
+        id: app-token-claim
+        if: steps.command.outputs.action == 'claim'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Create completion GitHub App token
+        id: app-token-complete
+        if: steps.command.outputs.action == 'complete'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
@@ -86,6 +97,19 @@ jobs:
           owner: ${{ github.repository_owner }}
           permission-contents: 'write'
           permission-issues: 'read'
+
+      - name: Bind short-lived actuator token
+        if: steps.command.outputs.action != 'hold'
+        shell: bash
+        env:
+          CLAIM_TOKEN: ${{ steps.app-token-claim.outputs.token }}
+          COMPLETE_TOKEN: ${{ steps.app-token-complete.outputs.token }}
+        run: |
+          set -euo pipefail
+          token="${CLAIM_TOKEN:-${COMPLETE_TOKEN:-}}"
+          [ -n "$token" ]
+          echo "::add-mask::$token"
+          printf 'CONTROL_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
 
       - name: Setup Python
         if: steps.command.outputs.action != 'hold'
@@ -96,29 +120,82 @@ jobs:
       - name: Fetch pinned private runtime code
         if: steps.command.outputs.action != 'hold'
         shell: bash
-        env:
-          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          code="$RUNNER_TEMP/control-code"
+          b_code="$RUNNER_TEMP/control-b-code"
           url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
-          git clone --quiet --single-branch --branch "$CONTROL_CODE_REF" "$url" "$code"
-          printf 'CONTROL_CODE_DIR=%s\n' "$code" >> "$GITHUB_ENV"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$url" "$b_code"
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
 
-      - name: Claim exact preferred H5 B1 task
+          if [ "${{ steps.command.outputs.action }}" = claim ]; then
+            a_code="$RUNNER_TEMP/control-a-code"
+            git clone --quiet --single-branch --branch "$CONTROL_A_CODE_REF" "$url" "$a_code"
+            [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_A_CODE_SHA" ]
+            printf 'CONTROL_A_CODE_DIR=%s\n' "$a_code" >> "$GITHUB_ENV"
+          fi
+
+      - name: Reconcile managed intake and claim exact preferred H5 B1 task
         if: steps.command.outputs.action == 'claim'
         shell: bash
-        env:
-          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          state="$RUNNER_TEMP/control-state"
-          selection="$RUNNER_TEMP/h5-selection.json"
           url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
-          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+          reconciled=false
 
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-reconcile-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-h5-actuator[bot]'
+            git -C "$state" config user.email 'control-h5-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse "HEAD:control/DISPATCH_QUEUE.json")"
+
+            python "$CONTROL_A_CODE_DIR/dispatcher/cli.py" reconcile \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --runs "$state/control/DISPATCH_RUNS.json" >/dev/null
+            python control_engine/scheduled_worker_a.py resume-a-unavailable \
+              --code-dir "$CONTROL_A_CODE_DIR" \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --output "$RUNNER_TEMP/resume-a.json" >/dev/null
+            python "$CONTROL_A_CODE_DIR/tools/control_project_intake_reconcile_v1.py" \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --intake-dir "$state/control/project-intake" \
+              --handover-dir "$state/control/handovers" \
+              --worker-result-dir "$state/control/worker-results" \
+              --write \
+              --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+            python "$CONTROL_A_CODE_DIR/dispatcher/cli.py" validate \
+              --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
+
+            bad="$( { git -C "$state" diff --name-only; git -C "$state" ls-files --others --exclude-standard; } | sort -u | grep -Ev '^(control/DISPATCH_QUEUE\.json|control/DISPATCH_RUNS\.json|control/project-intake/[^/]+\.json)$' || true )"
+            [ -z "$bad" ]
+
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            current_ref="$(git -C "$state" rev-parse FETCH_HEAD)"
+            current_blob="$(git -C "$state" rev-parse "FETCH_HEAD:control/DISPATCH_QUEUE.json")"
+            if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+              continue
+            fi
+
+            if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
+              git -C "$state" commit --quiet -m 'runtime: H5 actuator reconcile before B1 claim'
+              if ! git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+                continue
+              fi
+            fi
+            reconciled=true
+            break
+          done
+          [ "$reconciled" = true ]
+
+          state="$RUNNER_TEMP/control-state-claim"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+          selection="$RUNNER_TEMP/h5-selection.json"
           python control_engine/scheduled_worker_b.py select-b1 \
-            --code-dir "$CONTROL_CODE_DIR" \
+            --code-dir "$CONTROL_B_CODE_DIR" \
             --queue "$state/control/DISPATCH_QUEUE.json" \
             --output "$selection" >/dev/null
 
@@ -133,8 +210,8 @@ jobs:
               raise SystemExit('H5 candidate binding mismatch')
           PY
 
-          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_CODE_DIR" \
-            python "$CONTROL_CODE_DIR/tools/control_connected_worker_runtime_v1.py" claim \
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+            python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" claim \
               --runtime-root "$state" \
               --runtime-ref "$CONTROL_RUNTIME_REF" \
               --task-id "$CONTROL_TASK_ID" \
@@ -147,10 +224,7 @@ jobs:
 
       - name: Read and validate independent semantic verdict
         if: steps.command.outputs.action == 'complete'
-        id: verdict
         shell: bash
-        env:
-          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           command=.control/h5-interactive-command.json
@@ -181,8 +255,6 @@ jobs:
       - name: Complete same exact H5 claim through connected runtime
         if: steps.command.outputs.action == 'complete'
         shell: bash
-        env:
-          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
@@ -192,8 +264,8 @@ jobs:
             rm -rf "$state"
             git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
             set +e
-            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_CODE_DIR" \
-              python "$CONTROL_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+              python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
                 --runtime-root "$state" \
                 --runtime-ref "$CONTROL_RUNTIME_REF" \
                 --github-repository "$CONTROL_PLANE_REPOSITORY" \
