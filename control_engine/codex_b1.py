@@ -151,6 +151,10 @@ def _request_window(
     request_start = _parse_timestamp(current.get("created_at"))
     if request_start is None:
         raise CodexB1Error("exact Codex request comment has no valid created_at timestamp")
+    if "updated_at" in current:
+        request_updated = _parse_timestamp(current.get("updated_at"))
+        if request_updated is None or request_updated != request_start:
+            raise CodexB1Error("exact Codex request comment was edited after creation")
 
     duplicate_same_candidate = False
     has_prior_request = False
