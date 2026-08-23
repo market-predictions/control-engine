@@ -326,7 +326,16 @@ def classify_review_snapshot(
         for item in reviews
         if _is_codex(item) and _belongs_to_request(item, request_start, request_end)
     ]
-    nonterminal_reviews = [item for item in codex_reviews if not _review_is_terminal(item)]
+    nonterminal_reviews = [
+        item
+        for item in reviews
+        if _is_codex(item)
+        and not _review_is_terminal(item)
+        and (
+            _event_timestamp(item) is None
+            or _belongs_to_request(item, request_start, request_end)
+        )
+    ]
     nonterminal_review_evidence = bool(nonterminal_reviews)
     terminal_reviews = [item for item in codex_reviews if _review_is_terminal(item)]
     exact_reviews = [item for item in terminal_reviews if _commit(item) == candidate_sha]
