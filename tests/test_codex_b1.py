@@ -10,6 +10,8 @@ from control_engine.codex_b1 import (
 )
 
 CANDIDATE = "a" * 40
+TASK_ID = "T1"
+HANDOVER_ID = "H1"
 REQUEST_COMMENT_ID = 100
 REQUEST_AT = "2026-08-23T00:00:00Z"
 CURRENT_AT = "2026-08-23T00:01:00Z"
@@ -51,12 +53,23 @@ def reaction(content="+1"):
 def request_comment(
     comment_id=REQUEST_COMMENT_ID,
     *,
+    task_id=TASK_ID,
+    handover_id=HANDOVER_ID,
     candidate=CANDIDATE,
     created_at=REQUEST_AT,
+    rid=None,
 ):
+    if rid is None:
+        rid = request_id(task_id=task_id, handover_id=handover_id, candidate_sha=candidate)
     return {
         "id": comment_id,
-        "body": f"@codex review\n\n{REQUEST_MARKER}\ncandidate_sha={candidate}\n",
+        "body": (
+            f"@codex review\n\n{REQUEST_MARKER}\n"
+            f"request_id={rid}\n"
+            f"task_id={task_id}\n"
+            f"handover_id={handover_id}\n"
+            f"candidate_sha={candidate}\n"
+        ),
         "created_at": created_at,
     }
 
@@ -64,6 +77,8 @@ def request_comment(
 def classify(**kwargs):
     issue_comments = kwargs.pop("issue_comments", [request_comment()])
     return classify_review_snapshot(
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         request_comment_id=REQUEST_COMMENT_ID,
         issue_comments=issue_comments,
         **kwargs,
@@ -72,15 +87,17 @@ def classify(**kwargs):
 
 def test_request_is_bounded_exact_identity_and_review_only():
     body = build_review_request(
-        task_id="T1",
-        handover_id="H1",
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         acceptance_criteria=["Exact head", "No mutation"],
     )
     assert body.startswith("@codex review\n")
     assert f"candidate_sha={CANDIDATE}" in body
+    assert f"task_id={TASK_ID}" in body
+    assert f"handover_id={HANDOVER_ID}" in body
     assert "Do not modify code or PR metadata" in body
-    assert request_id(task_id="T1", handover_id="H1", candidate_sha=CANDIDATE) in body
+    assert request_id(task_id=TASK_ID, handover_id=HANDOVER_ID, candidate_sha=CANDIDATE) in body
 
 
 def test_request_rejects_invalid_identity_and_unbounded_criteria():
@@ -98,6 +115,8 @@ def test_request_rejects_invalid_identity_and_unbounded_criteria():
 def test_classification_requires_exact_request_comment_identity():
     with pytest.raises(CodexB1Error, match="absent"):
         classify_review_snapshot(
+            task_id=TASK_ID,
+            handover_id=HANDOVER_ID,
             candidate_sha=CANDIDATE,
             request_comment_id=REQUEST_COMMENT_ID,
             reviews=[],
@@ -105,14 +124,44 @@ def test_classification_requires_exact_request_comment_identity():
             trigger_reactions=[],
             issue_comments=[],
         )
-    with pytest.raises(CodexB1Error, match="candidate_sha"):
+    with pytest.raises(CodexB1Error, match="full request identity"):
         classify_review_snapshot(
+            task_id=TASK_ID,
+            handover_id=HANDOVER_ID,
             candidate_sha=CANDIDATE,
             request_comment_id=REQUEST_COMMENT_ID,
             reviews=[],
             review_comments=[],
             trigger_reactions=[],
             issue_comments=[request_comment(candidate="b" * 40)],
+        )
+
+
+def test_same_candidate_other_lineage_comment_cannot_authorize_pass():
+    with pytest.raises(CodexB1Error, match="full request identity"):
+        classify_review_snapshot(
+            task_id=TASK_ID,
+            handover_id=HANDOVER_ID,
+            candidate_sha=CANDIDATE,
+            request_comment_id=REQUEST_COMMENT_ID,
+            reviews=[],
+            review_comments=[],
+            trigger_reactions=[reaction()],
+            issue_comments=[request_comment(task_id="T2", handover_id="H2")],
+        )
+
+
+def test_tampered_request_hash_is_rejected():
+    with pytest.raises(CodexB1Error, match="full request identity"):
+        classify_review_snapshot(
+            task_id=TASK_ID,
+            handover_id=HANDOVER_ID,
+            candidate_sha=CANDIDATE,
+            request_comment_id=REQUEST_COMMENT_ID,
+            reviews=[],
+            review_comments=[],
+            trigger_reactions=[reaction()],
+            issue_comments=[request_comment(rid="0" * 64)],
         )
 
 
@@ -190,6 +239,17 @@ def test_tagged_missing_evidence_maps_to_indeterminate():
     assert result.verdict == "INDETERMINATE"
 
 
+def test_leading_whitespace_before_marker_is_definite_finding():
+    result = classify(
+        candidate_sha=CANDIDATE,
+        reviews=[review()],
+        review_comments=[comment(f" {INDETERMINATE_MARKER} marker is not raw-prefix")],
+        trigger_reactions=[],
+    )
+    assert result.status == "COMPLETE"
+    assert result.verdict == "FAIL"
+
+
 def test_definite_finding_takes_precedence_over_indeterminate():
     result = classify(
         candidate_sha=CANDIDATE,
@@ -250,7 +310,7 @@ def test_later_same_head_finding_cannot_poison_exact_request_clean_pass():
         trigger_reactions=[reaction()],
         issue_comments=[
             request_comment(),
-            request_comment(101, created_at=NEXT_AT),
+            request_comment(101, task_id="T2", handover_id="H2", created_at=NEXT_AT),
         ],
     )
     assert result.status == "COMPLETE"
@@ -272,7 +332,7 @@ def test_current_same_head_finding_still_fails_current_request_and_later_is_excl
         trigger_reactions=[],
         issue_comments=[
             request_comment(),
-            request_comment(101, created_at=NEXT_AT),
+            request_comment(101, task_id="T2", handover_id="H2", created_at=NEXT_AT),
         ],
     )
     assert result.status == "COMPLETE"
@@ -289,7 +349,7 @@ def test_same_timestamp_adjacent_requests_fail_closed():
         trigger_reactions=[],
         issue_comments=[
             request_comment(),
-            request_comment(101, created_at=REQUEST_AT),
+            request_comment(101, task_id="T2", handover_id="H2", created_at=REQUEST_AT),
         ],
     )
     assert result.status == "EXECUTION_UNAVAILABLE"
