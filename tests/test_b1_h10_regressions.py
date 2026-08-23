@@ -12,6 +12,8 @@ from control_engine.cloudflare_b1 import (
 from control_engine.codex_b1 import INDETERMINATE_MARKER, classify_review_snapshot
 
 CANDIDATE = "a" * 40
+REQUEST_AT = "2026-08-23T00:00:00Z"
+CURRENT_AT = "2026-08-23T00:01:00Z"
 
 
 def _budget() -> SemanticBudgetMeasurement:
@@ -73,7 +75,13 @@ def _bot():
 
 
 def _review():
-    return {"id": 1, "user": _bot(), "commit_id": CANDIDATE, "body": "Codex Review"}
+    return {
+        "id": 1,
+        "user": _bot(),
+        "commit_id": CANDIDATE,
+        "body": "Codex Review",
+        "submitted_at": CURRENT_AT,
+    }
 
 
 def _comment(body: str):
@@ -84,6 +92,7 @@ def _comment(body: str):
         "body": body,
         "path": "control_engine/codex_b1.py",
         "line": 1,
+        "created_at": CURRENT_AT,
     }
 
 
@@ -159,6 +168,7 @@ def test_semantic_pack_rejects_substituted_semantic_inputs():
 def test_definite_codex_finding_that_mentions_marker_is_fail():
     result = classify_review_snapshot(
         candidate_sha=CANDIDATE,
+        request_created_at=REQUEST_AT,
         reviews=[_review()],
         review_comments=[_comment(f"Definite defect: substring handling of {INDETERMINATE_MARKER} is unsafe")],
         trigger_reactions=[],
@@ -170,6 +180,7 @@ def test_definite_codex_finding_that_mentions_marker_is_fail():
 def test_only_raw_finding_prefix_marks_codex_indeterminate():
     result = classify_review_snapshot(
         candidate_sha=CANDIDATE,
+        request_created_at=REQUEST_AT,
         reviews=[_review()],
         review_comments=[_comment(f"{INDETERMINATE_MARKER} exact required evidence is unavailable")],
         trigger_reactions=[],
