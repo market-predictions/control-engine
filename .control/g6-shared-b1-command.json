@@ -3,5 +3,6 @@
   "action": "run",
   "task_id": "CONTROL-199-G6-SHARED-B1-CANARY",
   "candidate_sha": "288e2313413d7991608cfd886fa0a50ef1d8aca9",
-  "base_sha": "07ca785b21da1f1af2b2db1a620c15de5a1ae2b9"
+  "base_sha": "07ca785b21da1f1af2b2db1a620c15de5a1ae2b9",
+  "run_nonce": "g6-20260823-2124"
 }
