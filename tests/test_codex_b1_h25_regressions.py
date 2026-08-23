@@ -58,8 +58,16 @@ def test_malformed_later_request_cannot_truncate_current_finding_window():
             _valid_request(200, CURRENT_HANDOVER, CURRENT_AT),
             _malformed_candidate_only_request(250, MALFORMED_AT),
         ],
+        reviews=[{
+            "id": 1,
+            "user": _bot(),
+            "state": "COMMENTED",
+            "commit_id": CANDIDATE,
+            "submitted_at": FINDING_AT,
+        }],
         review_comments=[{
             "user": _bot(),
+            "pull_request_review_id": 1,
             "commit_id": CANDIDATE,
             "body": "Current-request finding after malformed pseudo-boundary.",
             "created_at": FINDING_AT,
