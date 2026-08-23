@@ -57,9 +57,70 @@ def _event_timestamp(item: dict[str, Any]) -> datetime | None:
     return None
 
 
-def _belongs_to_request(item: dict[str, Any], request_boundary: datetime) -> bool:
+def _belongs_to_request(
+    item: dict[str, Any],
+    request_start: datetime,
+    request_end: datetime | None,
+) -> bool:
     timestamp = _event_timestamp(item)
-    return timestamp is not None and timestamp >= request_boundary
+    if timestamp is None or timestamp < request_start:
+        return False
+    return request_end is None or timestamp < request_end
+
+
+def _request_candidate(item: dict[str, Any]) -> str | None:
+    body = item.get("body")
+    if not isinstance(body, str) or not body:
+        return None
+    lines = [line.strip() for line in body.splitlines()]
+    if REQUEST_MARKER not in lines:
+        return None
+    for line in lines:
+        if line.startswith("candidate_sha="):
+            candidate = line.split("=", 1)[1].strip()
+            return candidate if _valid_sha(candidate) else None
+    return None
+
+
+def _request_window(
+    *,
+    request_comment_id: int,
+    candidate_sha: str,
+    issue_comments: list[dict[str, Any]],
+) -> tuple[datetime, datetime | None, bool]:
+    if not isinstance(request_comment_id, int) or isinstance(request_comment_id, bool) or request_comment_id <= 0:
+        raise CodexB1Error("request_comment_id must be a positive integer")
+
+    current = next((item for item in issue_comments if item.get("id") == request_comment_id), None)
+    if current is None:
+        raise CodexB1Error("exact Codex request comment is absent from issue_comments")
+    if _request_candidate(current) != candidate_sha:
+        raise CodexB1Error("exact Codex request comment is not bound to candidate_sha")
+    request_start = _parse_timestamp(current.get("created_at"))
+    if request_start is None:
+        raise CodexB1Error("exact Codex request comment has no valid created_at timestamp")
+
+    later_requests: list[tuple[datetime, int]] = []
+    for item in issue_comments:
+        other_id = item.get("id")
+        if other_id == request_comment_id or _request_candidate(item) != candidate_sha:
+            continue
+        if not isinstance(other_id, int) or isinstance(other_id, bool) or other_id <= 0:
+            raise CodexB1Error("Codex request comment has an invalid id")
+        other_time = _parse_timestamp(item.get("created_at"))
+        if other_time is None:
+            raise CodexB1Error("Codex request comment has no valid created_at timestamp")
+        if other_id > request_comment_id:
+            if other_time < request_start:
+                raise CodexB1Error("Codex request comment chronology is inconsistent")
+            later_requests.append((other_time, other_id))
+        elif other_time > request_start:
+            raise CodexB1Error("Codex request comment chronology is inconsistent")
+
+    if not later_requests:
+        return request_start, None, False
+    request_end, _ = min(later_requests, key=lambda value: (value[0], value[1]))
+    return request_start, request_end, request_end == request_start
 
 
 def request_id(*, task_id: str, handover_id: str, candidate_sha: str) -> str:
@@ -146,36 +207,49 @@ def _bounded_finding(item: dict[str, Any]) -> str | None:
 def classify_review_snapshot(
     *,
     candidate_sha: str,
-    request_created_at: str,
+    request_comment_id: int,
     reviews: list[dict[str, Any]],
     review_comments: list[dict[str, Any]],
     trigger_reactions: list[dict[str, Any]],
-    issue_comments: list[dict[str, Any]] | None = None,
+    issue_comments: list[dict[str, Any]],
 ) -> CodexReviewDecision:
     if not _valid_sha(candidate_sha):
         raise CodexB1Error("candidate_sha is invalid")
-    request_boundary = _parse_timestamp(request_created_at)
-    if request_boundary is None:
-        raise CodexB1Error("request_created_at must be timezone-aware ISO-8601")
-    for collection in (reviews, review_comments, trigger_reactions):
+    for collection in (reviews, review_comments, trigger_reactions, issue_comments):
         if not isinstance(collection, list) or any(not isinstance(item, dict) for item in collection):
             raise CodexB1Error("Codex snapshot collections must contain objects")
-    if issue_comments is None:
-        issue_comments = []
-    if not isinstance(issue_comments, list) or any(not isinstance(item, dict) for item in issue_comments):
-        raise CodexB1Error("issue_comments must contain objects")
 
-    # Exact candidate identity is not enough when multiple Codex requests target
-    # the same unchanged PR head. Only review evidence created on or after this
-    # exact request's trigger timestamp belongs to the current handshake.
-    codex_reviews = [item for item in reviews if _is_codex(item) and _belongs_to_request(item, request_boundary)]
+    # Bind the review evidence to the exact GitHub request comment, not to a
+    # caller-supplied lower timestamp. The next request for the same candidate
+    # is an exclusive upper bound, preventing later same-head handshakes from
+    # poisoning this request. Same-timestamp adjacent requests are ambiguous and
+    # therefore fail closed instead of guessing ownership of review evidence.
+    request_start, request_end, ambiguous_window = _request_window(
+        request_comment_id=request_comment_id,
+        candidate_sha=candidate_sha,
+        issue_comments=issue_comments,
+    )
+    if ambiguous_window:
+        return CodexReviewDecision(
+            status="EXECUTION_UNAVAILABLE",
+            verdict=None,
+            summary="Adjacent Codex requests share a timestamp, so review ownership is ambiguous.",
+            findings=(),
+            reviewed_commit=None,
+        )
+
+    codex_reviews = [
+        item
+        for item in reviews
+        if _is_codex(item) and _belongs_to_request(item, request_start, request_end)
+    ]
     exact_reviews = [item for item in codex_reviews if _commit(item) == candidate_sha]
     stale_reviews = [item for item in codex_reviews if _commit(item) not in (None, candidate_sha)]
 
     exact_review_ids = {item.get("id") for item in exact_reviews if item.get("id") is not None}
     finding_records: list[tuple[str, bool]] = []
     for item in review_comments:
-        if not _is_codex(item) or not _belongs_to_request(item, request_boundary):
+        if not _is_codex(item) or not _belongs_to_request(item, request_start, request_end):
             continue
         item_commit = _commit(item)
         review_id = item.get("pull_request_review_id")
@@ -220,7 +294,7 @@ def classify_review_snapshot(
 
     # A clean PASS is accepted only from the Codex reaction on the exact trigger
     # comment. The caller fetches reactions for that comment ID, so historical
-    # issue comments cannot satisfy a later request for a different lineage.
+    # or later requests on the same candidate cannot satisfy this request.
     clean_reaction = any(
         _is_codex(item) and item.get("content") in {"+1", "thumbs_up"}
         for item in trigger_reactions
