@@ -150,7 +150,10 @@ def _request_window(
     has_prior_request = False
     for item in issue_comments:
         other_id = item.get("id")
-        if other_id == request_comment_id or _request_candidate(item) != candidate_sha:
+        if other_id == request_comment_id:
+            continue
+        other_identity = _request_identity(item)
+        if other_identity is None or other_identity[3] != candidate_sha:
             continue
         if not isinstance(other_id, int) or isinstance(other_id, bool) or other_id <= 0:
             raise CodexB1Error("Codex request comment has an invalid id")
