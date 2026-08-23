@@ -101,6 +101,7 @@ def _request_window(
         raise CodexB1Error("exact Codex request comment has no valid created_at timestamp")
 
     later_requests: list[tuple[datetime, int]] = []
+    prior_same_timestamp = False
     for item in issue_comments:
         other_id = item.get("id")
         if other_id == request_comment_id or _request_candidate(item) != candidate_sha:
@@ -116,7 +117,11 @@ def _request_window(
             later_requests.append((other_time, other_id))
         elif other_time > request_start:
             raise CodexB1Error("Codex request comment chronology is inconsistent")
+        elif other_time == request_start:
+            prior_same_timestamp = True
 
+    if prior_same_timestamp:
+        return request_start, None, True
     if not later_requests:
         return request_start, None, False
     request_end, _ = min(later_requests, key=lambda value: (value[0], value[1]))
@@ -222,8 +227,8 @@ def classify_review_snapshot(
     # Bind the review evidence to the exact GitHub request comment, not to a
     # caller-supplied lower timestamp. The next request for the same candidate
     # is an exclusive upper bound, preventing later same-head handshakes from
-    # poisoning this request. Same-timestamp adjacent requests are ambiguous and
-    # therefore fail closed instead of guessing ownership of review evidence.
+    # poisoning this request. Same-timestamp adjacent requests are ambiguous in
+    # either direction and therefore fail closed instead of guessing ownership.
     request_start, request_end, ambiguous_window = _request_window(
         request_comment_id=request_comment_id,
         candidate_sha=candidate_sha,
