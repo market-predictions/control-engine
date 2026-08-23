@@ -81,7 +81,7 @@ def _request_candidate(item: dict[str, Any]) -> str | None:
     if not isinstance(body, str) or not body:
         return None
     lines = [line.strip() for line in body.splitlines()]
-    if REQUEST_MARKER not in lines:
+    if not lines or lines[0] != "@codex review" or REQUEST_MARKER not in lines:
         return None
     candidate_lines = [line for line in lines if line.startswith("candidate_sha=")]
     if len(candidate_lines) != 1:
@@ -95,7 +95,7 @@ def _request_identity(item: dict[str, Any]) -> tuple[str, str, str, str] | None:
     if not isinstance(body, str) or not body:
         return None
     lines = [line.strip() for line in body.splitlines()]
-    if REQUEST_MARKER not in lines:
+    if not lines or lines[0] != "@codex review" or REQUEST_MARKER not in lines:
         return None
 
     values: dict[str, str] = {}
@@ -302,10 +302,7 @@ def classify_review_snapshot(
         if _is_codex(item) and _belongs_to_request(item, request_start, request_end)
     ]
     nonterminal_reviews = [item for item in codex_reviews if not _review_is_terminal(item)]
-    nonterminal_review_evidence = any(
-        _commit(item) in (None, candidate_sha)
-        for item in nonterminal_reviews
-    )
+    nonterminal_review_evidence = bool(nonterminal_reviews)
     terminal_reviews = [item for item in codex_reviews if _review_is_terminal(item)]
     exact_reviews = [item for item in terminal_reviews if _commit(item) == candidate_sha]
     stale_reviews = [item for item in terminal_reviews if _commit(item) not in (None, candidate_sha)]
