@@ -1,3 +1,4 @@
+# Gate-7 H3 deterministic post-call provenance fence.
 from __future__ import annotations
 
 import json
@@ -133,14 +134,9 @@ def main() -> int:
         evidence.append(f"{PROVENANCE_PROTOCOL}:{compact}")
         output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     elif outcome == "EXECUTION_UNAVAILABLE":
-        # Provider/transport/output failure remains infrastructure-only. The single
-        # attempted call may lack a response by definition; never manufacture a
-        # semantic verdict merely to satisfy provenance.
         if _call_count > 1:
             _replace_with_unavailable(output, result, "EXECUTION_UNAVAILABLE_STANDARD_CALL_COUNT")
     else:
-        # BLOCKED is a deterministic pre/post-contract rejection and therefore
-        # cannot be promoted to a semantic verdict.
         pass
     return 0
 
