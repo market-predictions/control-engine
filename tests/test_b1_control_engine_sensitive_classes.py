@@ -15,6 +15,7 @@ def _routing_capsule(*paths: str) -> dict:
     return {
         "protocol_id": "CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1",
         "version": "1.0",
+        "task": {"repository": CONTROL_ENGINE_REPOSITORY},
         "changed_files": sorted(set(paths)),
     }
 
