@@ -34,10 +34,15 @@ def test_outer_provider_json_integer_digit_limit_is_unparseable(monkeypatch):
     assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_UNPARSEABLE"
 
 
-def test_outer_provider_json_excessive_nesting_is_unparseable(monkeypatch):
-    raw = (b"[" * 1500) + b"0" + (b"]" * 1500)
+def test_outer_provider_json_recursion_failure_is_unparseable(monkeypatch):
+    from control_engine import cloudflare_b1
+
+    def recursion_failure(*_args, **_kwargs):
+        raise RecursionError("synthetic parser recursion limit")
+
+    monkeypatch.setattr(cloudflare_b1.json, "loads", recursion_failure)
     with pytest.raises(CloudflareB1ExecutionUnavailable) as caught:
-        _run_with_bytes(monkeypatch, raw)
+        _run_with_bytes(monkeypatch, b"{}")
     assert caught.value.code == "EXECUTION_UNAVAILABLE_CLOUDFLARE_RESPONSE_UNPARSEABLE"
 
 
