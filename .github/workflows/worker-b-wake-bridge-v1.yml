@@ -1,8 +1,8 @@
 name: Worker B Recovery Wake Bridge V1
 
-# Legacy provider-B wake bridge retained for explicit recovery only.
-# Normal consequential B1 execution is ChatGPT Work scheduled-pull.
-# No workflow_run or push trigger: this bridge must never race Work-B1.
+# Legacy provider-B wake bridge retained for explicit manual recovery only.
+# Normal consequential B1 execution is Canonical B1 Dual Executor V1.
+# No workflow_run or push trigger: this bridge must never race canonical B1.
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Dispatch Provider B Recovery V2
+      - name: Dispatch Legacy Provider B Recovery V2
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
