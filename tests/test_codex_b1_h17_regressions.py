@@ -1,13 +1,20 @@
-from control_engine.codex_b1 import REQUEST_MARKER, classify_review_snapshot
+from control_engine.codex_b1 import REQUEST_MARKER, classify_review_snapshot, request_id
 
 CANDIDATE = "a" * 40
 SAME_AT = "2026-08-23T00:00:00Z"
 
 
-def _request(comment_id: int) -> dict:
+def _request(comment_id: int, task_id: str, handover_id: str) -> dict:
+    rid = request_id(task_id=task_id, handover_id=handover_id, candidate_sha=CANDIDATE)
     return {
         "id": comment_id,
-        "body": f"@codex review\n\n{REQUEST_MARKER}\ncandidate_sha={CANDIDATE}\n",
+        "body": (
+            f"@codex review\n\n{REQUEST_MARKER}\n"
+            f"request_id={rid}\n"
+            f"task_id={task_id}\n"
+            f"handover_id={handover_id}\n"
+            f"candidate_sha={CANDIDATE}\n"
+        ),
         "created_at": SAME_AT,
     }
 
@@ -18,9 +25,11 @@ def _bot() -> dict:
 
 def test_later_same_timestamp_request_fails_closed_against_prior_finding():
     result = classify_review_snapshot(
+        task_id="T2",
+        handover_id="H2",
         candidate_sha=CANDIDATE,
         request_comment_id=101,
-        issue_comments=[_request(100), _request(101)],
+        issue_comments=[_request(100, "T1", "H1"), _request(101, "T2", "H2")],
         reviews=[
             {
                 "id": 1,
