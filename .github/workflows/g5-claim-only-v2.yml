@@ -1,0 +1,109 @@
+name: Gate 5 Claim Only V2
+
+on:
+  push:
+    branches:
+      - control/g5-exact-integration-actuator-v1
+    paths:
+      - .control/g5-claim-command.json
+      - .github/workflows/g5-claim-only-v2.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-g5-claim-only-v2
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_TASK_ID: CONTROL-199-PR69-INTEGRATE-G5
+  CONTROL_CANDIDATE_SHA: 7674b04763d70b0d10635beafe539bc3097a56fb
+
+jobs:
+  claim:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/g5-exact-integration-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact claim command
+        shell: bash
+        run: |
+          jq -e '.version == "1.0" and .action == "claim" and .task_id == env.CONTROL_TASK_ID and .candidate_sha == env.CONTROL_CANDIDATE_SHA' .control/g5-claim-command.json >/dev/null
+
+      - name: Preflight GitHub App
+        id: app-preflight
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create minimal private-state token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Select, bind and claim Gate-5 A1
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          code="$RUNNER_TEMP/control-code"
+          state="$RUNNER_TEMP/control-state"
+          git clone --quiet --single-branch --branch "$CONTROL_CODE_REF" "$url" "$code"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+
+          selection="$RUNNER_TEMP/selection.json"
+          python control_engine/scheduled_worker_a.py select-a1 --code-dir "$code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$selection" >/dev/null
+          python - "$selection" "$state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          selection=json.load(open(sys.argv[1], encoding='utf-8'))
+          queue=json.load(open(sys.argv[2], encoding='utf-8'))
+          task_id=os.environ['CONTROL_TASK_ID']
+          candidate=os.environ['CONTROL_CANDIDATE_SHA']
+          if selection.get('selected') is not True: raise SystemExit('no eligible A1 task')
+          if selection.get('task_id') != task_id: raise SystemExit('Gate-5 task is not deterministic preferred A1')
+          if selection.get('operation') != 'PROJECT_INTEGRATION': raise SystemExit('operation mismatch')
+          matches=[item for item in queue.get('tasks',[]) if item.get('task_id') == task_id]
+          if len(matches) != 1: raise SystemExit('canonical task identity mismatch')
+          task=matches[0]
+          if task.get('candidate_sha') != candidate: raise SystemExit('canonical candidate mismatch')
+          if task.get('handover_id') != 'CONTROL-199-PR69-H6': raise SystemExit('handover mismatch')
+          if task.get('assurance_result_ref') != 'control-runtime-state:control/worker-results/CONTROL-199-PR69-H6.json': raise SystemExit('assurance result ref mismatch')
+          if task.get('project_integration_authorized') is not True: raise SystemExit('integration not authorized')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$code" python "$code/tools/control_connected_worker_runtime_v1.py" claim \
+            --runtime-root "$state" \
+            --runtime-ref "$CONTROL_RUNTIME_REF" \
+            --task-id "$CONTROL_TASK_ID" \
+            --worker-instance A1 \
+            --backend github-actions/g5-claim-only-v2 \
+            --lease-seconds 3600 >/dev/null
+
+      - name: Publish claim liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          state=failure
+          [ "$JOB_STATUS" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context='control/g5-claim-only-v2' -f description="G5_claim_v2_${JOB_STATUS}" >/dev/null
