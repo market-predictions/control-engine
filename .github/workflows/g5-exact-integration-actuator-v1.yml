@@ -1,0 +1,301 @@
+name: Gate 5 Exact Integration Actuator V1
+
+# Temporary public-safe lifecycle actuator for CONTROL #199 Gate 5.
+# It performs no semantic assurance and never mutates PR #69 candidate code.
+# GitHub native expected-head merge is performed separately while the exact A1 claim is live.
+
+on:
+  push:
+    branches:
+      - control/g5-exact-integration-actuator-v1
+    paths:
+      - .control/g5-integration-command.json
+      - .github/workflows/g5-exact-integration-actuator-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-g5-exact-integration-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_A_CODE_REF: recovery/187-policy-metadata-r1
+  CONTROL_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
+  CONTROL_TASK_ID: CONTROL-199-PR69-INTEGRATE-G5
+  CONTROL_CANDIDATE_SHA: 7674b04763d70b0d10635beafe539bc3097a56fb
+  CONTROL_HANDOVER_ID: CONTROL-199-PR69-H6
+  CONTROL_ASSURANCE_RESULT_REF: control-runtime-state:control/worker-results/CONTROL-199-PR69-H6.json
+  CONTROL_PUBLIC_REPOSITORY: market-predictions/control-engine
+  CONTROL_PR_NUMBER: '69'
+
+jobs:
+  actuator:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/g5-exact-integration-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate command
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=.control/g5-integration-command.json
+          jq -e '
+            .version == "1.0" and
+            (.action == "hold" or .action == "claim" or .action == "complete") and
+            .task_id == env.CONTROL_TASK_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA
+          ' "$file" >/dev/null
+          action="$(jq -r '.action' "$file")"
+          printf 'action=%s\n' "$action" >> "$GITHUB_OUTPUT"
+          if [ "$action" = complete ]; then
+            jq -e '
+              (.active_run_id | type == "string") and
+              (.active_run_id | test("^run-[0-9a-f-]+$")) and
+              (.merge_sha | type == "string") and
+              (.merge_sha | test("^[0-9a-f]{40}$"))
+            ' "$file" >/dev/null
+          fi
+
+      - name: Hold without private mutation
+        if: steps.command.outputs.action == 'hold'
+        run: echo 'G5_INTEGRATION_ACTUATOR=HOLD'
+
+      - name: Preflight GitHub App
+        id: app-preflight
+        if: steps.command.outputs.action != 'hold'
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        if: steps.command.outputs.action != 'hold'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-pull-requests: 'read'
+
+      - name: Bind token and fetch pinned private code
+        if: steps.command.outputs.action != 'hold'
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          printf 'CONTROL_TOKEN=%s\n' "$CONTROL_TOKEN" >> "$GITHUB_ENV"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          a_code="$RUNNER_TEMP/control-a-code"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$url" "$b_code"
+          git clone --quiet --single-branch --branch "$CONTROL_A_CODE_REF" "$url" "$a_code"
+          [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_A_CODE_SHA" ]
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+          printf 'CONTROL_A_CODE_DIR=%s\n' "$a_code" >> "$GITHUB_ENV"
+
+      - name: Reconcile intake and claim exact preferred Gate-5 A1 task
+        if: steps.command.outputs.action == 'claim'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          reconciled=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-reconcile-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-g5-actuator[bot]'
+            git -C "$state" config user.email 'control-g5-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse "HEAD:control/DISPATCH_QUEUE.json")"
+
+            python "$CONTROL_A_CODE_DIR/dispatcher/cli.py" reconcile \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --runs "$state/control/DISPATCH_RUNS.json" >/dev/null
+            python control_engine/scheduled_worker_a.py resume-a-unavailable \
+              --code-dir "$CONTROL_A_CODE_DIR" \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --output "$RUNNER_TEMP/resume-a.json" >/dev/null
+            python "$CONTROL_A_CODE_DIR/tools/control_project_intake_reconcile_v1.py" \
+              --queue "$state/control/DISPATCH_QUEUE.json" \
+              --intake-dir "$state/control/project-intake" \
+              --handover-dir "$state/control/handovers" \
+              --worker-result-dir "$state/control/worker-results" \
+              --write \
+              --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+            python "$CONTROL_A_CODE_DIR/dispatcher/cli.py" validate \
+              --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
+
+            bad="$( { git -C "$state" diff --name-only; git -C "$state" ls-files --others --exclude-standard; } | sort -u | grep -Ev '^(control/DISPATCH_QUEUE\.json|control/DISPATCH_RUNS\.json|control/project-intake/[^/]+\.json)$' || true )"
+            [ -z "$bad" ]
+
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            current_ref="$(git -C "$state" rev-parse FETCH_HEAD)"
+            current_blob="$(git -C "$state" rev-parse "FETCH_HEAD:control/DISPATCH_QUEUE.json")"
+            if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+              continue
+            fi
+            if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
+              git -C "$state" commit --quiet -m 'runtime: Gate-5 reconcile before A1 claim'
+              if ! git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+                continue
+              fi
+            fi
+            reconciled=true
+            break
+          done
+          [ "$reconciled" = true ]
+
+          state="$RUNNER_TEMP/control-state-claim"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+          selection="$RUNNER_TEMP/g5-selection.json"
+          python control_engine/scheduled_worker_a.py select-a1 \
+            --code-dir "$CONTROL_A_CODE_DIR" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --output "$selection" >/dev/null
+          python - "$selection" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          if value.get('selected') is not True:
+              raise SystemExit('no eligible A1 task')
+          if value.get('task_id') != os.environ['CONTROL_TASK_ID']:
+              raise SystemExit('Gate-5 task is not deterministic preferred A1 work')
+          if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('Gate-5 candidate mismatch')
+          if value.get('operation') != 'PROJECT_INTEGRATION':
+              raise SystemExit('Gate-5 operation mismatch')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+            python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" claim \
+              --runtime-root "$state" \
+              --runtime-ref "$CONTROL_RUNTIME_REF" \
+              --task-id "$CONTROL_TASK_ID" \
+              --worker-instance A1 \
+              --backend github-actions/g5-exact-integration-actuator-v1 \
+              --lease-seconds 3600 \
+              > "$RUNNER_TEMP/g5-claim-private.json"
+          echo 'G5_INTEGRATION_ACTUATOR=CLAIM_PERSISTED'
+
+      - name: Verify merge and terminally release exact A1 integration claim
+        if: steps.command.outputs.action == 'complete'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command=.control/g5-integration-command.json
+          active_run_id="$(jq -r '.active_run_id' "$command")"
+          merge_sha="$(jq -r '.merge_sha' "$command")"
+
+          pr_json="$RUNNER_TEMP/pr.json"
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${CONTROL_PUBLIC_REPOSITORY}/pulls/${CONTROL_PR_NUMBER}" > "$pr_json"
+          jq -e --arg candidate "$CONTROL_CANDIDATE_SHA" --arg merge "$merge_sha" '
+            .number == 69 and
+            .state == "closed" and
+            .merged == true and
+            .head.sha == $candidate and
+            .merge_commit_sha == $merge
+          ' "$pr_json" >/dev/null
+          main_sha="$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${CONTROL_PUBLIC_REPOSITORY}/commits/main" --jq '.sha')"
+          [ "$main_sha" = "$merge_sha" ]
+
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          success=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-complete-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-g5-actuator[bot]'
+            git -C "$state" config user.email 'control-g5-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse "HEAD:control/DISPATCH_QUEUE.json")"
+
+            PYTHONPATH="$CONTROL_B_CODE_DIR" python - "$state/control/DISPATCH_QUEUE.json" "$state/control/DISPATCH_RUNS.json" "$active_run_id" "$merge_sha" <<'PY'
+          from datetime import datetime, timezone
+          import json, os, sys
+          from tools.control_parallel_execution_v1 import assert_claim_current, complete_claim_for_instance, validate_parallel_queue
+          from tools.control_queue_v1 import ROLE_A
+
+          queue_path, runs_path, run_id, merge_sha = sys.argv[1:]
+          task_id = os.environ['CONTROL_TASK_ID']
+          candidate = os.environ['CONTROL_CANDIDATE_SHA']
+          handover = os.environ['CONTROL_HANDOVER_ID']
+          assurance_ref = os.environ['CONTROL_ASSURANCE_RESULT_REF']
+          queue = json.load(open(queue_path, encoding='utf-8'))
+          runs = json.load(open(runs_path, encoding='utf-8'))
+          now = datetime.now(timezone.utc)
+          task = assert_claim_current(queue, task_id=task_id, role=ROLE_A, worker_instance='A1', run_id=run_id, now=now)
+          if task.get('operation') != 'PROJECT_INTEGRATION': raise SystemExit('operation mismatch')
+          if task.get('candidate_sha') != candidate: raise SystemExit('candidate mismatch')
+          if task.get('handover_id') != handover: raise SystemExit('handover mismatch')
+          if task.get('assurance_result_ref') != assurance_ref: raise SystemExit('assurance result ref mismatch')
+          if task.get('merge_policy') != 'AFTER_PASS_EXACT_HEAD': raise SystemExit('merge policy mismatch')
+          if task.get('integration_authority_role') != ROLE_A or task.get('project_integration_authorized') is not True:
+              raise SystemExit('integration authority mismatch')
+          queue = complete_claim_for_instance(queue, task_id=task_id, role=ROLE_A, worker_instance='A1', run_id=run_id, next_state='COMPLETED_WITHOUT_ASSURANCE', now=now)
+          updated = next(item for item in queue['tasks'] if item['task_id'] == task_id)
+          updated['merge_sha'] = merge_sha
+          updated['last_verdict'] = 'PASS'
+          updated['last_findings'] = []
+          matches = [item for item in runs.get('runs', []) if item.get('run_id') == run_id]
+          if len(matches) != 1: raise SystemExit('dispatch run identity mismatch')
+          stamp = now.replace(microsecond=0).isoformat().replace('+00:00','Z')
+          matches[0]['outcome'] = 'COMPLETED'
+          matches[0]['heartbeat_at'] = stamp
+          matches[0]['finished_at'] = stamp
+          validate_parallel_queue(queue)
+          with open(queue_path, 'w', encoding='utf-8') as f: json.dump(queue, f, indent=2); f.write('\n')
+          with open(runs_path, 'w', encoding='utf-8') as f: json.dump(runs, f, indent=2); f.write('\n')
+          PY
+
+            git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json
+            git -C "$state" commit --quiet -m 'runtime: complete CONTROL #199 Gate-5 exact integration'
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            current_ref="$(git -C "$state" rev-parse FETCH_HEAD)"
+            current_blob="$(git -C "$state" rev-parse "FETCH_HEAD:control/DISPATCH_QUEUE.json")"
+            if [ "$current_ref" != "$observed_ref" ] || [ "$current_blob" != "$observed_blob" ]; then
+              continue
+            fi
+            if git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then
+              success=true
+              break
+            fi
+          done
+          [ "$success" = true ]
+          echo 'G5_INTEGRATION_ACTUATOR=COMPLETE_PERSISTED'
+
+      - name: Publish bounded liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION: ${{ steps.command.outputs.action }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          action="${ACTION:-unknown}"
+          job_status="${JOB_STATUS:-failure}"
+          state=failure
+          [ "$job_status" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/g5-exact-integration-actuator" \
+            -f description="G5_${action}_${job_status}" >/dev/null
