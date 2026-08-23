@@ -9,9 +9,16 @@ from control_engine.cloudflare_b1 import (
     build_semantic_pack,
     classify_execution_surface,
 )
-from control_engine.codex_b1 import INDETERMINATE_MARKER, REQUEST_MARKER, classify_review_snapshot
+from control_engine.codex_b1 import (
+    INDETERMINATE_MARKER,
+    REQUEST_MARKER,
+    classify_review_snapshot,
+    request_id,
+)
 
 CANDIDATE = "a" * 40
+TASK_ID = "T1"
+HANDOVER_ID = "H1"
 REQUEST_COMMENT_ID = 100
 REQUEST_AT = "2026-08-23T00:00:00Z"
 CURRENT_AT = "2026-08-23T00:01:00Z"
@@ -33,8 +40,8 @@ def _capsule() -> dict:
             "release_authority": False,
         },
         "task": {
-            "task_id": "T1",
-            "handover_id": "H1",
+            "task_id": TASK_ID,
+            "handover_id": HANDOVER_ID,
             "candidate_sha": CANDIDATE,
             "acceptance_criteria_sha256": "19491d7bfff1ecf40598f9e0924131564c27eb0d06090c208402f0d01a803fe1",
         },
@@ -60,8 +67,8 @@ def _capsule() -> dict:
 
 def _build(capsule: dict):
     return build_semantic_pack(
-        task_id="T1",
-        handover_id="H1",
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         assurance_contract="Return one exact-head verdict.",
         acceptance_criteria=["Exact current lineage is START_PROVEN."],
@@ -98,9 +105,16 @@ def _comment(body: str):
 
 
 def _request_comment():
+    rid = request_id(task_id=TASK_ID, handover_id=HANDOVER_ID, candidate_sha=CANDIDATE)
     return {
         "id": REQUEST_COMMENT_ID,
-        "body": f"@codex review\n\n{REQUEST_MARKER}\ncandidate_sha={CANDIDATE}\n",
+        "body": (
+            f"@codex review\n\n{REQUEST_MARKER}\n"
+            f"request_id={rid}\n"
+            f"task_id={TASK_ID}\n"
+            f"handover_id={HANDOVER_ID}\n"
+            f"candidate_sha={CANDIDATE}\n"
+        ),
         "created_at": REQUEST_AT,
     }
 
@@ -118,8 +132,8 @@ def test_quarantine_write_actuator_requires_deep_review():
 
 def test_semantic_pack_accepts_exact_b0_task_handover_claim_lineage():
     pack = _build(_capsule())
-    assert pack["task_id"] == "T1"
-    assert pack["handover_id"] == "H1"
+    assert pack["task_id"] == TASK_ID
+    assert pack["handover_id"] == HANDOVER_ID
     assert pack["candidate_sha"] == CANDIDATE
 
 
@@ -152,8 +166,8 @@ def test_semantic_pack_rejects_cross_lineage_wrong_authority_or_stale_evidence(m
 def test_semantic_pack_rejects_substituted_semantic_inputs():
     with pytest.raises(CloudflareB1Error, match="acceptance criteria"):
         build_semantic_pack(
-            task_id="T1",
-            handover_id="H1",
+            task_id=TASK_ID,
+            handover_id=HANDOVER_ID,
             candidate_sha=CANDIDATE,
             assurance_contract="Return one exact-head verdict.",
             acceptance_criteria=["weaker criterion"],
@@ -163,8 +177,8 @@ def test_semantic_pack_rejects_substituted_semantic_inputs():
         )
     with pytest.raises(CloudflareB1Error, match="diff"):
         build_semantic_pack(
-            task_id="T1",
-            handover_id="H1",
+            task_id=TASK_ID,
+            handover_id=HANDOVER_ID,
             candidate_sha=CANDIDATE,
             assurance_contract="Return one exact-head verdict.",
             acceptance_criteria=["Exact current lineage is START_PROVEN."],
@@ -176,6 +190,8 @@ def test_semantic_pack_rejects_substituted_semantic_inputs():
 
 def test_definite_codex_finding_that_mentions_marker_is_fail():
     result = classify_review_snapshot(
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         request_comment_id=REQUEST_COMMENT_ID,
         reviews=[_review()],
@@ -189,6 +205,8 @@ def test_definite_codex_finding_that_mentions_marker_is_fail():
 
 def test_only_raw_finding_prefix_marks_codex_indeterminate():
     result = classify_review_snapshot(
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
         candidate_sha=CANDIDATE,
         request_comment_id=REQUEST_COMMENT_ID,
         reviews=[_review()],
