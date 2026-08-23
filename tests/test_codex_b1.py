@@ -277,7 +277,10 @@ def test_stale_review_never_authorizes_pass_without_current_trigger_reaction():
 def test_current_trigger_reaction_is_request_bound_even_with_old_review_history():
     result = classify(
         candidate_sha=CANDIDATE,
-        reviews=[review(sha="b" * 40)],
+        reviews=[
+            review(review_id=1, sha="b" * 40),
+            review(review_id=2),
+        ],
         review_comments=[],
         trigger_reactions=[reaction()],
     )
@@ -305,7 +308,10 @@ def test_prior_same_head_finding_cannot_poison_new_request_clean_pass():
 def test_later_same_head_finding_cannot_poison_exact_request_clean_pass():
     result = classify(
         candidate_sha=CANDIDATE,
-        reviews=[review(review_id=2, submitted_at=LATER_AT)],
+        reviews=[
+            review(review_id=1, submitted_at=CURRENT_AT),
+            review(review_id=2, submitted_at=LATER_AT),
+        ],
         review_comments=[comment("Later request blocking finding.", review_id=2, created_at=LATER_AT)],
         trigger_reactions=[reaction()],
         issue_comments=[

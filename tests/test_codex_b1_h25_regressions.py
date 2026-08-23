@@ -84,6 +84,13 @@ def test_valid_later_request_still_truncates_current_window():
             _valid_request(200, CURRENT_HANDOVER, CURRENT_AT),
             _valid_request(300, NEXT_HANDOVER, MALFORMED_AT),
         ],
+        reviews=[{
+            "id": 1,
+            "user": _bot(),
+            "state": "COMMENTED",
+            "commit_id": CANDIDATE,
+            "submitted_at": CURRENT_AT,
+        }],
         review_comments=[{
             "user": _bot(),
             "commit_id": CANDIDATE,
