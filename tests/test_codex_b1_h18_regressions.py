@@ -27,6 +27,15 @@ def _request() -> dict:
     }
 
 
+def _review() -> dict:
+    return {
+        "id": 1,
+        "user": _bot(),
+        "commit_id": CANDIDATE,
+        "submitted_at": REVIEW_AT,
+    }
+
+
 def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
     result = classify_review_snapshot(
         task_id=TASK_ID,
@@ -34,20 +43,39 @@ def test_explicit_wrong_head_comment_cannot_bind_through_exact_review_id():
         candidate_sha=CANDIDATE,
         request_comment_id=100,
         issue_comments=[_request()],
-        reviews=[
-            {
-                "id": 1,
-                "user": _bot(),
-                "commit_id": CANDIDATE,
-                "submitted_at": REVIEW_AT,
-            }
-        ],
+        reviews=[_review()],
         review_comments=[
             {
                 "user": _bot(),
                 "pull_request_review_id": 1,
                 "commit_id": WRONG,
                 "body": "Wrong-head blocking finding.",
+                "path": "control_engine/codex_b1.py",
+                "line": 1,
+                "created_at": REVIEW_AT,
+            }
+        ],
+        trigger_reactions=[{"user": _bot(), "content": "+1"}],
+    )
+    assert result.status == "COMPLETE"
+    assert result.verdict == "PASS"
+    assert result.findings == ()
+
+
+def test_malformed_explicit_commit_comment_cannot_bind_through_exact_review_id():
+    result = classify_review_snapshot(
+        task_id=TASK_ID,
+        handover_id=HANDOVER_ID,
+        candidate_sha=CANDIDATE,
+        request_comment_id=100,
+        issue_comments=[_request()],
+        reviews=[_review()],
+        review_comments=[
+            {
+                "user": _bot(),
+                "pull_request_review_id": 1,
+                "commit_id": "not-a-valid-sha",
+                "body": "Malformed-metadata blocking finding.",
                 "path": "control_engine/codex_b1.py",
                 "line": 1,
                 "created_at": REVIEW_AT,
@@ -67,14 +95,7 @@ def test_commitless_comment_can_still_bind_through_exact_review_id():
         candidate_sha=CANDIDATE,
         request_comment_id=100,
         issue_comments=[_request()],
-        reviews=[
-            {
-                "id": 1,
-                "user": _bot(),
-                "commit_id": CANDIDATE,
-                "submitted_at": REVIEW_AT,
-            }
-        ],
+        reviews=[_review()],
         review_comments=[
             {
                 "user": _bot(),
