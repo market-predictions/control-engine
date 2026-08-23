@@ -191,8 +191,14 @@ def build_review_request(
         raise CodexB1Error("acceptance_criteria must be a non-empty list")
     if len(acceptance_criteria) > MAX_ACCEPTANCE_CRITERIA:
         raise CodexB1Error("too many acceptance criteria for bounded Codex review")
-    if any(not isinstance(item, str) or not item.strip() for item in acceptance_criteria):
-        raise CodexB1Error("acceptance_criteria contains an invalid item")
+    if any(
+        not isinstance(item, str)
+        or not item.strip()
+        or len(item.splitlines()) != 1
+        or item != item.splitlines()[0]
+        for item in acceptance_criteria
+    ):
+        raise CodexB1Error("acceptance_criteria contains an invalid or multiline item")
 
     criteria = "\n".join(f"- {item.strip()}" for item in acceptance_criteria)
     body = (
@@ -267,6 +273,19 @@ def _bounded_finding(item: dict[str, Any]) -> str | None:
     return location + raw
 
 
+def _bounded_records(
+    records: list[tuple[str, bool]],
+    *,
+    preserve_definite: bool,
+) -> tuple[str, ...]:
+    bounded = list(records[:MAX_FINDINGS])
+    if preserve_definite and bounded and not any(not tagged for _, tagged in bounded):
+        first_definite = next((record for record in records if not record[1]), None)
+        if first_definite is not None:
+            bounded[-1] = first_definite
+    return tuple(finding for finding, _ in bounded)
+
+
 def classify_review_snapshot(
     *,
     task_id: str,
@@ -333,16 +352,6 @@ def classify_review_snapshot(
         if finding:
             finding_records.append((finding, tagged_indeterminate))
 
-    findings = [finding for finding, _ in finding_records]
-    if len(findings) > MAX_FINDINGS:
-        return CodexReviewDecision(
-            status="EXECUTION_UNAVAILABLE",
-            verdict=None,
-            summary="Codex returned more findings than the bounded contract permits.",
-            findings=(),
-            reviewed_commit=candidate_sha if exact_reviews else None,
-        )
-
     indeterminate = [finding for finding, tagged in finding_records if tagged]
     definite = [finding for finding, tagged in finding_records if not tagged]
     if definite:
@@ -350,7 +359,7 @@ def classify_review_snapshot(
             status="COMPLETE",
             verdict="FAIL",
             summary=f"Codex deep review found {len(definite)} blocking finding(s).",
-            findings=tuple(findings),
+            findings=_bounded_records(finding_records, preserve_definite=True),
             reviewed_commit=candidate_sha,
         )
     if indeterminate:
@@ -358,7 +367,7 @@ def classify_review_snapshot(
             status="COMPLETE",
             verdict="INDETERMINATE",
             summary="Codex deep review reported missing or conflicting required evidence.",
-            findings=tuple(findings),
+            findings=_bounded_records(finding_records, preserve_definite=False),
             reviewed_commit=candidate_sha,
         )
     if nonterminal_review_evidence or nonterminal_comment_evidence:
