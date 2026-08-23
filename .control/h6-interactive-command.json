@@ -1,9 +1,9 @@
 {
   "version": "1.0",
-  "action": "claim",
+  "action": "complete",
   "task_id": "CONTROL-199-PR69-INDEPENDENT-B1-ASSURE-H6",
   "candidate_sha": "7674b04763d70b0d10635beafe539bc3097a56fb",
-  "active_run_id": null,
-  "review_comment_id": null,
-  "nonce": "h6-claim-20260823T2247CEST-01"
+  "active_run_id": "run-5a34d605-a552-48bc-a7d0-51abc64a3a9a",
+  "review_comment_id": 5388389335,
+  "nonce": "h6-complete-20260823T2249CEST-01"
 }
