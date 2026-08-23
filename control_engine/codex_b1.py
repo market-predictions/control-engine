@@ -222,9 +222,15 @@ def _is_codex(item: dict[str, Any]) -> bool:
 
 def _commit(item: dict[str, Any]) -> str | None:
     for key in ("commit_id", "original_commit_id", "reviewed_commit"):
+        if key not in item or item.get(key) is None:
+            continue
         value = item.get(key)
         if isinstance(value, str) and _valid_sha(value):
             return value
+        # Explicit but malformed commit metadata must not collapse to absence,
+        # because review-ID fallback is permitted only when commit metadata is
+        # genuinely absent. The empty-string sentinel is always non-candidate.
+        return ""
     return None
 
 
@@ -341,9 +347,6 @@ def classify_review_snapshot(
             reviewed_commit=candidate_sha,
         )
 
-    # A clean PASS is accepted only from the Codex reaction on the exact trigger
-    # comment. The caller fetches reactions for that comment ID, so historical
-    # or later requests on the same candidate cannot satisfy this request.
     clean_reaction = any(
         _is_codex(item) and item.get("content") in {"+1", "thumbs_up"}
         for item in trigger_reactions
