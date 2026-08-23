@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import re
 from dataclasses import dataclass
@@ -34,6 +35,31 @@ class CodexReviewDecision:
 
 def _valid_sha(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{40}", value or ""))
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _event_timestamp(item: dict[str, Any]) -> datetime | None:
+    for key in ("submitted_at", "created_at"):
+        parsed = _parse_timestamp(item.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _belongs_to_request(item: dict[str, Any], request_boundary: datetime) -> bool:
+    timestamp = _event_timestamp(item)
+    return timestamp is not None and timestamp >= request_boundary
 
 
 def request_id(*, task_id: str, handover_id: str, candidate_sha: str) -> str:
@@ -120,6 +146,7 @@ def _bounded_finding(item: dict[str, Any]) -> str | None:
 def classify_review_snapshot(
     *,
     candidate_sha: str,
+    request_created_at: str,
     reviews: list[dict[str, Any]],
     review_comments: list[dict[str, Any]],
     trigger_reactions: list[dict[str, Any]],
@@ -127,6 +154,9 @@ def classify_review_snapshot(
 ) -> CodexReviewDecision:
     if not _valid_sha(candidate_sha):
         raise CodexB1Error("candidate_sha is invalid")
+    request_boundary = _parse_timestamp(request_created_at)
+    if request_boundary is None:
+        raise CodexB1Error("request_created_at must be timezone-aware ISO-8601")
     for collection in (reviews, review_comments, trigger_reactions):
         if not isinstance(collection, list) or any(not isinstance(item, dict) for item in collection):
             raise CodexB1Error("Codex snapshot collections must contain objects")
@@ -135,14 +165,17 @@ def classify_review_snapshot(
     if not isinstance(issue_comments, list) or any(not isinstance(item, dict) for item in issue_comments):
         raise CodexB1Error("issue_comments must contain objects")
 
-    codex_reviews = [item for item in reviews if _is_codex(item)]
+    # Exact candidate identity is not enough when multiple Codex requests target
+    # the same unchanged PR head. Only review evidence created on or after this
+    # exact request's trigger timestamp belongs to the current handshake.
+    codex_reviews = [item for item in reviews if _is_codex(item) and _belongs_to_request(item, request_boundary)]
     exact_reviews = [item for item in codex_reviews if _commit(item) == candidate_sha]
     stale_reviews = [item for item in codex_reviews if _commit(item) not in (None, candidate_sha)]
 
     exact_review_ids = {item.get("id") for item in exact_reviews if item.get("id") is not None}
     finding_records: list[tuple[str, bool]] = []
     for item in review_comments:
-        if not _is_codex(item):
+        if not _is_codex(item) or not _belongs_to_request(item, request_boundary):
             continue
         item_commit = _commit(item)
         review_id = item.get("pull_request_review_id")
@@ -205,7 +238,7 @@ def classify_review_snapshot(
         return CodexReviewDecision(
             status="EXECUTION_UNAVAILABLE",
             verdict=None,
-            summary="Only stale Codex review evidence is present.",
+            summary="Only stale Codex review evidence is present for the current request.",
             findings=(),
             reviewed_commit=_commit(stale_reviews[-1]),
         )
@@ -213,7 +246,7 @@ def classify_review_snapshot(
     return CodexReviewDecision(
         status="PENDING",
         verdict=None,
-        summary="No terminal Codex review evidence is present yet.",
+        summary="No terminal Codex review evidence is present yet for the current request.",
         findings=(),
         reviewed_commit=candidate_sha if exact_reviews else None,
     )
