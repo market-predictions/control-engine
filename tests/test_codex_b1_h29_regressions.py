@@ -2,12 +2,11 @@ from control_engine.codex_b1 import REQUEST_MARKER, classify_review_snapshot, re
 
 CANDIDATE = "a" * 40
 TASK_ID = "T1"
-CURRENT_HANDOVER = "H24"
-PRIOR_HANDOVER = "H23"
-NEXT_HANDOVER = "H25"
-CURRENT_AT = "2026-08-23T09:18:00Z"
-PRIOR_AT = "2026-08-23T09:17:00Z"
-NEXT_AT = "2026-08-23T09:19:00Z"
+CURRENT_HANDOVER = "H29"
+PRIOR_HANDOVER = "H28"
+REQUEST_AT = "2026-08-23T10:29:00Z"
+PRIOR_AT = "2026-08-23T10:20:00Z"
+REVIEW_AT = "2026-08-23T10:32:00Z"
 
 
 def _bot() -> dict:
@@ -29,7 +28,7 @@ def _request(comment_id: int, handover_id: str, created_at: str) -> dict:
     }
 
 
-def _classify(*, issue_comments: list[dict], reviews: list[dict], review_comments: list[dict]):
+def _classify(*, issue_comments: list[dict], reviews: list[dict]):
     return classify_review_snapshot(
         task_id=TASK_ID,
         handover_id=CURRENT_HANDOVER,
@@ -37,78 +36,69 @@ def _classify(*, issue_comments: list[dict], reviews: list[dict], review_comment
         request_comment_id=200,
         issue_comments=issue_comments,
         reviews=reviews,
-        review_comments=review_comments,
+        review_comments=[],
         trigger_reactions=[{"user": _bot(), "content": "+1"}],
     )
 
 
-def test_prior_review_with_duplicate_candidate_request_is_ambiguous_not_clean_pass():
+def test_prior_valid_same_candidate_request_makes_delayed_review_ownership_ambiguous():
     result = _classify(
         issue_comments=[
             _request(100, PRIOR_HANDOVER, PRIOR_AT),
-            _request(200, CURRENT_HANDOVER, CURRENT_AT),
+            _request(200, CURRENT_HANDOVER, REQUEST_AT),
         ],
         reviews=[{
             "id": 1,
             "user": _bot(),
+            "state": "COMMENTED",
             "commit_id": CANDIDATE,
-            "submitted_at": CURRENT_AT,
+            "submitted_at": REVIEW_AT,
         }],
-        review_comments=[],
     )
     assert result.status == "EXECUTION_UNAVAILABLE"
     assert result.verdict is None
     assert "same candidate" in result.summary
 
 
-def test_prior_finding_with_duplicate_candidate_request_is_ambiguous_not_clean_pass():
+def test_missing_review_state_is_not_terminal_even_with_submitted_at():
     result = _classify(
-        issue_comments=[
-            _request(100, PRIOR_HANDOVER, PRIOR_AT),
-            _request(200, CURRENT_HANDOVER, CURRENT_AT),
-        ],
-        reviews=[],
-        review_comments=[{
-            "user": _bot(),
-            "commit_id": CANDIDATE,
-            "body": "Prior-request finding with second-level timestamp collision.",
-            "created_at": CURRENT_AT,
-        }],
-    )
-    assert result.status == "EXECUTION_UNAVAILABLE"
-    assert result.verdict is None
-    assert result.findings == ()
-
-
-def test_later_duplicate_candidate_request_is_ambiguous_for_current_request():
-    result = _classify(
-        issue_comments=[
-            _request(200, CURRENT_HANDOVER, CURRENT_AT),
-            _request(300, NEXT_HANDOVER, NEXT_AT),
-        ],
+        issue_comments=[_request(200, CURRENT_HANDOVER, REQUEST_AT)],
         reviews=[{
             "id": 2,
             "user": _bot(),
             "commit_id": CANDIDATE,
-            "submitted_at": NEXT_AT,
+            "submitted_at": REVIEW_AT,
         }],
-        review_comments=[],
     )
-    assert result.status == "EXECUTION_UNAVAILABLE"
+    assert result.status == "PENDING"
     assert result.verdict is None
 
 
-def test_first_request_can_accept_same_second_exact_review_when_no_duplicate_candidate_request_exists():
+def test_null_review_state_is_not_terminal_even_with_submitted_at():
     result = _classify(
-        issue_comments=[_request(200, CURRENT_HANDOVER, CURRENT_AT)],
+        issue_comments=[_request(200, CURRENT_HANDOVER, REQUEST_AT)],
         reviews=[{
             "id": 3,
             "user": _bot(),
+            "state": None,
+            "commit_id": CANDIDATE,
+            "submitted_at": REVIEW_AT,
+        }],
+    )
+    assert result.status == "PENDING"
+    assert result.verdict is None
+
+
+def test_explicit_terminal_exact_head_review_and_clean_reaction_can_pass():
+    result = _classify(
+        issue_comments=[_request(200, CURRENT_HANDOVER, REQUEST_AT)],
+        reviews=[{
+            "id": 4,
+            "user": _bot(),
             "state": "COMMENTED",
             "commit_id": CANDIDATE,
-            "submitted_at": CURRENT_AT,
+            "submitted_at": REVIEW_AT,
         }],
-        review_comments=[],
     )
     assert result.status == "COMPLETE"
     assert result.verdict == "PASS"

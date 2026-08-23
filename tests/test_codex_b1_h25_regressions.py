@@ -78,32 +78,25 @@ def test_malformed_later_request_cannot_truncate_current_finding_window():
     assert result.findings
 
 
-def test_valid_later_request_still_truncates_current_window():
+def test_second_valid_same_candidate_request_fails_closed_instead_of_truncating():
     result = _classify(
         issue_comments=[
             _valid_request(200, CURRENT_HANDOVER, CURRENT_AT),
             _valid_request(300, NEXT_HANDOVER, MALFORMED_AT),
         ],
-        reviews=[{
-            "id": 1,
-            "user": _bot(),
-            "state": "COMMENTED",
-            "commit_id": CANDIDATE,
-            "submitted_at": CURRENT_AT,
-        }],
         review_comments=[{
             "user": _bot(),
             "commit_id": CANDIDATE,
-            "body": "Finding belongs to the later valid request.",
+            "body": "Finding belongs to an ambiguous duplicate candidate request.",
             "created_at": FINDING_AT,
         }],
     )
-    assert result.status == "COMPLETE"
-    assert result.verdict == "PASS"
+    assert result.status == "EXECUTION_UNAVAILABLE"
+    assert result.verdict is None
     assert result.findings == ()
 
 
-def test_malformed_prior_request_does_not_create_false_lower_boundary_ambiguity():
+def test_malformed_prior_request_does_not_create_false_duplicate_ambiguity():
     result = _classify(
         issue_comments=[
             _malformed_candidate_only_request(100, "2026-08-23T09:43:00Z"),
@@ -112,6 +105,7 @@ def test_malformed_prior_request_does_not_create_false_lower_boundary_ambiguity(
         reviews=[{
             "id": 1,
             "user": _bot(),
+            "state": "COMMENTED",
             "commit_id": CANDIDATE,
             "submitted_at": CURRENT_AT,
         }],

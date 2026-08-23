@@ -31,6 +31,7 @@ def _review() -> dict:
     return {
         "id": 1,
         "user": _bot(),
+        "state": "COMMENTED",
         "commit_id": CANDIDATE,
         "submitted_at": REVIEW_AT,
     }

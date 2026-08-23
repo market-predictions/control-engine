@@ -28,6 +28,7 @@ def review(review_id=1, sha=CANDIDATE, *, submitted_at=CURRENT_AT):
     return {
         "id": review_id,
         "user": bot(),
+        "state": "COMMENTED",
         "commit_id": sha,
         "body": "Codex Review",
         "submitted_at": submitted_at,
@@ -305,13 +306,10 @@ def test_prior_same_head_finding_cannot_poison_new_request_clean_pass():
     assert result.findings == ()
 
 
-def test_later_same_head_finding_cannot_poison_exact_request_clean_pass():
+def test_second_valid_same_candidate_request_fails_closed():
     result = classify(
         candidate_sha=CANDIDATE,
-        reviews=[
-            review(review_id=1, submitted_at=CURRENT_AT),
-            review(review_id=2, submitted_at=LATER_AT),
-        ],
+        reviews=[review(review_id=2, submitted_at=LATER_AT)],
         review_comments=[comment("Later request blocking finding.", review_id=2, created_at=LATER_AT)],
         trigger_reactions=[reaction()],
         issue_comments=[
@@ -319,12 +317,12 @@ def test_later_same_head_finding_cannot_poison_exact_request_clean_pass():
             request_comment(101, task_id="T2", handover_id="H2", created_at=NEXT_AT),
         ],
     )
-    assert result.status == "COMPLETE"
-    assert result.verdict == "PASS"
+    assert result.status == "EXECUTION_UNAVAILABLE"
+    assert result.verdict is None
     assert result.findings == ()
 
 
-def test_current_same_head_finding_still_fails_current_request_and_later_is_excluded():
+def test_duplicate_same_candidate_request_precedes_finding_classification():
     result = classify(
         candidate_sha=CANDIDATE,
         reviews=[
@@ -341,10 +339,9 @@ def test_current_same_head_finding_still_fails_current_request_and_later_is_excl
             request_comment(101, task_id="T2", handover_id="H2", created_at=NEXT_AT),
         ],
     )
-    assert result.status == "COMPLETE"
-    assert result.verdict == "FAIL"
-    assert len(result.findings) == 1
-    assert "Current blocking finding" in result.findings[0]
+    assert result.status == "EXECUTION_UNAVAILABLE"
+    assert result.verdict is None
+    assert result.findings == ()
 
 
 def test_same_timestamp_adjacent_requests_fail_closed():
@@ -390,6 +387,7 @@ def test_non_codex_actor_is_ignored():
         reviews=[{
             "id": 1,
             "user": {"login": "github-actions[bot]"},
+            "state": "COMMENTED",
             "commit_id": CANDIDATE,
             "submitted_at": CURRENT_AT,
         }],

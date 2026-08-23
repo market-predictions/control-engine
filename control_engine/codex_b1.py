@@ -10,6 +10,7 @@ PROTOCOL_ID = "CONTROL_CODEX_DEEP_B1_V1"
 REQUEST_MARKER = "CONTROL_B1_CODEX_DEEP_REQUEST_V1"
 INDETERMINATE_MARKER = "CONTROL_B1_INDETERMINATE:"
 CODEX_BOT_LOGINS = frozenset({"chatgpt-codex-connector", "chatgpt-codex-connector[bot]"})
+TERMINAL_REVIEW_STATES = frozenset({"COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 MAX_ACCEPTANCE_CRITERIA = 40
 MAX_REQUEST_BYTES = 12_000
 MAX_FINDINGS = 40
@@ -145,8 +146,7 @@ def _request_window(
     if request_start is None:
         raise CodexB1Error("exact Codex request comment has no valid created_at timestamp")
 
-    later_requests: list[tuple[datetime, int]] = []
-    prior_same_timestamp = False
+    duplicate_same_candidate = False
     has_prior_request = False
     for item in issue_comments:
         other_id = item.get("id")
@@ -160,23 +160,17 @@ def _request_window(
         other_time = _parse_timestamp(item.get("created_at"))
         if other_time is None:
             raise CodexB1Error("Codex request comment has no valid created_at timestamp")
-        if other_id > request_comment_id:
-            if other_time < request_start:
-                raise CodexB1Error("Codex request comment chronology is inconsistent")
-            later_requests.append((other_time, other_id))
-        elif other_time > request_start:
-            raise CodexB1Error("Codex request comment chronology is inconsistent")
-        else:
+        duplicate_same_candidate = True
+        if other_id < request_comment_id:
             has_prior_request = True
-            if other_time == request_start:
-                prior_same_timestamp = True
+        if other_id > request_comment_id and other_time < request_start:
+            raise CodexB1Error("Codex request comment chronology is inconsistent")
+        if other_id < request_comment_id and other_time > request_start:
+            raise CodexB1Error("Codex request comment chronology is inconsistent")
 
-    if prior_same_timestamp:
+    if duplicate_same_candidate:
         return request_start, None, True, has_prior_request
-    if not later_requests:
-        return request_start, None, False, has_prior_request
-    request_end, _ = min(later_requests, key=lambda value: (value[0], value[1]))
-    return request_start, request_end, request_end == request_start, has_prior_request
+    return request_start, None, False, False
 
 
 def build_review_request(
@@ -227,10 +221,7 @@ def _is_codex(item: dict[str, Any]) -> bool:
 
 
 def _review_is_terminal(item: dict[str, Any]) -> bool:
-    state = item.get("state")
-    if state == "PENDING":
-        return False
-    if state is not None and state not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+    if item.get("state") not in TERMINAL_REVIEW_STATES:
         return False
     return _parse_timestamp(item.get("submitted_at")) is not None
 
@@ -300,26 +291,7 @@ def classify_review_snapshot(
         return CodexReviewDecision(
             status="EXECUTION_UNAVAILABLE",
             verdict=None,
-            summary="Adjacent Codex requests share a timestamp, so review ownership is ambiguous.",
-            findings=(),
-            reviewed_commit=None,
-        )
-
-    boundary_times: set[datetime] = set()
-    if has_prior_request:
-        boundary_times.add(request_start)
-    if request_end is not None:
-        boundary_times.add(request_end)
-    boundary_evidence = any(
-        _is_codex(item) and _event_timestamp(item) in boundary_times
-        for collection in (reviews, review_comments)
-        for item in collection
-    )
-    if boundary_evidence:
-        return CodexReviewDecision(
-            status="EXECUTION_UNAVAILABLE",
-            verdict=None,
-            summary="Codex review evidence falls on an adjacent request timestamp boundary, so ownership is ambiguous.",
+            summary="Multiple valid Codex requests target the same candidate, so exact review ownership is ambiguous.",
             findings=(),
             reviewed_commit=None,
         )
