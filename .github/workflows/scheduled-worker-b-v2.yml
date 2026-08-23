@@ -1,6 +1,7 @@
-name: Provider B Recovery V2
-# Recovery-only provider-portable B1 path. Normal semantic B1 target is ChatGPT Work.
-# No schedule or push trigger: this workflow must never race a Work-B1 canary/claim.
+name: Legacy Provider B Recovery V2
+# Explicit manual recovery-only provider-portable B1 path.
+# Normal semantic B1 target is Canonical B1 Dual Executor V1.
+# No schedule or push trigger: this workflow must never race the canonical B1 workflow.
 
 on:
   workflow_dispatch:
@@ -61,7 +62,7 @@ jobs:
           bash -n scripts/github_app_preflight.sh
           python -m py_compile control_engine/scheduled_worker_b.py
 
-      - name: Reconcile, claim and execute one independent B1 assurance task
+      - name: Reconcile, claim and execute one independent B1 recovery task
         id: runtime
         if: steps.app-preflight.outcome == 'success' && steps.app-token.outcome == 'success'
         continue-on-error: true
