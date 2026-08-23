@@ -399,7 +399,7 @@ def classify_review_snapshot(
         _is_codex(item) and item.get("content") in {"+1", "thumbs_up"}
         for item in trigger_reactions
     )
-    if clean_reaction:
+    if clean_reaction and exact_reviews:
         return CodexReviewDecision(
             status="COMPLETE",
             verdict="PASS",
@@ -415,6 +415,15 @@ def classify_review_snapshot(
             summary="Only stale Codex review evidence is present for the current request.",
             findings=(),
             reviewed_commit=_commit(stale_reviews[-1]),
+        )
+
+    if clean_reaction:
+        return CodexReviewDecision(
+            status="PENDING",
+            verdict=None,
+            summary="Clean Codex reaction is present, but no terminal exact-head review is visible yet.",
+            findings=(),
+            reviewed_commit=None,
         )
 
     return CodexReviewDecision(
