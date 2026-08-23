@@ -329,6 +329,11 @@ def classify_review_snapshot(
         for item in reviews
         if _is_codex(item) and _belongs_to_request(item, request_start, request_end)
     ]
+    nonterminal_reviews = [item for item in codex_reviews if not _review_is_terminal(item)]
+    nonterminal_review_evidence = any(
+        _commit(item) in (None, candidate_sha)
+        for item in nonterminal_reviews
+    )
     terminal_reviews = [item for item in codex_reviews if _review_is_terminal(item)]
     exact_reviews = [item for item in terminal_reviews if _commit(item) == candidate_sha]
     stale_reviews = [item for item in terminal_reviews if _commit(item) not in (None, candidate_sha)]
@@ -381,11 +386,11 @@ def classify_review_snapshot(
             findings=tuple(findings),
             reviewed_commit=candidate_sha,
         )
-    if nonterminal_comment_evidence:
+    if nonterminal_review_evidence or nonterminal_comment_evidence:
         return CodexReviewDecision(
             status="PENDING",
             verdict=None,
-            summary="Codex review comment evidence is not yet bound to a terminal exact-head review.",
+            summary="Codex review evidence is not yet terminal for the exact current request.",
             findings=(),
             reviewed_commit=None,
         )
