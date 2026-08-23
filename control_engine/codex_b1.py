@@ -222,14 +222,14 @@ def _is_codex(item: dict[str, Any]) -> bool:
 
 def _commit(item: dict[str, Any]) -> str | None:
     for key in ("commit_id", "original_commit_id", "reviewed_commit"):
-        if key not in item or item.get(key) is None:
+        if key not in item:
             continue
         value = item.get(key)
         if isinstance(value, str) and _valid_sha(value):
             return value
-        # Explicit but malformed commit metadata must not collapse to absence,
-        # because review-ID fallback is permitted only when commit metadata is
-        # genuinely absent. The empty-string sentinel is always non-candidate.
+        # Any explicitly supplied invalid value, including null, must remain
+        # distinguishable from genuine absence. Review-ID fallback is allowed
+        # only when no commit metadata key is present at all.
         return ""
     return None
 
@@ -272,10 +272,6 @@ def classify_review_snapshot(
         if not isinstance(collection, list) or any(not isinstance(item, dict) for item in collection):
             raise CodexB1Error("Codex snapshot collections must contain objects")
 
-    # Bind review evidence to the exact GitHub request comment and its full
-    # task/handover/candidate/request-hash identity. The next request for the
-    # same candidate is an exclusive upper bound, so later same-head handshakes
-    # cannot poison this request. Same-timestamp adjacent requests fail closed.
     request_start, request_end, ambiguous_window = _request_window(
         task_id=task_id,
         handover_id=handover_id,
