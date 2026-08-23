@@ -221,17 +221,19 @@ def _is_codex(item: dict[str, Any]) -> bool:
 
 
 def _commit(item: dict[str, Any]) -> str | None:
+    present_values: list[str] = []
     for key in ("commit_id", "original_commit_id", "reviewed_commit"):
         if key not in item:
             continue
         value = item.get(key)
-        if isinstance(value, str) and _valid_sha(value):
-            return value
-        # Any explicitly supplied invalid value, including null, must remain
-        # distinguishable from genuine absence. Review-ID fallback is allowed
-        # only when no commit metadata key is present at all.
+        if not isinstance(value, str) or not _valid_sha(value):
+            return ""
+        present_values.append(value)
+    if not present_values:
+        return None
+    if len(set(present_values)) != 1:
         return ""
-    return None
+    return present_values[0]
 
 
 def _bounded_finding(item: dict[str, Any]) -> str | None:
