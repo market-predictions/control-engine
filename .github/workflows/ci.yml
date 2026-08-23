@@ -49,7 +49,7 @@ jobs:
           PY
       - name: Compile engine and actuators
         run: |
-          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/scheduled_worker_a.py control_engine/scheduled_worker_b.py control_engine/cloudflare_b1.py control_engine/codex_b1.py scripts/cloudflare_b1_shadow.py scripts/codex_b1_canary.py
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/scheduled_worker_a.py control_engine/scheduled_worker_b.py control_engine/cloudflare_b1.py control_engine/codex_b1.py control_engine/codex_b1_strict.py scripts/cloudflare_b1_shadow.py scripts/codex_b1_canary.py scripts/canonical_b1_dual_executor_v1.py
           bash -n scripts/scheduled_worker_a_v2.sh
           bash -n scripts/scheduled_worker_b_v2.sh
       - name: Verify immutable consumer bundle
