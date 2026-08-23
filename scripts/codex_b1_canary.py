@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 import sys
 
-from control_engine.codex_b1 import build_review_request, classify_review_snapshot
+from control_engine.codex_b1 import build_review_request
+from control_engine.codex_b1_strict import classify_trusted_review_snapshot
 
 
 def _load(path: str) -> list[dict]:
@@ -16,24 +17,32 @@ def _load(path: str) -> list[dict]:
     return value
 
 
+def _criteria(path: str) -> list[str]:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must contain a JSON array")
+    return value
+
+
 def command_request(args: argparse.Namespace) -> int:
-    criteria = json.loads(Path(args.criteria).read_text(encoding="utf-8"))
     body = build_review_request(
         task_id=args.task_id,
         handover_id=args.handover_id,
         candidate_sha=args.candidate_sha,
-        acceptance_criteria=criteria,
+        acceptance_criteria=_criteria(args.criteria),
     )
     Path(args.output).write_text(body, encoding="utf-8")
     return 0
 
 
 def command_classify(args: argparse.Namespace) -> int:
-    decision = classify_review_snapshot(
+    decision = classify_trusted_review_snapshot(
         task_id=args.task_id,
         handover_id=args.handover_id,
         candidate_sha=args.candidate_sha,
         request_comment_id=args.request_comment_id,
+        acceptance_criteria=_criteria(args.criteria),
+        trusted_actuator_login=args.trusted_actuator_login,
         reviews=_load(args.reviews),
         review_comments=_load(args.review_comments),
         trigger_reactions=_load(args.reactions),
@@ -72,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--handover-id", required=True)
     classify.add_argument("--candidate-sha", required=True)
     classify.add_argument("--request-comment-id", required=True, type=int)
+    classify.add_argument("--criteria", required=True)
+    classify.add_argument("--trusted-actuator-login", required=True)
     classify.add_argument("--reviews", required=True)
     classify.add_argument("--review-comments", required=True)
     classify.add_argument("--reactions", required=True)
