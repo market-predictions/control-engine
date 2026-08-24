@@ -11,6 +11,8 @@ on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+  issue_comment:
+    types: [created]
   push:
     branches:
       - main
@@ -29,13 +31,18 @@ concurrency:
 
 jobs:
   reconcile:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'market-predictions/control-engine' &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.comment.user.login == 'market-predictions' &&
+        github.event.comment.body == 'CONTROL_RUNTIME_RECONCILE_V1'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout public deterministic actuator code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: main
           persist-credentials: false
           fetch-depth: 1
 
@@ -76,7 +83,7 @@ jobs:
         run: python scripts/private_reconcile_apply.py
 
       - name: Publish non-semantic liveness status
-        if: always()
+        if: always() && github.event_name != 'issue_comment'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
