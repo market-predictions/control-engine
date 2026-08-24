@@ -1,29 +1,101 @@
-name: Scheduled Worker A V2 — Retired Semantic Executor
+name: Control deterministic runtime reconciler
 
 # CONTROL #200 / principal boundary 2026-08-24
-# Emergency fail-closed authority reduction:
-# Worker A implementation intelligence is native ChatGPT chat only.
-# This historical GitHub/provider A executor is intentionally non-recurring and
-# cannot claim or semantically execute implementation_operations work.
-# Keep workflow_dispatch only as a harmless retirement/readback surface.
+# Worker A semantic intelligence is native ChatGPT chat only.
+# This workflow is NOT Worker A. It performs deterministic canonical runtime
+# reconciliation only: expired-state cleanup plus PROJECT_INTAKE -> one queue.
+# It may not claim work, invoke semantic inference, repair candidates, assure,
+# integrate, merge, release, or create another queue/state plane.
 
 on:
+  schedule:
+    - cron: '*/10 * * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/scheduled-worker-a-v2.yml'
+      - 'scripts/private_reconcile_apply.py'
+      - 'tests/test_private_reconcile_apply.py'
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
-  group: control-scheduled-worker-a-v2-retired
+  group: control-deterministic-runtime-reconciler-v1
   cancel-in-progress: false
 
 jobs:
-  retirement-proof:
+  reconcile:
     if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Prove semantic A executor is retired
+      - name: Checkout public deterministic actuator code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Preflight GitHub App identity and installation
+        id: app-preflight
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived private-state token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Validate deterministic reconciler syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/github_app_preflight.sh
+          python -m py_compile scripts/private_reconcile_apply.py scripts/project_integration_executor.py
+
+      - name: Reconcile canonical private runtime state
+        id: reconcile
+        shell: bash
+        env:
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python scripts/private_reconcile_apply.py
+
+      - name: Publish non-semantic liveness status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ '${{ steps.reconcile.outcome }}' = 'success' ]; then
+            state=success
+            description=DETERMINISTIC_RUNTIME_RECONCILE_OK
+          else
+            state=failure
+            description=DETERMINISTIC_RUNTIME_RECONCILE_FAILED
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/runtime-reconciler" \
+            -f description="$description" >/dev/null
+
+      - name: Prove semantic Worker A remains retired
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -31,3 +103,4 @@ jobs:
           echo 'WORKER_A_SEMANTIC_RUNTIME=CHATGPT_CHAT_ONLY'
           echo 'GITHUB_ACTIONS_A_IMPLEMENTATION_INFERENCE=false'
           echo 'PROVIDER_A_IMPLEMENTATION_INFERENCE=false'
+          echo 'CONTROL_GITHUB_ROLE=DETERMINISTIC_STATE_RECONCILIATION_ONLY'
