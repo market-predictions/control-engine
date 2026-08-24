@@ -86,7 +86,7 @@ jobs:
           test "$(jq -r '.selected' selection.json)" = true
           test "$(jq -r '.task_id' selection.json)" = CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4
           test "$(jq -r '.candidate_sha' selection.json)" = 9095d820bea744e93603654bbc548f63a4ffa61f
-          python private-code/tools/control_connected_worker_runtime_v1.py claim \
+          PYTHONPATH="$PWD/private-code" python private-code/tools/control_connected_worker_runtime_v1.py claim \
             --runtime-root runtime-state \
             --runtime-ref control-runtime-state \
             --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
