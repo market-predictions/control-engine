@@ -17,6 +17,7 @@ env:
   CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
   CONTROL_RUNTIME_REF: control-runtime-state
   CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
   CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
   CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
   CONTROL_PROFILE_PATH: control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json
@@ -92,6 +93,7 @@ jobs:
             .lifecycle_authority.role == "governance_release_assurance" and
             .lifecycle_authority.worker_instance == "B1" and
             .lifecycle_authority.capacity == 1 and
+            .standard.max_tokens == 1024 and
             .principal_manual_relay_count == 0
           ' "$profile" >/dev/null
           echo 'active=true' >> "$GITHUB_OUTPUT"
@@ -110,14 +112,32 @@ jobs:
           a_code="$RUNNER_TEMP/control-a-code"
           git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_B_CODE_REF" "$private_url" "$b_code"
           git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_A_CODE_REF" "$private_url" "$a_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]
           [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_A_CODE_SHA" ]
           printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+
+          assert_active_profile() {
+            local state="$1"
+            local profile="$state/$CONTROL_PROFILE_PATH"
+            [ -f "$profile" ]
+            jq -e '
+              .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+              .version == "1.0" and
+              .status == "ACTIVE" and
+              .lifecycle_authority.role == "governance_release_assurance" and
+              .lifecycle_authority.worker_instance == "B1" and
+              .lifecycle_authority.capacity == 1 and
+              .standard.max_tokens == 1024 and
+              .principal_manual_relay_count == 0
+            ' "$profile" >/dev/null
+          }
 
           reconciled=false
           for cas_attempt in 1 2 3; do
             state="$RUNNER_TEMP/reconcile-${cas_attempt}"
             rm -rf "$state"
             git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            assert_active_profile "$state"
             git -C "$state" config user.name 'control-canonical-b1[bot]'
             git -C "$state" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
             observed_ref="$(git -C "$state" rev-parse HEAD)"
@@ -141,6 +161,7 @@ jobs:
           state="$RUNNER_TEMP/claim-state"
           rm -rf "$state"
           git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          assert_active_profile "$state"
           selection="$RUNNER_TEMP/selection.json"
           python control_engine/scheduled_worker_b.py select-b1 --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$selection" >/dev/null
           if [ "$(jq -r '.selected' "$selection")" != true ]; then
