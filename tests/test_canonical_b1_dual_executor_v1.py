@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -232,37 +231,69 @@ def test_paginated_list_fails_closed_on_non_list_later_page(monkeypatch):
         mod._gh_list_all("token", "/repos/o/r/issues/70/comments")
 
 
-def test_deep_observes_page2_blocker_despite_clean_completion_reaction(monkeypatch):
+def test_deep_real_classifier_observes_page2_blocker_despite_clean_completion_reaction(monkeypatch):
     monkeypatch.setenv("CONTROL_GITHUB_WRITE_TOKEN", "token")
+    observed = []
+    request_body = {"value": None}
+    request_created_at = "2026-08-24T22:00:00Z"
+    review_id = 777
 
     def fake_gh_json(token, method, path, payload=None, accept=None):
+        observed.append((method, path))
         if method == "POST":
+            assert path == "/repos/market-predictions/control-engine/issues/70/comments"
+            assert isinstance(payload, dict) and isinstance(payload.get("body"), str)
+            request_body["value"] = payload["body"]
             return {"id": 321, "user": {"login": "market-predictions"}}
-        if "/reviews?" in path:
-            if "&page=1" in path:
-                return [{"page": 1} for _ in range(100)]
-            return [{"page": 2, "finding": "P1 BLOCKER"}]
-        if "/pulls/70/comments?" in path:
-            return []
-        if "/reactions?" in path:
-            return [{"content": "+1", "user": {"login": "chatgpt-codex-connector[bot]"}}]
-        if "/issues/70/comments?" in path:
-            return []
-        raise AssertionError(path)
 
-    def fake_classifier(**kwargs):
-        assert any(item.get("page") == 2 and item.get("finding") == "P1 BLOCKER" for item in kwargs["reviews"])
-        assert kwargs["trigger_reactions"][0]["content"] == "+1"
-        return SimpleNamespace(
-            status="COMPLETE",
-            verdict="FAIL",
-            summary="later-page blocker observed",
-            findings=("P1 BLOCKER",),
-            reviewed_commit=CANDIDATE,
-        )
+        if "/pulls/70/reviews?" in path:
+            assert "&page=1" in path
+            return [{
+                "id": review_id,
+                "user": {"login": "chatgpt-codex-connector"},
+                "state": "COMMENTED",
+                "submitted_at": "2026-08-24T22:00:10Z",
+                "commit_id": CANDIDATE,
+                "body": "Codex terminal exact-head review",
+            }]
+
+        if "/pulls/70/comments?" in path:
+            if "&page=1" in path:
+                return [{} for _ in range(100)]
+            if "&page=2" in path:
+                return [{
+                    "id": 888,
+                    "user": {"login": "chatgpt-codex-connector"},
+                    "pull_request_review_id": review_id,
+                    "commit_id": CANDIDATE,
+                    "body": "P1 BLOCKER",
+                    "created_at": "2026-08-24T22:00:11Z",
+                    "path": "tests/test_canonical_b1_dual_executor_v1.py",
+                    "line": 265,
+                }]
+            raise AssertionError(path)
+
+        if "/issues/comments/321/reactions?" in path:
+            assert "&page=1" in path
+            return [{
+                "content": "+1",
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+            }]
+
+        if "/issues/70/comments?" in path:
+            assert "&page=1" in path
+            assert request_body["value"] is not None
+            return [{
+                "id": 321,
+                "user": {"login": "market-predictions"},
+                "body": request_body["value"],
+                "created_at": request_created_at,
+                "updated_at": request_created_at,
+            }]
+
+        raise AssertionError((method, path))
 
     monkeypatch.setattr(mod, "_gh_json", fake_gh_json)
-    monkeypatch.setattr(mod, "classify_trusted_review_snapshot", fake_classifier)
     task = _queue()["tasks"][0]
     result = mod._deep(
         task=task,
@@ -272,5 +303,8 @@ def test_deep_observes_page2_blocker_despite_clean_completion_reaction(monkeypat
         pr_number=70,
         timeout_seconds=1,
     )
+
     assert result["outcome"] == "FAIL"
-    assert result["findings"] == ["P1 BLOCKER"]
+    assert any("P1 BLOCKER" in finding for finding in result["findings"])
+    assert ("GET", "/repos/market-predictions/control-engine/pulls/70/comments?per_page=100&page=2") in observed
+    assert ("GET", "/repos/market-predictions/control-engine/pulls/70/comments?per_page=100&page=3") not in observed
