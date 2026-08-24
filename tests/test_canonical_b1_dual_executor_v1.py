@@ -205,9 +205,9 @@ def test_paginated_list_collects_every_page_before_return(monkeypatch):
 
     def fake_gh_json(token, method, path, payload=None, accept=None):
         observed.append(path)
-        if "page=1" in path:
+        if "&page=1" in path:
             return [{"page": 1, "n": n} for n in range(100)]
-        if "page=2" in path:
+        if "&page=2" in path:
             return [{"page": 2, "finding": "P1 BLOCKER"}]
         raise AssertionError(path)
 
@@ -223,7 +223,7 @@ def test_paginated_list_collects_every_page_before_return(monkeypatch):
 
 def test_paginated_list_fails_closed_on_non_list_later_page(monkeypatch):
     def fake_gh_json(token, method, path, payload=None, accept=None):
-        if "page=1" in path:
+        if "&page=1" in path:
             return [{} for _ in range(100)]
         return {"message": "malformed page"}
 
@@ -239,7 +239,7 @@ def test_deep_observes_page2_blocker_despite_clean_completion_reaction(monkeypat
         if method == "POST":
             return {"id": 321, "user": {"login": "market-predictions"}}
         if "/reviews?" in path:
-            if "page=1" in path:
+            if "&page=1" in path:
                 return [{"page": 1} for _ in range(100)]
             return [{"page": 2, "finding": "P1 BLOCKER"}]
         if "/pulls/70/comments?" in path:
