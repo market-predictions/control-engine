@@ -24,14 +24,10 @@ def test_reconciler_is_deterministic_state_only():
         "control-zero-relay-assurance.yml",
         "claim_task",
         "claim_selected",
-        "semantic",
-        "inference",
     )
-    lowered = text.lower()
     for token in forbidden:
-        if token in {"semantic", "inference"}:
-            continue
         assert token not in text
+    lowered = text.lower()
     assert "invoke semantic inference" in lowered  # prohibition in docstring only
 
 
@@ -41,6 +37,14 @@ def test_workflow_runs_reconciliation_but_not_worker_a_compute():
     assert "CONTROL_GITHUB_APP_PRIVATE_KEY" in text
     assert "permission-contents: 'write'" in text
     assert "cron: '*/10 * * * *'" in text
+
+    # Manual Run A can wake deterministic reconciliation immediately, but only
+    # through an exact principal-authored marker. This is lifecycle/state work,
+    # never semantic Worker-A execution.
+    assert "issue_comment:" in text
+    assert "CONTROL_RUNTIME_RECONCILE_V1" in text
+    assert "github.event.comment.user.login == 'market-predictions'" in text
+    assert "github.event.comment.body == 'CONTROL_RUNTIME_RECONCILE_V1'" in text
 
     forbidden = (
         "CONTROL_CLOUDFLARE_API_TOKEN",
