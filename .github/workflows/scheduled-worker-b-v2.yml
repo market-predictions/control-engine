@@ -1,121 +1,29 @@
-name: Provider B Recovery V2
-# Recovery-only provider-portable B1 path. Normal semantic B1 target is ChatGPT Work.
-# No schedule or push trigger: this workflow must never race a Work-B1 canary/claim.
+name: Retired Provider B Recovery V2
+
+# RETIRED 2026-08-24.
+# CONTROL_ASSURANCE_EXECUTION_PROFILE_V1 permits exactly one logical B1 slot.
+# Normal semantic execution is deterministic STANDARD (Cloudflare pinned GPT-OSS)
+# or DEEP (native Codex GitHub review) through the canonical Gate-8 workflow.
+# This legacy provider-portable recovery path is permanently non-executable as
+# semantic assurance and may not claim/write private Control state.
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  statuses: write
-
-concurrency:
-  group: control-scheduled-worker-b-v2
-  cancel-in-progress: false
 
 jobs:
-  scheduled-b1:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+  retirement-proof:
+    if: github.repository == 'market-predictions/control-engine'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - name: Checkout exact public actuator code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 exact commit observed in public CI
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Preflight GitHub App identity and installation
-        id: app-preflight
-        continue-on-error: true
-        shell: bash
-        env:
-          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
-          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
-        run: bash scripts/github_app_preflight.sh
-
-      - name: Create short-lived Control GitHub App token
-        id: app-token
-        if: steps.app-preflight.outcome == 'success'
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 exact release commit
-        with:
-          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
-          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          permission-contents: 'write'
-          permission-actions: 'read'
-          permission-pull-requests: 'read'
-
-      - name: Setup Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5 exact commit observed in public CI
-        with:
-          python-version: '3.12'
-
-      - name: Validate actuator syntax before private access
+      - name: Prove legacy Provider B is non-executable
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/scheduled_worker_b_v2.sh
-          bash -n scripts/scheduled_worker_b_v2_resilient.sh
-          bash -n scripts/github_app_preflight.sh
-          python -m py_compile control_engine/scheduled_worker_b.py
-
-      - name: Reconcile, claim and execute one independent B1 assurance task
-        id: runtime
-        if: steps.app-preflight.outcome == 'success' && steps.app-token.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        env:
-          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
-          CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
-          CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
-          CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED }}
-        run: |
-          set +e
-          output="$(bash scripts/scheduled_worker_b_v2_resilient.sh 2>&1)"
-          rc=$?
-          status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_B_V2=//p' | tail -n 1)"
-          diagnostic="$(printf '%s\n' "$output" | sed -n '/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN$/,/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_END$/p')"
-          if [ -n "$diagnostic" ]; then
-            printf '%s\n' "$diagnostic"
-          fi
-          if [ -z "$status_class" ]; then
-            status_class=RUNTIME_FAILED_NO_STATUS
-          fi
-          printf 'status_class=%s\n' "$status_class" >> "$GITHUB_OUTPUT"
-          exit "$rc"
-
-      - name: Publish non-sensitive liveness status
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREFLIGHT_OUTCOME: ${{ steps.app-preflight.outcome }}
-          PREFLIGHT_CLASS: ${{ steps.app-preflight.outputs.status_class }}
-          APP_OUTCOME: ${{ steps.app-token.outcome }}
-          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
-          RUNTIME_CLASS: ${{ steps.runtime.outputs.status_class }}
-        run: |
-          set -euo pipefail
-          state=failure
-          description=RUNTIME_SKIPPED_OR_UNCLASSIFIED
-          if [ "$PREFLIGHT_OUTCOME" != "success" ]; then
-            description="${PREFLIGHT_CLASS:-APP_PREFLIGHT_FAILED}"
-          elif [ "$APP_OUTCOME" != "success" ]; then
-            description=APP_TOKEN_CREATION_FAILED
-          elif [ -n "${RUNTIME_CLASS:-}" ]; then
-            description="$RUNTIME_CLASS"
-            if [ "$RUNTIME_OUTCOME" = "success" ]; then state=success; fi
-          fi
-          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="$state" \
-            -f context="control/swb-v2/${description}" \
-            -f description="$description" >/dev/null
-
-          if [ "$PREFLIGHT_OUTCOME" != "success" ] || [ "$APP_OUTCOME" != "success" ]; then
-            exit 1
-          fi
-          if [ "$RUNTIME_OUTCOME" != "success" ]; then
-            exit 1
-          fi
+          echo 'CONTROL_PROVIDER_B_RECOVERY_V2=RETIRED'
+          echo 'LEGACY_PROVIDER_B_SEMANTIC_EXECUTION=false'
+          echo 'PRIVATE_CONTROL_WRITE=false'
+          echo 'PROVIDER_FALLBACK=false'
+          echo 'B2_B3=false'
