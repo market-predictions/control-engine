@@ -338,7 +338,25 @@ def _gh_json(token: str, method: str, path: str, payload: dict[str, Any] | None 
         raise CanonicalB1Error("GitHub API response too large")
     if not raw:
         return None
-    return json.loads(raw.decode("utf-8"))
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CanonicalB1Error("GitHub API response malformed") from exc
+
+
+def _gh_list_all(token: str, path: str, *, accept: str | None = None) -> list[Any]:
+    """Collect every GitHub list page before semantic classification."""
+    items: list[Any] = []
+    page = 1
+    separator = "&" if "?" in path else "?"
+    while True:
+        value = _gh_json(token, "GET", f"{path}{separator}per_page=100&page={page}", accept=accept)
+        if not isinstance(value, list):
+            raise CanonicalB1Error("GitHub API paginated list response invalid")
+        items.extend(value)
+        if len(value) < 100:
+            return items
+        page += 1
 
 
 def _standard(
@@ -432,15 +450,14 @@ def _deep(
     deadline = time.monotonic() + timeout_seconds
     last_summary = "No terminal Codex review evidence is present yet for the current request."
     while time.monotonic() < deadline:
-        reviews = _gh_json(token, "GET", f"/repos/{repository}/pulls/{pr_number}/reviews?per_page=100")
-        review_comments = _gh_json(token, "GET", f"/repos/{repository}/pulls/{pr_number}/comments?per_page=100")
-        reactions = _gh_json(
+        reviews = _gh_list_all(token, f"/repos/{repository}/pulls/{pr_number}/reviews")
+        review_comments = _gh_list_all(token, f"/repos/{repository}/pulls/{pr_number}/comments")
+        reactions = _gh_list_all(
             token,
-            "GET",
-            f"/repos/{repository}/issues/comments/{comment_id}/reactions?per_page=100",
+            f"/repos/{repository}/issues/comments/{comment_id}/reactions",
             accept="application/vnd.github+json",
         )
-        issue_comments = _gh_json(token, "GET", f"/repos/{repository}/issues/{pr_number}/comments?per_page=100")
+        issue_comments = _gh_list_all(token, f"/repos/{repository}/issues/{pr_number}/comments")
         decision = classify_trusted_review_snapshot(
             task_id=task["task_id"],
             handover_id=task["handover_id"],
@@ -448,10 +465,10 @@ def _deep(
             request_comment_id=comment_id,
             acceptance_criteria=task["acceptance_criteria"],
             trusted_actuator_login=actuator_login,
-            reviews=reviews if isinstance(reviews, list) else [],
-            review_comments=review_comments if isinstance(review_comments, list) else [],
-            trigger_reactions=reactions if isinstance(reactions, list) else [],
-            issue_comments=issue_comments if isinstance(issue_comments, list) else [],
+            reviews=reviews,
+            review_comments=review_comments,
+            trigger_reactions=reactions,
+            issue_comments=issue_comments,
         )
         last_summary = decision.summary
         if decision.status == "COMPLETE" and decision.verdict is not None:
