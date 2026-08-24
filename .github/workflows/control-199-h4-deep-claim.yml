@@ -1,4 +1,4 @@
-name: CONTROL 199 H4 DEEP B1 Claim
+name: CONTROL 199 H4 DEEP B1 Completion
 
 on:
   pull_request:
@@ -11,11 +11,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: control-199-g8-h4-deep-claim-v1
+  group: control-199-g8-h4-deep-completion-v1
   cancel-in-progress: false
 
 jobs:
-  claim:
+  complete:
     if: >-
       github.repository == 'market-predictions/control-engine' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Prove exact public candidate and CI
+      - name: Prove exact public candidate and CI still current
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,7 +62,7 @@ jobs:
           test "$(jq -r '.conclusion' <<<"$ci")" = success
           test "$(jq -r '.head_sha' <<<"$ci")" = 9095d820bea744e93603654bbc548f63a4ffa61f
 
-      - name: Clone exact private lifecycle authority and runtime
+      - name: Clone exact private lifecycle authority and prove current H4 claim
         shell: bash
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -73,42 +73,91 @@ jobs:
           test "$(git -C private-code rev-parse HEAD)" = 97ef7de0007b4886e336182c7a9a0ee20ae77455
           git clone --quiet --branch control-runtime-state --single-branch "https://x-access-token:${APP_TOKEN}@github.com/market-predictions/control-plane.git" runtime-state
           test "$(jq -r '.status' runtime-state/control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json)" = CANDIDATE_GATE8
-
-      - name: Select exact canonical H4 and claim B1
-        id: claim
-        shell: bash
-        run: |
-          set -euo pipefail
-          python control_engine/scheduled_worker_b.py select-b1 \
-            --code-dir private-code \
-            --queue runtime-state/control/DISPATCH_QUEUE.json \
-            --output selection.json
-          test "$(jq -r '.selected' selection.json)" = true
-          test "$(jq -r '.task_id' selection.json)" = CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4
-          test "$(jq -r '.candidate_sha' selection.json)" = 9095d820bea744e93603654bbc548f63a4ffa61f
-          PYTHONPATH="$PWD/private-code" python private-code/tools/control_connected_worker_runtime_v1.py claim \
-            --runtime-root runtime-state \
-            --runtime-ref control-runtime-state \
-            --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
-            --worker-instance B1 \
-            --backend github-actions/g8-deep-assurance-h4-v1 \
-            --lease-seconds 900 \
-            --github-output "$GITHUB_OUTPUT"
-
-      - name: Exact private readback proves START_PROVEN
-        shell: bash
-        run: |
-          set -euo pipefail
-          git -C runtime-state fetch --quiet origin control-runtime-state
-          git -C runtime-state reset --quiet --hard FETCH_HEAD
           python control_engine/scheduled_worker_b.py assert-claim \
             --code-dir private-code \
             --queue runtime-state/control/DISPATCH_QUEUE.json \
             --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
             --output claim-readback.json
-          test "$(jq -r '.run_id' claim-readback.json)" = '${{ steps.claim.outputs.run_id }}'
           test "$(jq -r '.candidate_sha' claim-readback.json)" = 9095d820bea744e93603654bbc548f63a4ffa61f
-          echo "START_PROVEN=true"
-          echo "task_id=CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4"
-          echo "candidate_sha=9095d820bea744e93603654bbc548f63a4ffa61f"
-          echo "run_id=${{ steps.claim.outputs.run_id }}"
+
+      - name: Collect complete raw DEEP evidence and classify deterministically
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate repos/market-predictions/control-engine/pulls/70/reviews --jq '.[]' | jq -s '.' > reviews.json
+          gh api --paginate repos/market-predictions/control-engine/pulls/70/comments --jq '.[]' | jq -s '.' > review-comments.json
+          gh api --paginate repos/market-predictions/control-engine/issues/70/comments --jq '.[]' | jq -s '.' > issue-comments.json
+          gh api --paginate -H 'Accept: application/vnd.github+json' repos/market-predictions/control-engine/issues/comments/5402142248/reactions --jq '.[]' | jq -s '.' > reactions.json
+          python - <<'PY'
+          import dataclasses
+          import json
+          from pathlib import Path
+          from control_engine.codex_b1_strict import classify_trusted_review_snapshot
+
+          intake = json.loads(Path('runtime-state/control/project-intake/CONTROL_199_G8_B1_PROFILE_ACTIVATION_ASSURE_H4.json').read_text())
+          criteria = intake['queue_intent']['acceptance_criteria']
+          decision = classify_trusted_review_snapshot(
+              task_id='CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4',
+              handover_id='CONTROL-199-G8-ACTIVATION-H4',
+              candidate_sha='9095d820bea744e93603654bbc548f63a4ffa61f',
+              request_comment_id=5402142248,
+              acceptance_criteria=criteria,
+              trusted_actuator_login='market-predictions',
+              reviews=json.loads(Path('reviews.json').read_text()),
+              review_comments=json.loads(Path('review-comments.json').read_text()),
+              trigger_reactions=json.loads(Path('reactions.json').read_text()),
+              issue_comments=json.loads(Path('issue-comments.json').read_text()),
+          )
+          payload = dataclasses.asdict(decision)
+          Path('decision.json').write_text(json.dumps(payload, indent=2) + '\n')
+          if decision.status != 'COMPLETE' or decision.verdict not in {'PASS','FAIL','INDETERMINATE'}:
+              raise SystemExit('terminal trusted Codex decision absent')
+          result = {
+              'version': '1.0',
+              'task_id': 'CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4',
+              'run_id': json.loads(Path('claim-readback.json').read_text())['run_id'],
+              'role': 'governance_release_assurance',
+              'outcome': decision.verdict,
+              'summary': decision.summary,
+              'candidate_sha': '9095d820bea744e93603654bbc548f63a4ffa61f',
+              'findings': list(decision.findings),
+              'evidence': [
+                  'CONTROL_ASSURANCE_EVIDENCE_CAPSULE_V1: START_PROVEN=true; deterministic_contradictions=[]',
+                  'route=DEEP; request_comment_id=5402142248; trusted_actuator_login=market-predictions',
+                  f'reviewed_commit={decision.reviewed_commit or ""}',
+                  'exact_head_ci_run=32781840040:SUCCESS',
+              ],
+          }
+          Path('h4-result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(f"H4_CLASSIFIED_VERDICT={decision.verdict}")
+          PY
+          test "$(jq -r '.verdict' decision.json)" = FAIL
+
+      - name: Persist immutable H4 FAIL and canonical terminal completion
+        shell: bash
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          active_run_id="$(jq -r '.run_id' claim-readback.json)"
+          PYTHONPATH="$PWD/private-code" python private-code/tools/control_connected_worker_runtime_v1.py complete \
+            --runtime-root runtime-state \
+            --runtime-ref control-runtime-state \
+            --github-repository market-predictions/control-plane \
+            --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
+            --worker-instance B1 \
+            --active-run-id "$active_run_id" \
+            --result h4-result.json
+          git -C runtime-state fetch --quiet origin control-runtime-state
+          git -C runtime-state reset --quiet --hard FETCH_HEAD
+          python control_engine/scheduled_worker_b.py assert-finalized \
+            --code-dir private-code \
+            --queue runtime-state/control/DISPATCH_QUEUE.json \
+            --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
+            --run-id "$active_run_id"
+          test "$(jq -r '.tasks[] | select(.task_id=="CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4") | .last_verdict' runtime-state/control/DISPATCH_QUEUE.json)" = FAIL
+          echo 'H4_TERMINAL_COMPLETION=PASS'
+          echo 'H4_VERDICT=FAIL'
