@@ -1,6 +1,7 @@
 name: Scheduled Worker A V2 — Retired Semantic Executor
 
-# CONTROL #200 / 2026-08-24
+# CONTROL #200 / principal boundary 2026-08-24
+# Emergency fail-closed authority reduction:
 # Worker A implementation intelligence is native ChatGPT chat only.
 # This historical GitHub/provider A executor is intentionally non-recurring and
 # cannot claim or semantically execute implementation_operations work.
