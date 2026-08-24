@@ -1,11 +1,11 @@
-name: Gate 8 External DEEP Assurance H2 V1
+name: Gate 8 External DEEP Assurance H3 V1
 
 on:
   push:
     branches:
       - control/g8-deep-assurance-actuator-v1
     paths:
-      - .control/g8-deep-assurance-h2-command.json
+      - .control/g8-deep-assurance-h3-command.json
       - .github/workflows/g8-deep-assurance-h2-v1.yml
 
 permissions:
@@ -13,26 +13,28 @@ permissions:
   statuses: write
 
 concurrency:
-  group: control-g8-deep-assurance-h2-v1
+  group: control-g8-deep-assurance-h3-v1
   cancel-in-progress: false
 
 env:
   CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
   CONTROL_RUNTIME_REF: control-runtime-state
   CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
   CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
   CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
-  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H2
-  CONTROL_HANDOVER_ID: CONTROL-199-G8-ACTIVATION-H2
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H3
+  CONTROL_HANDOVER_ID: CONTROL-199-G8-ACTIVATION-H3
+  PREDECESSOR_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H2
   TARGET_REPOSITORY: market-predictions/control-engine
   TARGET_PR: '70'
-  TARGET_CANDIDATE_SHA: b9e033a5421149de21ac98ae741d74673e001da5
+  TARGET_CANDIDATE_SHA: 457b74abcfd3cdd6c2f4e6e6fbe52fe444ad5d82
   EXPECTED_BASE_SHA: 07ca785b21da1f1af2b2db1a620c15de5a1ae2b9
-  EXPECTED_CI_RUN: '32669938002'
+  EXPECTED_CI_RUN: '32698119377'
   INTEGRATED_FOUNDATION_SHA: 07ca785b21da1f1af2b2db1a620c15de5a1ae2b9
 
 jobs:
-  deep-assurance-h2:
+  deep-assurance-h3:
     if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/g8-deep-assurance-actuator-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 14
@@ -48,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          file=.control/g8-deep-assurance-h2-command.json
+          file=.control/g8-deep-assurance-h3-command.json
           jq -e '
             .version == "1.0" and
             (.action == "hold" or .action == "run") and
@@ -73,7 +75,7 @@ jobs:
 
       - name: Hold without lifecycle mutation
         if: steps.command.outputs.action == 'hold'
-        run: echo 'G8_H2_DEEP_ACTUATOR=HOLD'
+        run: echo 'G8_H3_DEEP_ACTUATOR=HOLD'
 
       - name: Preflight Control GitHub App
         if: steps.command.outputs.action == 'run'
@@ -102,7 +104,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Claim, invoke one native Codex review, classify and complete H2
+      - name: Claim, invoke one native Codex review, renew, classify and complete H3
         if: steps.command.outputs.action == 'run'
         shell: bash
         env:
@@ -115,6 +117,7 @@ jobs:
           a_code="$RUNNER_TEMP/control-a-code"
           git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_B_CODE_REF" "$private_url" "$b_code"
           git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_A_CODE_REF" "$private_url" "$a_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]
           [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_A_CODE_SHA" ]
 
           reconciled=false
@@ -135,6 +138,20 @@ jobs:
               --handover-dir "$state/control/handovers" \
               --worker-result-dir "$state/control/worker-results" \
               --write --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+
+            if jq -e --arg task "$PREDECESSOR_TASK_ID" '
+              [.tasks[] | select(.task_id == $task)][0] as $t |
+              $t != null and
+              $t.state == "ASSURANCE_QUEUED" and
+              $t.active_run_id == null and
+              ($t.attempt >= $t.max_attempts)
+            ' "$state/control/DISPATCH_QUEUE.json" >/dev/null; then
+              python "$a_code/dispatcher/cli.py" block \
+                --queue "$state/control/DISPATCH_QUEUE.json" \
+                --task-id "$PREDECESSOR_TASK_ID" \
+                --reason 'Attempt budget exhausted after expired Gate-8 H2 claim; no canonical semantic verdict.' >/dev/null
+            fi
+
             python "$a_code/dispatcher/cli.py" validate \
               --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
             bad="$( { git -C "$state" diff --name-only; git -C "$state" ls-files --others --exclude-standard; } | sort -u | grep -Ev '^(control/DISPATCH_QUEUE\.json|control/DISPATCH_RUNS\.json|control/project-intake/[^/]+\.json)$' || true )"
@@ -144,7 +161,7 @@ jobs:
             [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
             if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
               git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
-              git -C "$state" commit --quiet -m 'runtime: reconcile Gate-8 H2 DEEP assurance intake'
+              git -C "$state" commit --quiet -m 'runtime: reconcile Gate-8 H3 DEEP assurance intake'
               git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}" || continue
             fi
             reconciled=true
@@ -173,7 +190,7 @@ jobs:
               --runtime-ref "$CONTROL_RUNTIME_REF" \
               --task-id "$CONTROL_TASK_ID" \
               --worker-instance B1 \
-              --backend github-actions/g8-deep-assurance-h2-v1 \
+              --backend github-actions/g8-deep-assurance-h3-v1 \
               --lease-seconds 900 > "$RUNNER_TEMP/claim.json"
           run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
           [[ "$run_id" =~ ^run-[0-9a-f-]+$ ]]
@@ -196,6 +213,7 @@ jobs:
             .lifecycle_authority.runtime_ref == env.CONTROL_RUNTIME_REF and
             .lifecycle_authority.worker_instance == "B1" and
             .lifecycle_authority.capacity == 1 and
+            .standard.max_tokens == 1024 and
             .promotion_evidence.foundation_merge_sha == env.EXPECTED_BASE_SHA and
             .promotion_evidence.gate7_result_ref == "control/worker-results/CONTROL-199-G7-ETF-EU-PR103-H5.json" and
             .activation.candidate_sha == null and
@@ -236,6 +254,48 @@ jobs:
             "$state/control/DISPATCH_QUEUE.json" > "$RUNNER_TEMP/criteria.json"
           jq -e 'type == "array" and length > 0' "$RUNNER_TEMP/criteria.json" >/dev/null
 
+          renew_same_claim() {
+            local renewed=false
+            local renew_attempt renew_state observed_ref observed_blob changed
+            for renew_attempt in 1 2 3; do
+              renew_state="$RUNNER_TEMP/renew-${renew_attempt}"
+              rm -rf "$renew_state"
+              git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$renew_state"
+              git -C "$renew_state" config user.name 'control-g8-deep-actuator[bot]'
+              git -C "$renew_state" config user.email 'control-g8-deep-actuator[bot]@users.noreply.github.com'
+              observed_ref="$(git -C "$renew_state" rev-parse HEAD)"
+              observed_blob="$(git -C "$renew_state" rev-parse 'HEAD:control/DISPATCH_QUEUE.json')"
+              CONTROL_ACTIVE_RUN_ID="$run_id" PYTHONPATH="$b_code" python - "$renew_state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          from tools.control_parallel_execution_v1 import renew_claim
+          path = sys.argv[1]
+          queue = json.load(open(path, encoding='utf-8'))
+          queue = renew_claim(
+              queue,
+              task_id=os.environ['CONTROL_TASK_ID'],
+              role='governance_release_assurance',
+              worker_instance='B1',
+              run_id=os.environ['CONTROL_ACTIVE_RUN_ID'],
+              now=datetime.now(timezone.utc),
+              lease_seconds=900,
+          )
+          with open(path, 'w', encoding='utf-8') as handle:
+              json.dump(queue, handle, indent=2)
+              handle.write('\n')
+          PY
+              changed="$(git -C "$renew_state" diff --name-only)"
+              [ "$changed" = 'control/DISPATCH_QUEUE.json' ]
+              git -C "$renew_state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+              [ "$(git -C "$renew_state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
+              [ "$(git -C "$renew_state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
+              git -C "$renew_state" add -- control/DISPATCH_QUEUE.json
+              git -C "$renew_state" commit --quiet -m 'runtime: renew Gate-8 H3 B1 claim'
+              if git -C "$renew_state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then renewed=true; break; fi
+            done
+            [ "$renewed" = true ]
+          }
+
           python scripts/codex_b1_canary.py request \
             --task-id "$CONTROL_TASK_ID" \
             --handover-id "$CONTROL_HANDOVER_ID" \
@@ -254,6 +314,9 @@ jobs:
           terminal=false
           decision_status=PENDING
           for poll in $(seq 1 32); do
+            if [ "$poll" = 12 ] || [ "$poll" = 24 ]; then
+              renew_same_claim
+            fi
             GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr-current.json"
             jq -e '.state == "open" and .merged == false and .head.sha == env.TARGET_CANDIDATE_SHA and .base.sha == env.EXPECTED_BASE_SHA' "$RUNNER_TEMP/pr-current.json" >/dev/null
             GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}/reviews?per_page=100" > "$RUNNER_TEMP/reviews.json"
@@ -294,9 +357,9 @@ jobs:
               '{version:"1.0",task_id:$task,run_id:$run,role:"governance_release_assurance",outcome:$outcome,summary:$summary,candidate_sha:$candidate,findings:$decision[0].findings,evidence:["route=DEEP; semantic_executor=native Codex review","trusted_request_comment_id="+$comment_id,"reviewed_commit="+$reviewed_commit,"exact_head_ci_run="+$ci_run+" SUCCESS","private_profile_status=CANDIDATE_GATE8 before invocation","START_PROVEN=true before semantic invocation"]}' \
               > "$RUNNER_TEMP/result.json"
           else
-            summary="No terminal trusted Codex exact-head evidence before the bounded H2 deadline."
+            summary="No terminal trusted Codex exact-head evidence before the bounded H3 deadline."
             if [ -s "$RUNNER_TEMP/decision.json" ]; then summary="$(jq -r '.summary // empty' "$RUNNER_TEMP/decision.json")"; fi
-            [ -n "$summary" ] || summary="No terminal trusted Codex exact-head evidence before the bounded H2 deadline."
+            [ -n "$summary" ] || summary="No terminal trusted Codex exact-head evidence before the bounded H3 deadline."
             jq -n \
               --arg task "$CONTROL_TASK_ID" \
               --arg run "$run_id" \
@@ -365,5 +428,5 @@ jobs:
           [ "$job_status" = success ] && state=success
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
-            -f context="control/g8-deep-assurance-h2" \
-            -f description="G8_H2_${action}_${job_status}" >/dev/null
+            -f context="control/g8-deep-assurance-h3" \
+            -f description="G8_H3_${action}_${job_status}" >/dev/null
