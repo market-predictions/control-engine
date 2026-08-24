@@ -10,6 +10,7 @@ import pytest
 from control_engine.cloudflare_b1 import SemanticBudgetMeasurement, classify_execution_surface
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "canonical_b1_dual_executor_v1.py"
+WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "canonical-b1-dual-executor-v1.yml"
 spec = importlib.util.spec_from_file_location("canonical_b1_dual_executor_v1", SCRIPT)
 mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -95,6 +96,21 @@ def test_active_profile_preserves_one_b1_and_no_fallback():
     assert value["standard"]["provider_fallback"] is False
     assert value["standard"]["model_fallback"] is False
     assert value["standard"]["paid_fallback"] is False
+
+
+def test_active_profile_requires_exact_standard_token_budget():
+    for value in (1, 1023, 1025, 2048):
+        profile = _profile()
+        profile["standard"]["max_tokens"] = value
+        with pytest.raises(mod.CanonicalB1Error, match="max_tokens"):
+            mod._profile(profile)
+
+
+def test_workflow_pins_private_b_and_rechecks_active_profile_before_mutation():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455" in text
+    assert '[ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]' in text
+    assert text.count('assert_active_profile "$state"') >= 2
 
 
 def test_start_proven_rejects_wrong_worker_and_expired_lease():
