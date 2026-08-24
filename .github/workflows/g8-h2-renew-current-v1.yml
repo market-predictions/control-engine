@@ -1,0 +1,108 @@
+name: Gate 8 H2 Renew Current Claim V1
+
+on:
+  push:
+    branches:
+      - control/g8-deep-assurance-actuator-v1
+    paths:
+      - .github/workflows/g8-h2-renew-current-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  renew:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/g8-deep-assurance-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Preflight Control GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create bounded Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Renew exact H2 claim through canonical primitive
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+          CONTROL_RUNTIME_REF: control-runtime-state
+          CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
+          CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H2
+          CONTROL_ACTIVE_RUN_ID: run-6fe37388-3f96-40c8-9990-e93173d7f8d1
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          code="$RUNNER_TEMP/control-b-code"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$url" "$code"
+          success=false
+          for attempt in 1 2 3; do
+            state="$RUNNER_TEMP/state-${attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            git -C "$state" config user.name 'control-g8-deep-actuator[bot]'
+            git -C "$state" config user.email 'control-g8-deep-actuator[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse 'HEAD:control/DISPATCH_QUEUE.json')"
+            PYTHONPATH="$code" python - "$state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          from tools.control_parallel_execution_v1 import renew_claim
+          path = sys.argv[1]
+          queue = json.load(open(path, encoding='utf-8'))
+          queue = renew_claim(
+              queue,
+              task_id=os.environ['CONTROL_TASK_ID'],
+              role='governance_release_assurance',
+              worker_instance='B1',
+              run_id=os.environ['CONTROL_ACTIVE_RUN_ID'],
+              now=datetime.now(timezone.utc),
+              lease_seconds=900,
+          )
+          with open(path, 'w', encoding='utf-8') as handle:
+              json.dump(queue, handle, indent=2)
+              handle.write('\n')
+          PY
+            changed="$(git -C "$state" diff --name-only)"
+            [ "$changed" = 'control/DISPATCH_QUEUE.json' ]
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            [ "$(git -C "$state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
+            [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
+            git -C "$state" add -- control/DISPATCH_QUEUE.json
+            git -C "$state" commit --quiet -m 'runtime: renew Gate-8 H2 B1 claim'
+            if git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then success=true; break; fi
+          done
+          [ "$success" = true ]
+
+      - name: Publish renew liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          [ "$JOB_STATUS" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/g8-h2-renew" \
+            -f description="G8_H2_RENEW_${JOB_STATUS}" >/dev/null
