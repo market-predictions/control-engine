@@ -1,32 +1,26 @@
-name: Worker B Recovery Wake Bridge V1
+name: Retired Worker B Recovery Wake Bridge V1
 
-# Legacy provider-B wake bridge retained for explicit manual recovery only.
-# Normal consequential B1 execution is Canonical B1 Dual Executor V1.
-# No workflow_run or push trigger: this bridge must never race canonical B1.
+# RETIRED 2026-08-24.
+# No bridge may dispatch a legacy/provider B semantic executor. Canonical B1
+# lifecycle is owned by Control and semantic execution is only the active
+# deterministic STANDARD/DEEP profile.
 
 on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: read
 
-concurrency:
-  group: control-worker-b-wake-bridge-v1
-  cancel-in-progress: false
-
 jobs:
-  wake-b-recovery:
+  retirement-proof:
     if: github.repository == 'market-predictions/control-engine'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
-      - name: Dispatch Legacy Provider B Recovery V2
+      - name: Prove recovery wake bridge is non-executable
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api -X POST \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/scheduled-worker-b-v2.yml/dispatches" \
-            -f ref=main
+          echo 'CONTROL_WORKER_B_RECOVERY_WAKE_BRIDGE_V1=RETIRED'
+          echo 'WORKFLOW_DISPATCH_TO_PROVIDER_B=false'
+          echo 'ACTIONS_WRITE=false'
+          echo 'PROVIDER_FALLBACK=false'

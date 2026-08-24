@@ -1,213 +1,137 @@
-name: Scheduled Worker A V2
-# credential-refresh deployment wake
-# post-repair assurance intake materialization wake
-# completion-diagnostic assurance intake materialization wake
-# read-only reconciliation probe before integration gate
-# expired completion-diagnostic R2 reconciliation wake
-# Memory H4 intake materialization wake
-# Memory H5 intake materialization wake
-# Work H6 intake materialization wake
-# Control #199 PR69 assurance intake materialization wake
-# Control #199 dual-executor H3 intake materialization wake
+name: Control deterministic runtime reconciler
+
+# CONTROL #200 / principal boundary 2026-08-24
+# Worker A semantic intelligence is native ChatGPT chat only.
+# This workflow is NOT Worker A. It performs deterministic canonical runtime
+# lifecycle operations only: PROJECT_INTAKE -> one queue reconciliation and,
+# on an exact trusted principal marker, the existing canonical A1 claim step.
+# It may not invoke semantic inference, repair candidates, assure, integrate,
+# merge, release, or create another queue/state plane.
 
 on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+  issue_comment:
+    types: [created]
   push:
     branches:
       - main
     paths:
       - '.github/workflows/scheduled-worker-a-v2.yml'
-      - 'scripts/scheduled_worker_a_v2.sh'
-      - 'scripts/scheduled_worker_a_v2_retry_guard.sh'
-      - 'scripts/project_integration_executor.py'
-      - 'scripts/project_integration_executor_guarded.py'
-      - 'scripts/private_reconcile_readonly_probe.py'
-      - 'scripts/github_app_preflight.sh'
-      - 'scripts/private_intake_diagnostic.py'
-      - 'scripts/quarantine_zta_legacy_repair.py'
-      - 'control_engine/scheduled_worker_a.py'
-      - 'control_engine/scheduled_worker_a_retry_guard.py'
+      - 'scripts/private_reconcile_apply.py'
+      - 'scripts/private_a1_claim_apply.py'
+      - 'tests/test_private_reconcile_apply.py'
 
 permissions:
   contents: read
   statuses: write
 
 concurrency:
-  group: control-scheduled-worker-a-v2
+  group: control-deterministic-runtime-reconciler-v1
   cancel-in-progress: false
 
 jobs:
-  scheduled-a1:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+  reconcile:
+    if: >-
+      github.repository == 'market-predictions/control-engine' &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.comment.user.login == 'market-predictions' &&
+        (github.event.comment.body == 'CONTROL_RUNTIME_RECONCILE_V1' ||
+         startsWith(github.event.comment.body, 'CONTROL_A1_CLAIM_V1 '))))
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     steps:
-      - name: Checkout exact public actuator code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 exact commit observed in public CI
+      - name: Checkout public deterministic actuator code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: main
           persist-credentials: false
           fetch-depth: 1
 
       - name: Preflight GitHub App identity and installation
         id: app-preflight
-        continue-on-error: true
         shell: bash
         env:
           CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
           CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
         run: bash scripts/github_app_preflight.sh
 
-      - name: Create short-lived Control GitHub App token
+      - name: Create short-lived private-state token
         id: app-token
-        if: steps.app-preflight.outcome == 'success'
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 exact release commit
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
           private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: 'write'
-          permission-issues: 'write'
-          permission-actions: 'read'
-          permission-pull-requests: 'read'
 
       - name: Setup Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5 exact commit observed in public CI
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
 
-      - name: Validate actuator syntax before private access
+      - name: Validate deterministic lifecycle actuator syntax
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/scheduled_worker_a_v2.sh
-          bash -n scripts/scheduled_worker_a_v2_retry_guard.sh
           bash -n scripts/github_app_preflight.sh
-          python -m py_compile control_engine/scheduled_worker_a.py control_engine/scheduled_worker_a_retry_guard.py scripts/private_intake_diagnostic.py scripts/private_reconcile_readonly_probe.py scripts/quarantine_zta_legacy_repair.py scripts/project_integration_executor.py scripts/project_integration_executor_guarded.py
+          python -m py_compile \
+            scripts/private_reconcile_apply.py \
+            scripts/private_a1_claim_apply.py \
+            scripts/project_integration_executor.py
 
-      - name: Quarantine exact legacy ZTA PR7 repair intake
-        id: legacy-zta-migration
-        if: steps.app-token.outcome == 'success'
-        continue-on-error: true
+      - name: Reconcile canonical private runtime state
+        id: reconcile
         shell: bash
         env:
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python scripts/quarantine_zta_legacy_repair.py
+        run: python scripts/private_reconcile_apply.py
 
-      - name: Publish private intake diagnostic receipt
-        if: steps.app-token.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        env:
-          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python scripts/private_intake_diagnostic.py
-
-      - name: Run read-only reconciliation diagnostic before integration
-        if: steps.app-token.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        env:
-          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python scripts/private_reconcile_readonly_probe.py
-
-      - name: Execute preferred deterministic PROJECT_INTEGRATION
-        id: integration
-        if: steps.app-preflight.outcome == 'success' && steps.app-token.outcome == 'success' && steps.legacy-zta-migration.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        env:
-          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          set +e
-          output="$(python scripts/project_integration_executor_guarded.py 2>&1)"
-          rc=$?
-          status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_INTEGRATION=//p' | tail -n 1)"
-          handled="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_INTEGRATION_HANDLED=//p' | tail -n 1)"
-          if [ -z "$status_class" ]; then status_class=INTEGRATION_FAILED_NO_STATUS; fi
-          if [ -z "$handled" ]; then handled=false; fi
-          printf 'status_class=%s\n' "$status_class" >> "$GITHUB_OUTPUT"
-          printf 'handled=%s\n' "$handled" >> "$GITHUB_OUTPUT"
-          exit "$rc"
-
-      - name: Reconcile, claim and execute one model-driven A1 task
-        id: runtime
+      - name: Persist exact preferred canonical A1 claim
+        id: claim
         if: >-
-          steps.app-preflight.outcome == 'success' &&
-          steps.app-token.outcome == 'success' &&
-          steps.legacy-zta-migration.outcome == 'success' &&
-          ((steps.integration.outcome == 'success' && steps.integration.outputs.handled != 'true') ||
-           steps.integration.outputs.status_class == 'BLOCKED_PROJECT_INTEGRATION')
-        continue-on-error: true
+          github.event_name == 'issue_comment' &&
+          startsWith(github.event.comment.body, 'CONTROL_A1_CLAIM_V1 ')
         shell: bash
         env:
-          # Compatibility env name: the value is now a one-hour GitHub App installation token,
-          # not a personal access token or long-lived repository credential.
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
-          CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
-          CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
-          CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED: ${{ vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          set +e
-          output="$(bash scripts/scheduled_worker_a_v2_retry_guard.sh 2>&1)"
-          rc=$?
-          status_class="$(printf '%s\n' "$output" | sed -n 's/^SCHEDULED_WORKER_A_V2=//p' | tail -n 1)"
-          if [ -z "$status_class" ]; then
-            status_class=RUNTIME_FAILED_NO_STATUS
+          set -euo pipefail
+          task_id="${COMMENT_BODY#CONTROL_A1_CLAIM_V1 }"
+          if [[ ! "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            echo 'invalid canonical task id' >&2
+            exit 2
           fi
-          printf 'status_class=%s\n' "$status_class" >> "$GITHUB_OUTPUT"
-          exit "$rc"
+          CONTROL_TASK_ID="$task_id" python scripts/private_a1_claim_apply.py
 
-      - name: Publish non-sensitive liveness status
-        if: always()
+      - name: Publish non-semantic liveness status
+        if: always() && github.event_name != 'issue_comment'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFLIGHT_OUTCOME: ${{ steps.app-preflight.outcome }}
-          PREFLIGHT_CLASS: ${{ steps.app-preflight.outputs.status_class }}
-          APP_OUTCOME: ${{ steps.app-token.outcome }}
-          MIGRATION_OUTCOME: ${{ steps.legacy-zta-migration.outcome }}
-          INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
-          INTEGRATION_CLASS: ${{ steps.integration.outputs.status_class }}
-          INTEGRATION_HANDLED: ${{ steps.integration.outputs.handled }}
-          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
-          RUNTIME_CLASS: ${{ steps.runtime.outputs.status_class }}
         run: |
           set -euo pipefail
-          state=failure
-          description=RUNTIME_SKIPPED_OR_UNCLASSIFIED
-          if [ "$PREFLIGHT_OUTCOME" != "success" ]; then
-            description="${PREFLIGHT_CLASS:-APP_PREFLIGHT_FAILED}"
-          elif [ "$APP_OUTCOME" != "success" ]; then
-            description=APP_TOKEN_CREATION_FAILED
-          elif [ "$MIGRATION_OUTCOME" != "success" ]; then
-            description=LEGACY_ZTA_MIGRATION_FAILED
-          elif [ "$INTEGRATION_OUTCOME" != "success" ] && [ "$INTEGRATION_CLASS" != "BLOCKED_PROJECT_INTEGRATION" ]; then
-            description="${INTEGRATION_CLASS:-PROJECT_INTEGRATION_FAILED}"
-          elif [ "$INTEGRATION_OUTCOME" = "success" ] && [ "$INTEGRATION_HANDLED" = "true" ]; then
-            description="${INTEGRATION_CLASS:-COMPLETED_ONE_PROJECT_INTEGRATION}"
+          if [ '${{ steps.reconcile.outcome }}' = 'success' ]; then
             state=success
-          elif [ -n "${RUNTIME_CLASS:-}" ]; then
-            description="$RUNTIME_CLASS"
-            if [ "$RUNTIME_OUTCOME" = "success" ]; then state=success; fi
-          elif [ "$INTEGRATION_CLASS" = "BLOCKED_PROJECT_INTEGRATION" ]; then
-            description=BLOCKED_PROJECT_INTEGRATION
+            description=DETERMINISTIC_RUNTIME_RECONCILE_OK
+          else
+            state=failure
+            description=DETERMINISTIC_RUNTIME_RECONCILE_FAILED
           fi
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
-            -f context="control/swa-v2/${description}" \
+            -f context="control/runtime-reconciler" \
             -f description="$description" >/dev/null
 
-          if [ "$PREFLIGHT_OUTCOME" != "success" ] || [ "$APP_OUTCOME" != "success" ] || [ "$MIGRATION_OUTCOME" != "success" ]; then
-            exit 1
-          fi
-          if [ "$INTEGRATION_OUTCOME" != "success" ] && [ "$INTEGRATION_CLASS" != "BLOCKED_PROJECT_INTEGRATION" ]; then
-            exit 1
-          fi
-          if [ "$INTEGRATION_OUTCOME" = "success" ] && [ "$INTEGRATION_HANDLED" = "true" ]; then
-            exit 0
-          fi
-          if [ "$RUNTIME_OUTCOME" != "success" ]; then
-            exit 1
-          fi
+      - name: Prove semantic Worker A remains native ChatGPT only
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'CONTROL_SCHEDULED_WORKER_A_V2=RETIRED_SEMANTIC_EXECUTOR'
+          echo 'WORKER_A_SEMANTIC_RUNTIME=CHATGPT_CHAT_ONLY'
+          echo 'GITHUB_ACTIONS_A_IMPLEMENTATION_INFERENCE=false'
+          echo 'PROVIDER_A_IMPLEMENTATION_INFERENCE=false'
+          echo 'CONTROL_GITHUB_ROLE=DETERMINISTIC_LIFECYCLE_ONLY'
