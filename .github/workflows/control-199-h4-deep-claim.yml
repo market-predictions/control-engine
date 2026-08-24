@@ -1,0 +1,109 @@
+name: CONTROL 199 H4 DEEP B1 Claim
+
+on:
+  push:
+    branches:
+      - control/199-g8-h4-deep-assurance-v1
+    paths:
+      - '.github/workflows/control-199-h4-deep-claim.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-199-g8-h4-deep-claim-v1
+  cancel-in-progress: false
+
+jobs:
+  claim:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h4-deep-assurance-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pre-activation actuator base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Create short-lived private Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Prove exact public candidate and CI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api repos/market-predictions/control-engine/pulls/70)"
+          test "$(jq -r '.state' <<<"$pr")" = open
+          test "$(jq -r '.draft' <<<"$pr")" = true
+          test "$(jq -r '.merged' <<<"$pr")" = false
+          test "$(jq -r '.head.sha' <<<"$pr")" = 9095d820bea744e93603654bbc548f63a4ffa61f
+          test "$(jq -r '.base.sha' <<<"$pr")" = 0e0594b822cc15098fa8612a8c675e984f08d87d
+          ci="$(gh api repos/market-predictions/control-engine/actions/runs/32781840040)"
+          test "$(jq -r '.status' <<<"$ci")" = completed
+          test "$(jq -r '.conclusion' <<<"$ci")" = success
+          test "$(jq -r '.head_sha' <<<"$ci")" = 9095d820bea744e93603654bbc548f63a4ffa61f
+
+      - name: Clone exact private lifecycle authority and runtime
+        shell: bash
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          git clone --quiet --branch runtime/public-b-v2-code-r2 --single-branch "https://x-access-token:${APP_TOKEN}@github.com/market-predictions/control-plane.git" private-code
+          test "$(git -C private-code rev-parse HEAD)" = 97ef7de0007b4886e336182c7a9a0ee20ae77455
+          git clone --quiet --branch control-runtime-state --single-branch "https://x-access-token:${APP_TOKEN}@github.com/market-predictions/control-plane.git" runtime-state
+          test "$(jq -r '.status' runtime-state/control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json)" = CANDIDATE_GATE8
+
+      - name: Select exact canonical H4 and claim B1
+        id: claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python control_engine/scheduled_worker_b.py select-b1 \
+            --code-dir private-code \
+            --queue runtime-state/control/DISPATCH_QUEUE.json \
+            --output selection.json
+          test "$(jq -r '.selected' selection.json)" = true
+          test "$(jq -r '.task_id' selection.json)" = CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4
+          test "$(jq -r '.candidate_sha' selection.json)" = 9095d820bea744e93603654bbc548f63a4ffa61f
+          python private-code/tools/control_connected_worker_runtime_v1.py claim \
+            --runtime-root runtime-state \
+            --runtime-ref control-runtime-state \
+            --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
+            --worker-instance B1 \
+            --backend github-actions/g8-deep-assurance-h4-v1 \
+            --lease-seconds 900 \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Exact private readback proves START_PROVEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C runtime-state fetch --quiet origin control-runtime-state
+          git -C runtime-state reset --quiet --hard FETCH_HEAD
+          python control_engine/scheduled_worker_b.py assert-claim \
+            --code-dir private-code \
+            --queue runtime-state/control/DISPATCH_QUEUE.json \
+            --task-id CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4 \
+            --output claim-readback.json
+          test "$(jq -r '.run_id' claim-readback.json)" = '${{ steps.claim.outputs.run_id }}'
+          test "$(jq -r '.candidate_sha' claim-readback.json)" = 9095d820bea744e93603654bbc548f63a4ffa61f
+          echo "START_PROVEN=true"
+          echo "task_id=CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H4"
+          echo "candidate_sha=9095d820bea744e93603654bbc548f63a4ffa61f"
+          echo "run_id=${{ steps.claim.outputs.run_id }}"
