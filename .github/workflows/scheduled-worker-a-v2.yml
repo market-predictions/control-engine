@@ -3,9 +3,10 @@ name: Control deterministic runtime reconciler
 # CONTROL #200 / principal boundary 2026-08-24
 # Worker A semantic intelligence is native ChatGPT chat only.
 # This workflow is NOT Worker A. It performs deterministic canonical runtime
-# reconciliation only: expired-state cleanup plus PROJECT_INTAKE -> one queue.
-# It may not claim work, invoke semantic inference, repair candidates, assure,
-# integrate, merge, release, or create another queue/state plane.
+# lifecycle operations only: PROJECT_INTAKE -> one queue reconciliation and,
+# on an exact trusted principal marker, the existing canonical A1 claim step.
+# It may not invoke semantic inference, repair candidates, assure, integrate,
+# merge, release, or create another queue/state plane.
 
 on:
   schedule:
@@ -19,6 +20,7 @@ on:
     paths:
       - '.github/workflows/scheduled-worker-a-v2.yml'
       - 'scripts/private_reconcile_apply.py'
+      - 'scripts/private_a1_claim_apply.py'
       - 'tests/test_private_reconcile_apply.py'
 
 permissions:
@@ -35,7 +37,8 @@ jobs:
       github.repository == 'market-predictions/control-engine' &&
       (github.event_name != 'issue_comment' ||
        (github.event.comment.user.login == 'market-predictions' &&
-        github.event.comment.body == 'CONTROL_RUNTIME_RECONCILE_V1'))
+        (github.event.comment.body == 'CONTROL_RUNTIME_RECONCILE_V1' ||
+         startsWith(github.event.comment.body, 'CONTROL_A1_CLAIM_V1 '))))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -68,12 +71,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate deterministic reconciler syntax
+      - name: Validate deterministic lifecycle actuator syntax
         shell: bash
         run: |
           set -euo pipefail
           bash -n scripts/github_app_preflight.sh
-          python -m py_compile scripts/private_reconcile_apply.py scripts/project_integration_executor.py
+          python -m py_compile \
+            scripts/private_reconcile_apply.py \
+            scripts/private_a1_claim_apply.py \
+            scripts/project_integration_executor.py
 
       - name: Reconcile canonical private runtime state
         id: reconcile
@@ -81,6 +87,24 @@ jobs:
         env:
           CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python scripts/private_reconcile_apply.py
+
+      - name: Persist exact preferred canonical A1 claim
+        id: claim
+        if: >-
+          github.event_name == 'issue_comment' &&
+          startsWith(github.event.comment.body, 'CONTROL_A1_CLAIM_V1 ')
+        shell: bash
+        env:
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          task_id="${COMMENT_BODY#CONTROL_A1_CLAIM_V1 }"
+          if [[ ! "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            echo 'invalid canonical task id' >&2
+            exit 2
+          fi
+          CONTROL_TASK_ID="$task_id" python scripts/private_a1_claim_apply.py
 
       - name: Publish non-semantic liveness status
         if: always() && github.event_name != 'issue_comment'
@@ -101,7 +125,7 @@ jobs:
             -f context="control/runtime-reconciler" \
             -f description="$description" >/dev/null
 
-      - name: Prove semantic Worker A remains retired
+      - name: Prove semantic Worker A remains native ChatGPT only
         if: always()
         shell: bash
         run: |
@@ -110,4 +134,4 @@ jobs:
           echo 'WORKER_A_SEMANTIC_RUNTIME=CHATGPT_CHAT_ONLY'
           echo 'GITHUB_ACTIONS_A_IMPLEMENTATION_INFERENCE=false'
           echo 'PROVIDER_A_IMPLEMENTATION_INFERENCE=false'
-          echo 'CONTROL_GITHUB_ROLE=DETERMINISTIC_STATE_RECONCILIATION_ONLY'
+          echo 'CONTROL_GITHUB_ROLE=DETERMINISTIC_LIFECYCLE_ONLY'
