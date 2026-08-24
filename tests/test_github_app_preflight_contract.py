@@ -34,14 +34,15 @@ def test_preflight_never_prints_secret_material() -> None:
     assert "cat \"$INSTALL_JSON\"" not in text
 
 
-def test_workflow_runs_preflight_before_token_integration_and_model_runtime() -> None:
+def test_lifecycle_workflow_runs_preflight_before_ephemeral_token_and_state_mutation() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     preflight = text.index("Preflight GitHub App identity and installation")
-    token = text.index("Create short-lived Control GitHub App token")
-    integration = text.index("Execute preferred deterministic PROJECT_INTEGRATION")
-    runtime = text.index("Reconcile, claim and execute one model-driven A1 task")
-    assert preflight < token < integration < runtime
-    assert "steps.app-preflight.outcome == 'success'" in text
-    assert "PREFLIGHT_CLASS: ${{ steps.app-preflight.outputs.status_class }}" in text
-    assert "${PREFLIGHT_CLASS:-APP_PREFLIGHT_FAILED}" in text
-    assert "'scripts/github_app_preflight.sh'" in text
+    token = text.index("Create short-lived private-state token")
+    reconcile = text.index("Reconcile canonical private runtime state")
+    claim = text.index("Persist exact preferred canonical A1 claim")
+    assert preflight < token < reconcile < claim
+    assert "steps.app-token.outputs.token" in text
+    assert "'scripts/github_app_preflight.sh'" not in text  # push wake is bounded to actuator changes
+    assert "bash -n scripts/github_app_preflight.sh" in text
+    assert "CONTROL_CLOUDFLARE_API_TOKEN" not in text
+    assert "CONTROL_CLOUDFLARE_ACCOUNT_ID" not in text
