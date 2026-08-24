@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -197,3 +198,79 @@ def test_standard_executes_exactly_one_call_and_records_provenance(monkeypatch):
     assert '"retry_count":0' in provenance
     assert '"provider_switches":0' in provenance
     assert '"paid_fallback":false' in provenance
+
+
+def test_paginated_list_collects_every_page_before_return(monkeypatch):
+    observed = []
+
+    def fake_gh_json(token, method, path, payload=None, accept=None):
+        observed.append(path)
+        if "page=1" in path:
+            return [{"page": 1, "n": n} for n in range(100)]
+        if "page=2" in path:
+            return [{"page": 2, "finding": "P1 BLOCKER"}]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(mod, "_gh_json", fake_gh_json)
+    items = mod._gh_list_all("token", "/repos/o/r/pulls/70/reviews")
+    assert len(items) == 101
+    assert items[-1]["finding"] == "P1 BLOCKER"
+    assert observed == [
+        "/repos/o/r/pulls/70/reviews?per_page=100&page=1",
+        "/repos/o/r/pulls/70/reviews?per_page=100&page=2",
+    ]
+
+
+def test_paginated_list_fails_closed_on_non_list_later_page(monkeypatch):
+    def fake_gh_json(token, method, path, payload=None, accept=None):
+        if "page=1" in path:
+            return [{} for _ in range(100)]
+        return {"message": "malformed page"}
+
+    monkeypatch.setattr(mod, "_gh_json", fake_gh_json)
+    with pytest.raises(mod.CanonicalB1Error, match="paginated list response invalid"):
+        mod._gh_list_all("token", "/repos/o/r/issues/70/comments")
+
+
+def test_deep_observes_page2_blocker_despite_clean_completion_reaction(monkeypatch):
+    monkeypatch.setenv("CONTROL_GITHUB_WRITE_TOKEN", "token")
+
+    def fake_gh_json(token, method, path, payload=None, accept=None):
+        if method == "POST":
+            return {"id": 321, "user": {"login": "market-predictions"}}
+        if "/reviews?" in path:
+            if "page=1" in path:
+                return [{"page": 1} for _ in range(100)]
+            return [{"page": 2, "finding": "P1 BLOCKER"}]
+        if "/pulls/70/comments?" in path:
+            return []
+        if "/reactions?" in path:
+            return [{"content": "+1", "user": {"login": "chatgpt-codex-connector[bot]"}}]
+        if "/issues/70/comments?" in path:
+            return []
+        raise AssertionError(path)
+
+    def fake_classifier(**kwargs):
+        assert any(item.get("page") == 2 and item.get("finding") == "P1 BLOCKER" for item in kwargs["reviews"])
+        assert kwargs["trigger_reactions"][0]["content"] == "+1"
+        return SimpleNamespace(
+            status="COMPLETE",
+            verdict="FAIL",
+            summary="later-page blocker observed",
+            findings=("P1 BLOCKER",),
+            reviewed_commit=CANDIDATE,
+        )
+
+    monkeypatch.setattr(mod, "_gh_json", fake_gh_json)
+    monkeypatch.setattr(mod, "classify_trusted_review_snapshot", fake_classifier)
+    task = _queue()["tasks"][0]
+    result = mod._deep(
+        task=task,
+        run_id=RUN_ID,
+        candidate_sha=CANDIDATE,
+        repository="market-predictions/control-engine",
+        pr_number=70,
+        timeout_seconds=1,
+    )
+    assert result["outcome"] == "FAIL"
+    assert result["findings"] == ["P1 BLOCKER"]
