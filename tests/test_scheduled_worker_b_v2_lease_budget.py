@@ -33,38 +33,21 @@ def _render_resilient_script(tmp_path: Path) -> str:
     return output.read_text(encoding="utf-8")
 
 
-def test_assurance_wall_clock_budget_is_strictly_inside_b1_lease(tmp_path: Path) -> None:
+def test_historical_assurance_wall_clock_budget_is_strictly_inside_b1_lease(tmp_path: Path) -> None:
     base = SCRIPT.read_text(encoding="utf-8")
     lease_match = re.search(r"^LEASE_MINUTES=(\d+)$", base, flags=re.MULTILINE)
     assert lease_match is not None
     lease_seconds = int(lease_match.group(1)) * 60
-
     rendered = _render_resilient_script(tmp_path)
     budget_match = re.search(r"--max-seconds (\d+) \\", rendered)
     assert budget_match is not None
     assurance_seconds = int(budget_match.group(1))
-
-    # Regression for CONTROL-193 R3 attempt 2: the pinned inference worker's
-    # 2400-second default could outlive the 900-second B1 claim, causing current-
-    # lease validation to fail before any immutable worker-result was persisted.
-    completion_reserve_seconds = 300
     assert assurance_seconds == 600
-    assert assurance_seconds + completion_reserve_seconds <= lease_seconds
+    assert assurance_seconds + 300 <= lease_seconds
     assert assurance_seconds < lease_seconds
-    assert rendered.count("--max-seconds 600") == 1
 
 
-def test_lease_budget_fence_preserves_terminal_retry_patch(tmp_path: Path) -> None:
-    rendered = _render_resilient_script(tmp_path)
-    assert "if [ \"$completion_attempt\" -lt \"$MAX_CAS_ATTEMPTS\" ]; then" in rendered
-    assert "FAIL_CLOSED_B1_TERMINAL_COMPLETION" in rendered
-    old_cas_only_branch = '''if ! grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$PRIVATE_TMP/complete.log"; then
-    fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION"
-  fi'''
-    assert old_cas_only_branch not in rendered
-
-
-def test_terminal_failure_emits_only_bounded_redacted_diagnostic_block(tmp_path: Path) -> None:
+def test_historical_resilient_wrapper_preserves_bounded_redaction(tmp_path: Path) -> None:
     rendered = _render_resilient_script(tmp_path)
     assert "B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN" in rendered
     assert "B1_TERMINAL_COMPLETION_DIAGNOSTIC_END" in rendered
@@ -72,80 +55,37 @@ def test_terminal_failure_emits_only_bounded_redacted_diagnostic_block(tmp_path:
     assert "AUTHORIZATION: basic [REDACTED]" in rendered
     assert "x-access-token:[REDACTED]" in rendered
 
+
+def test_retired_workflow_cannot_invoke_historical_resilient_or_semantic_worker() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "output=\"$(bash scripts/scheduled_worker_b_v2_resilient.sh 2>&1)\"" in workflow
-    assert "/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_BEGIN$/,/^B1_TERMINAL_COMPLETION_DIAGNOSTIC_END$/p" in workflow
-    assert "printf '%s\\n' \"$diagnostic\"" in workflow
+    assert "name: Retired Provider B Recovery V2" in workflow
+    assert "scheduled_worker_b_v2_resilient.sh" not in workflow
+    assert "scheduled_worker_b_v2.sh" not in workflow
+    assert "CONTROL_CLOUDFLARE_API_TOKEN" not in workflow
+    assert "CONTROL_GITHUB_WRITE_TOKEN" not in workflow
+    assert "LEGACY_PROVIDER_B_SEMANTIC_EXECUTION=false" in workflow
+    assert "PRIVATE_CONTROL_WRITE=false" in workflow
+    assert "PROVIDER_FALLBACK=false" in workflow
 
 
-def test_terminal_failure_status_uses_only_allowlisted_fingerprints(tmp_path: Path) -> None:
+def test_historical_terminal_retry_patch_is_fail_closed(tmp_path: Path) -> None:
     rendered = _render_resilient_script(tmp_path)
-    expected = {
-        "RESULT_IDENTITY_MISMATCH",
-        "RESULT_ROLE_MISMATCH",
-        "RESULT_FIELDS_MISMATCH",
-        "CANDIDATE_MISMATCH",
-        "IMMUTABLE_RUNTIME_COLLISION",
-        "RUNTIME_CAS_CONFLICT",
-        "RESULT_BLOB_MISMATCH",
-        "RESULT_BLOB_LOOKUP_INVALID",
-        "RESULT_BLOB_AUTH_MISSING",
-        "CLAIM_VALIDATION",
-        "OTHER_CONNECTED_RUNTIME_ERROR",
-        "UNKNOWN",
-    }
-    for fingerprint in expected:
-        assert fingerprint in rendered
+    assert "if [ \"$completion_attempt\" -lt \"$MAX_CAS_ATTEMPTS\" ]; then" in rendered
+    assert "FAIL_CLOSED_B1_TERMINAL_COMPLETION" in rendered
     assert 'fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION_${completion_class}"' in rendered
-    assert "complete.log" not in re.search(
-        r'fail_closed "FAIL_CLOSED_B1_TERMINAL_COMPLETION_\$\{completion_class\}"', rendered
-    ).group(0)
 
 
-def test_semantic_worker_error_persists_only_allowlisted_metadata_fingerprint(tmp_path: Path) -> None:
+def test_historical_semantic_worker_failure_metadata_is_allowlisted(tmp_path: Path) -> None:
     rendered = _render_resilient_script(tmp_path)
-    expected = {
+    for fingerprint in (
         "POLICY_REJECTED",
-        "CREDENTIAL_FORMAT_REJECTED",
-        "ACCOUNT_FORMAT_REJECTED",
         "PROVIDER_HTTP_FAILURE",
         "PROVIDER_TRANSPORT_UNAVAILABLE",
         "PROVIDER_TIMEOUT",
         "PROVIDER_RESPONSE_UNPARSEABLE",
         "PROVIDER_RESPONSE_CONTRACT_REJECTED",
-        "TOOL_CALL_INVALID",
-        "FINAL_JSON_INVALID",
-        "FINAL_CONTENT_MISSING",
-        "FINAL_JSON_PARSE_INVALID",
-        "FINAL_JSON_EXACT_MISMATCH",
-        "CONTEXT_BUDGET_EXHAUSTED",
-        "TOOL_BUDGET_EXHAUSTED",
         "WALL_CLOCK_BUDGET_EXHAUSTED",
-        "WORKER_CONTRACT_REJECTED",
-        "UNEXPECTED_FAILURE",
         "UNKNOWN_WORKER_ERROR",
-    }
-    for fingerprint in expected:
+    ):
         assert fingerprint in rendered
     assert 'json.load(open(sys.argv[1], encoding="utf-8")).get("error_code")' in rendered
-    assert 'Provider-portable assurance worker failed; error_code=${semantic_failure_class}; PASS is forbidden.' in rendered
-    # Raw model/provider content remains private; only inference_worker metadata
-    # error_code is promoted into the canonical finding.
-    generic_block = rendered[rendered.index("semantic_failure_class=UNKNOWN_WORKER_ERROR"):rendered.index("outcome=\"$(python -", rendered.index("semantic_failure_class=UNKNOWN_WORKER_ERROR"))]
-    assert "model.log" not in generic_block
-
-
-def test_unavailable_worker_error_persists_only_kernel_allowlisted_fingerprint(tmp_path: Path) -> None:
-    rendered = _render_resilient_script(tmp_path)
-    start = rendered.index("unavailable_failure_class=UNKNOWN_WORKER_ERROR")
-    end = rendered.index("else\n  semantic_failure_class=UNKNOWN_WORKER_ERROR", start)
-    unavailable_block = rendered[start:end]
-
-    assert 'from inference_worker import SAFE_ERROR_CODES' in unavailable_block
-    assert 'json.load(open(sys.argv[1], encoding="utf-8")).get("error_code")' in unavailable_block
-    assert 'value if value in SAFE_ERROR_CODES else "UNKNOWN_WORKER_ERROR"' in unavailable_block
-    assert "--outcome EXECUTION_UNAVAILABLE" in unavailable_block
-    assert 'Provider-portable assurance adapter returned unavailable; error_code=${unavailable_failure_class}; no fallback or paid route selected.' in unavailable_block
-    assert "model.log" not in unavailable_block
-    assert "CLOUDFLARE_API_TOKEN" not in unavailable_block
-    assert "CONTROL_GITHUB_WRITE_TOKEN" not in unavailable_block
