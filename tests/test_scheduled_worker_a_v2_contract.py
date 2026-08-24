@@ -14,10 +14,11 @@ BOUNDARY = ROOT / "docs" / "PUBLIC_PRIVATE_BOUNDARY_V1.md"
 ACTUATOR = ROOT / "docs" / "PRIVATE_RUNTIME_ACTUATOR_V1.md"
 
 
-def test_workflow_is_main_only_scheduled_liveness_backstop() -> None:
+def test_workflow_is_retired_nonrecurring_read_only_surface() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "schedule:" in text
-    assert "cron: '*/10 * * * *'" in text
+    assert "schedule:" not in text
+    assert "cron:" not in text
+    assert "push:" not in text
     assert "workflow_dispatch:" in text
     assert "pull_request:" not in text
     assert "github.ref == 'refs/heads/main'" in text
@@ -25,30 +26,29 @@ def test_workflow_is_main_only_scheduled_liveness_backstop() -> None:
     assert "permissions:\n  contents: read" in text
     assert "contents: write" not in text
     assert "actions: write" not in text
-    assert "persist-credentials: false" in text
-    assert "timeout-minutes: 60" in text
+    assert "timeout-minutes: 5" in text
     assert "actions/upload-artifact" not in text
     assert "actions/cache" not in text
 
 
-def test_workflow_uses_only_named_private_bridge_and_provider_secrets() -> None:
+def test_workflow_has_no_private_bridge_or_provider_secrets() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     for name in (
-        "vars.CONTROL_GITHUB_APP_ID",
-        "secrets.CONTROL_GITHUB_APP_PRIVATE_KEY",
-        "secrets.CONTROL_CLOUDFLARE_API_TOKEN",
-        "secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID",
-        "vars.CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED",
+        "CONTROL_GITHUB_APP_ID",
+        "CONTROL_GITHUB_APP_PRIVATE_KEY",
+        "CONTROL_CLOUDFLARE_API_TOKEN",
+        "CONTROL_CLOUDFLARE_ACCOUNT_ID",
+        "CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED",
+        "CONTROL_GITHUB_WRITE_TOKEN",
     ):
-        assert name in text
-    assert "secrets.CONTROL_GITHUB_WRITE_TOKEN" not in text
-    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}" in text
-    assert "bash -n scripts/scheduled_worker_a_v2.sh" in text
-    assert "bash -n scripts/github_app_preflight.sh" in text
-    assert "python -m py_compile control_engine/scheduled_worker_a.py" in text
+        assert name not in text
+    assert "scheduled_worker_a_v2.sh" not in text
+    assert "github_app_preflight.sh" not in text
+    assert "control_engine/scheduled_worker_a.py" not in text
+    assert "WORKER_A_SEMANTIC_RUNTIME=CHATGPT_CHAT_ONLY" in text
 
 
-def test_actuator_pins_private_state_machine_and_forbids_stale_replay() -> None:
+def test_historical_actuator_pins_private_state_machine_and_forbids_stale_replay() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert 'CONTROL_CODE_REF="recovery/187-policy-metadata-r1"' in text
     assert 'CONTROL_CODE_SHA="62cf2a88edd8700c073e51274d331210c7a36900"' in text
@@ -66,7 +66,7 @@ def test_actuator_pins_private_state_machine_and_forbids_stale_replay() -> None:
     assert "LEASE_MINUTES=75" in text
 
 
-def test_liveness_order_is_lease_then_unavailable_then_intake_then_selection() -> None:
+def test_historical_liveness_order_is_lease_then_unavailable_then_intake_then_selection() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     lease = text.index('dispatcher/cli.py" reconcile')
     unavailable = text.index("resume-a-unavailable")
@@ -75,7 +75,7 @@ def test_liveness_order_is_lease_then_unavailable_then_intake_then_selection() -
     assert lease < unavailable < intake < selection
 
 
-def test_private_write_scopes_and_model_credential_isolation_are_explicit() -> None:
+def test_historical_private_write_scopes_and_model_credential_isolation_are_explicit() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert "control/DISPATCH_QUEUE.json|control/DISPATCH_RUNS.json|control/project-intake/*.json" in text
     assert "control/DISPATCH_QUEUE.json|control/DISPATCH_RUNS.json" in text
@@ -90,7 +90,7 @@ def test_private_write_scopes_and_model_credential_isolation_are_explicit() -> N
     assert "PROJECT_INTEGRATION_EXECUTOR" in text
 
 
-def test_missing_provider_credentials_cannot_create_a_claim() -> None:
+def test_historical_actuator_missing_provider_credentials_cannot_create_a_claim() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     provider_gate = text.index("EXECUTION_UNAVAILABLE_IMPLEMENTATION_PROVIDER_CREDENTIAL")
     free_gate = text.index("EXECUTION_UNAVAILABLE_FREE_FAIL_CLOSED_ATTESTATION")
