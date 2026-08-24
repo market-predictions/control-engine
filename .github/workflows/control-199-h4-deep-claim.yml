@@ -1,9 +1,9 @@
 name: CONTROL 199 H4 DEEP B1 Claim
 
 on:
-  push:
+  pull_request:
     branches:
-      - control/199-g8-h4-deep-assurance-v1
+      - main
     paths:
       - '.github/workflows/control-199-h4-deep-claim.yml'
 
@@ -16,13 +16,18 @@ concurrency:
 
 jobs:
   claim:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h4-deep-assurance-v1'
+    if: >-
+      github.repository == 'market-predictions/control-engine' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'control/199-g8-h4-deep-assurance-v1' &&
+      github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout exact pre-activation actuator base
+      - name: Checkout exact pre-activation actuator branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: control/199-g8-h4-deep-assurance-v1
           persist-credentials: false
           fetch-depth: 1
 
