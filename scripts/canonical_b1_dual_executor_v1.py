@@ -91,7 +91,7 @@ def _profile(profile: dict[str, Any]) -> dict[str, Any]:
     if any(standard.get(key) is not False for key in ("tools_enabled", "automatic_retry", "provider_fallback", "model_fallback", "paid_fallback")):
         raise CanonicalB1Error("profile STANDARD forbidden fallback/tool setting")
     max_tokens = standard.get("max_tokens")
-    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or not (1 <= max_tokens <= 2048):
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens != 1024:
         raise CanonicalB1Error("profile STANDARD max_tokens invalid")
     trusted = deep.get("trusted_connector_logins")
     if not isinstance(trusted, list) or sorted(trusted) != sorted(["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]):
