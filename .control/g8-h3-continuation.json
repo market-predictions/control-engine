@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "action": "continue",
+  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H3",
+  "handover_id": "CONTROL-199-G8-ACTIVATION-H3",
+  "candidate_sha": "457b74abcfd3cdd6c2f4e6e6fbe52fe444ad5d82",
+  "candidate_pr": 70,
+  "active_run_id": "run-bdf4b885-0efe-48d0-b389-11cf6100fa99",
+  "request_comment_id": 5391687246
+}
