@@ -1,4 +1,4 @@
-name: Gate 8 H2 Renew Current Claim V1
+name: Gate 8 H3 Renew Current Claim V1
 
 on:
   push:
@@ -38,21 +38,23 @@ jobs:
           owner: ${{ github.repository_owner }}
           permission-contents: 'write'
 
-      - name: Renew exact H2 claim through canonical primitive
+      - name: Renew exact H3 claim through canonical primitive
         shell: bash
         env:
           CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
           CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
           CONTROL_RUNTIME_REF: control-runtime-state
           CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
-          CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H2
-          CONTROL_ACTIVE_RUN_ID: run-6fe37388-3f96-40c8-9990-e93173d7f8d1
+          CONTROL_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
+          CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H3
+          CONTROL_ACTIVE_RUN_ID: run-bdf4b885-0efe-48d0-b389-11cf6100fa99
         run: |
           set -euo pipefail
           echo "::add-mask::$CONTROL_TOKEN"
           url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
           code="$RUNNER_TEMP/control-b-code"
           git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$url" "$code"
+          [ "$(git -C "$code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
           success=false
           for attempt in 1 2 3; do
             state="$RUNNER_TEMP/state-${attempt}"
@@ -87,7 +89,7 @@ jobs:
             [ "$(git -C "$state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
             [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
             git -C "$state" add -- control/DISPATCH_QUEUE.json
-            git -C "$state" commit --quiet -m 'runtime: renew Gate-8 H2 B1 claim'
+            git -C "$state" commit --quiet -m 'runtime: renew Gate-8 H3 B1 claim'
             if git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"; then success=true; break; fi
           done
           [ "$success" = true ]
@@ -104,5 +106,5 @@ jobs:
           [ "$JOB_STATUS" = success ] && state=success
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
-            -f context="control/g8-h2-renew" \
-            -f description="G8_H2_RENEW_${JOB_STATUS}" >/dev/null
+            -f context="control/g8-h3-renew" \
+            -f description="G8_H3_RENEW_${JOB_STATUS}" >/dev/null
