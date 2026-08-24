@@ -8,126 +8,64 @@ MIGRATION = ROOT / "scripts" / "quarantine_zta_legacy_repair.py"
 INTEGRATION = ROOT / "scripts" / "project_integration_executor.py"
 
 
-def test_scheduled_worker_uses_exact_pinned_github_app_token_action() -> None:
+def test_retired_workflow_has_no_github_app_or_private_write_bridge() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" in text
-    assert "app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}" in text
-    assert "private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}" in text
-    assert "owner: ${{ github.repository_owner }}" in text
-    assert "permission-contents: 'write'" in text
-    assert "permission-issues: 'write'" in text
-    assert "permission-actions: 'read'" in text
-    assert "permission-pull-requests: 'read'" in text
-    app_block = text.split("Create short-lived Control GitHub App token", 1)[1].split("Setup Python", 1)[0]
-    assert "permission-workflows" not in app_block
-    assert "permission-actions: 'write'" not in app_block
-    assert "permission-pull-requests: 'write'" not in app_block
+    assert "actions/create-github-app-token" not in text
+    assert "CONTROL_GITHUB_WRITE_TOKEN" not in text
+    assert "CONTROL_GITHUB_APP_ID" not in text
+    assert "CONTROL_GITHUB_APP_PRIVATE_KEY" not in text
+    assert "permissions:\n  contents: read" in text
+    assert "contents: write" not in text
+    assert "issues: write" not in text
+    assert "actions: write" not in text
 
 
-def test_long_lived_pat_is_not_executable_bridge() -> None:
+def test_retired_workflow_has_no_schedule_push_or_provider_execution() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}" in text
-    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ secrets.CONTROL_GITHUB_WRITE_TOKEN }}" not in text
-    integration_block = text.split("Execute preferred deterministic PROJECT_INTEGRATION", 1)[1].split(
-        "Reconcile, claim and execute one model-driven A1 task", 1
-    )[0]
-    runtime_block = text.split("Reconcile, claim and execute one model-driven A1 task", 1)[1].split(
-        "Publish non-sensitive liveness status", 1
-    )[0]
-    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}" in integration_block
-    assert "github.token }}" not in integration_block
-    assert "github.token }}" not in runtime_block
+    assert "schedule:" not in text
+    assert "cron:" not in text
+    assert "push:" not in text
+    assert "workflow_dispatch:" in text
+    assert "CONTROL_CLOUDFLARE_API_TOKEN" not in text
+    assert "CONTROL_CLOUDFLARE_ACCOUNT_ID" not in text
+    assert "CONTROL_CLOUDFLARE_FREE_FAIL_CLOSED_ATTESTED" not in text
+    assert "inference_worker.py" not in text
+    assert "scheduled_worker_a_v2_retry_guard.sh" not in text
+    assert "Reconcile, claim and execute one model-driven A1 task" not in text
 
 
-def test_builtin_github_token_stays_contents_read_only_and_app_token_is_ephemeral() -> None:
+def test_retired_workflow_cannot_mutate_private_intake_or_integration_state() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "permissions:\n  contents: read\n  statuses: write" in text
-    top_permissions = text.split("permissions:", 1)[1].split("concurrency:", 1)[0]
-    assert "contents: write" not in top_permissions
-    assert "issues: write" not in top_permissions
-    assert "actions: write" not in top_permissions
-    assert "skip-token-revoke" not in text
-    assert "pull_request:" not in text
+    assert "Publish private intake diagnostic receipt" not in text
+    assert "Quarantine exact legacy ZTA PR7 repair intake" not in text
+    assert "Execute preferred deterministic PROJECT_INTEGRATION" not in text
+    assert "private_intake_diagnostic.py" not in text
+    assert "quarantine_zta_legacy_repair.py" not in text
+    assert "project_integration_executor.py" not in text
 
 
-def test_deployment_wake_is_main_only_and_actuator_path_bounded() -> None:
+def test_retirement_proof_is_bounded_and_nonsemantic() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "push:" in text
-    assert "branches:\n      - main" in text
-    assert "paths:" in text
-    assert "'.github/workflows/scheduled-worker-a-v2.yml'" in text
-    assert "'scripts/scheduled_worker_a_v2.sh'" in text
-    assert "'scripts/project_integration_executor.py'" in text
-    assert "'scripts/github_app_preflight.sh'" in text
-    assert "'scripts/private_intake_diagnostic.py'" in text
-    assert "'scripts/quarantine_zta_legacy_repair.py'" in text
-    assert "'control_engine/scheduled_worker_a.py'" in text
+    assert "github.repository == 'market-predictions/control-engine'" in text
+    assert "github.ref == 'refs/heads/main'" in text
+    assert "CONTROL_SCHEDULED_WORKER_A_V2=RETIRED_SEMANTIC_EXECUTOR" in text
+    assert "WORKER_A_SEMANTIC_RUNTIME=CHATGPT_CHAT_ONLY" in text
+    assert "GITHUB_ACTIONS_A_IMPLEMENTATION_INFERENCE=false" in text
+    assert "PROVIDER_A_IMPLEMENTATION_INFERENCE=false" in text
+    assert "actions/upload-artifact" not in text
+    assert "actions/cache" not in text
 
 
-def test_private_intake_diagnostic_uses_only_app_token_and_private_issue_receipt() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+def test_retired_support_scripts_remain_non_force_historical_components() -> None:
     diagnostic = DIAGNOSTIC.read_text(encoding="utf-8")
-    diagnostic_block = workflow.split("Publish private intake diagnostic receipt", 1)[1].split(
-        "Execute preferred deterministic PROJECT_INTEGRATION", 1
-    )[0]
-    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}" in diagnostic_block
-    assert "github.token }}" not in diagnostic_block
+    migration = MIGRATION.read_text(encoding="utf-8")
+    integration = INTEGRATION.read_text(encoding="utf-8")
+
     assert 'RECOVERY_ISSUE = 187' in diagnostic
     assert 'MARKER = "<!-- scheduled-worker-a-v2-private-intake-diagnostic -->"' in diagnostic
-    assert "issues/{RECOVERY_ISSUE}/comments" in diagnostic
-    assert "actions/upload-artifact" not in workflow
-    assert "actions/cache" not in workflow
-
-
-def test_legacy_zta_quarantine_is_exact_bounded_and_runs_before_reconciliation() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    migration = MIGRATION.read_text(encoding="utf-8")
-    assert 'TASK_ID = "ZTA-PR7-WRANGLER-REPAIR"' in migration
-    assert 'R1 = "ZTA-PR7-WRANGLER-REPAIR-R1"' in migration
-    assert 'R2 = "ZTA-PR7-WRANGLER-REPAIR-R2"' in migration
-    assert 'INTAKE_PATH = Path("control/project-intake/ZORGTECHADVIES_PR7.json")' in migration
-    assert 'QUEUE_PATH = Path("control/DISPATCH_QUEUE.json")' in migration
-    assert 'intent.get("handover_id") is None' in migration
-    assert 'intent.get("assurance_result_ref") is None' in migration
-    assert 'task["paused"] = True' in migration
-    assert 'intake["queue_intent"] = None' in migration
     assert "--force" not in migration
-    migration_pos = workflow.index("Quarantine exact legacy ZTA PR7 repair intake")
-    diagnostic_pos = workflow.index("Publish private intake diagnostic receipt")
-    integration_pos = workflow.index("Execute preferred deterministic PROJECT_INTEGRATION")
-    runtime_pos = workflow.index("Reconcile, claim and execute one model-driven A1 task")
-    assert migration_pos < diagnostic_pos < integration_pos < runtime_pos
-    assert "steps.legacy-zta-migration.outcome == 'success'" in workflow
-    assert "LEGACY_ZTA_MIGRATION_FAILED" in workflow
-
-
-def test_project_integration_runs_before_model_and_never_receives_cloudflare_credentials() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    integration = INTEGRATION.read_text(encoding="utf-8")
-    integration_block = workflow.split("Execute preferred deterministic PROJECT_INTEGRATION", 1)[1].split(
-        "Reconcile, claim and execute one model-driven A1 task", 1
-    )[0]
-    runtime_block = workflow.split("Reconcile, claim and execute one model-driven A1 task", 1)[1].split(
-        "Publish non-sensitive liveness status", 1
-    )[0]
-    assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}" in integration_block
-    assert "CONTROL_CLOUDFLARE_API_TOKEN" not in integration_block
-    assert "CONTROL_CLOUDFLARE_ACCOUNT_ID" not in integration_block
-    assert "steps.integration.outputs.handled != 'true'" in runtime_block
-    assert "steps.integration.outcome == 'success'" in runtime_block
+    assert 'TASK_ID = "ZTA-PR7-WRANGLER-REPAIR"' in migration
     assert "evaluate_claimed_project_integration" in integration
     assert '"sha": candidate_sha' in integration
     assert '"merge_method": "merge"' in integration
     assert "--force" not in integration
-
-
-def test_public_liveness_status_is_bounded_and_does_not_echo_worker_output() -> None:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "context=\"control/swa-v2/${description}\"" in text
-    assert "APP_TOKEN_CREATION_FAILED" in text
-    assert "RUNTIME_SKIPPED_OR_UNCLASSIFIED" in text
-    assert "status_class=RUNTIME_FAILED_NO_STATUS" in text
-    assert 'printf \'%s\\n\' "$output"' in text
-    assert 'echo "$output"' not in text
-    assert "actions/upload-artifact" not in text
-    assert "actions/cache" not in text
