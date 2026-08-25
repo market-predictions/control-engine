@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "action": "patch_b1_deep_lease_policy",
+  "target_branch": "runtime/public-b-v2-code-r3",
+  "expected_head": "97ef7de0007b4886e336182c7a9a0ee20ae77455",
+  "nonce": "h12-b1-lease-policy-20260825T1850Z"
+}
