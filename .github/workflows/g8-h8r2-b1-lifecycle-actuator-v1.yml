@@ -25,6 +25,7 @@ env:
   CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
   CONTROL_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
   CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H8R2
+  CONTROL_PREDECESSOR_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H8
   CONTROL_CANDIDATE_SHA: 0740b8df781f3ffed93d8dc261a1e34be89a402f
 
 jobs:
@@ -72,7 +73,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Claim and exact-readback H8R2 B1
+      - name: Terminalize spent H8 projection if exact
         shell: bash
         env:
           CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -82,6 +83,79 @@ jobs:
           private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
           b_code="$RUNNER_TEMP/control-b-code"
           state="$RUNNER_TEMP/control-state"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          observed_ref="$(git -C "$state" rev-parse HEAD)"
+          observed_queue_blob="$(git -C "$state" rev-parse HEAD:control/DISPATCH_QUEUE.json)"
+          PYTHONPATH="$b_code" python - "$state" <<'PY'
+          import json, os, pathlib, sys
+          from tools.control_parallel_execution_v1 import validate_parallel_queue
+          root = pathlib.Path(sys.argv[1])
+          queue_path = root / 'control' / 'DISPATCH_QUEUE.json'
+          intake_path = root / 'control' / 'project-intake' / 'CONTROL_199_G8_B1_PROFILE_ACTIVATION_ASSURE_H8.json'
+          result_path = root / 'control' / 'worker-results' / 'CONTROL-199-G8-ACTIVATION-H8.json'
+          queue = json.loads(queue_path.read_text(encoding='utf-8'))
+          intake = json.loads(intake_path.read_text(encoding='utf-8'))
+          matches = [t for t in queue['tasks'] if t.get('task_id') == os.environ['CONTROL_PREDECESSOR_TASK_ID']]
+          if len(matches) != 1:
+              raise SystemExit('expected exactly one H8 predecessor queue task')
+          task = matches[0]
+          blocker = intake['queue_intent'].get('current_blocker')
+          if not isinstance(blocker, str) or not blocker.startswith('MAX_ATTEMPTS_EXHAUSTED_WITHOUT_TERMINAL_RESULT:'):
+              raise SystemExit('H8 blocker does not authorize spent-projection terminalization')
+          if result_path.exists():
+              raise SystemExit('H8 canonical result exists; one-shot terminalization forbidden')
+          if task.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('H8 candidate mismatch')
+          if task.get('attempt') != 1 or task.get('max_attempts') != 1:
+              raise SystemExit('H8 attempt evidence mismatch')
+          if any(task.get(k) is not None for k in ('active_run_id','active_role','active_worker_instance','claim_started_at','claim_expires_at')):
+              raise SystemExit('H8 still has active ownership')
+          if task.get('state') == 'BLOCKED':
+              validate_parallel_queue(queue)
+              print('G8_H8_PREDECESSOR=ALREADY_BLOCKED')
+              raise SystemExit(0)
+          if task.get('state') != 'ASSURANCE_QUEUED':
+              raise SystemExit(f"unexpected H8 predecessor state: {task.get('state')}")
+          task['state'] = 'BLOCKED'
+          task['current_blocker'] = blocker
+          finding = 'EXECUTION_UNAVAILABLE: H8 attempt 1/1 ended without canonical PASS|FAIL|INDETERMINATE result'
+          findings = list(task.get('last_findings') or [])
+          if finding not in findings:
+              findings.append(finding)
+          task['last_findings'] = findings
+          task['last_verdict'] = 'NONE'
+          task['resume_state'] = None
+          task['updated_at'] = '2026-08-25T07:02:00Z'
+          validate_parallel_queue(queue)
+          queue_path.write_text(json.dumps(queue, indent=2) + '\n', encoding='utf-8')
+          print('G8_H8_PREDECESSOR=BLOCKED_EXECUTION_UNAVAILABLE')
+          PY
+          if git -C "$state" diff --quiet -- control/DISPATCH_QUEUE.json; then
+            exit 0
+          fi
+          git -C "$state" config user.name 'control-g8-h8r2-lifecycle[bot]'
+          git -C "$state" config user.email 'control-g8-h8r2-lifecycle[bot]@users.noreply.github.com'
+          git -C "$state" add -- control/DISPATCH_QUEUE.json
+          git -C "$state" commit --quiet -m 'runtime: terminalize spent Gate-8 H8 projection'
+          current_ref="$(git -C "$state" ls-remote origin "refs/heads/$CONTROL_RUNTIME_REF" | awk '{print $1}')"
+          [ "$current_ref" = "$observed_ref" ] || { echo 'runtime ref moved before H8 terminalization' >&2; exit 75; }
+          git -C "$state" fetch --quiet origin "refs/heads/$CONTROL_RUNTIME_REF"
+          current_queue_blob="$(git -C "$state" rev-parse FETCH_HEAD:control/DISPATCH_QUEUE.json)"
+          [ "$current_queue_blob" = "$observed_queue_blob" ] || { echo 'queue blob moved before H8 terminalization' >&2; exit 75; }
+          git -C "$state" push --quiet origin "HEAD:refs/heads/$CONTROL_RUNTIME_REF"
+
+      - name: Claim and exact-readback H8R2 B1
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code-claim"
+          state="$RUNNER_TEMP/control-state-claim"
           git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
           [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
           git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
@@ -97,7 +171,7 @@ jobs:
               for key in ("task_id","state","candidate_sha","attempt","max_attempts","priority","depends_on"):
                   value[key] = selected.get(key)
           json.dump(value, open(sys.argv[2], 'w', encoding='utf-8'))
-          print("CONTROL_B1_SELECTION=" + json.dumps(value, sort_keys=True))
+          print('CONTROL_B1_SELECTION=' + json.dumps(value, sort_keys=True))
           PY
           python - "$selection" <<'PY'
           import json, os, sys
