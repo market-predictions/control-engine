@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "action": "complete",
+  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H15",
+  "active_run_id": "run-d5c96360-6570-435c-b780-0dc16ec18bdc",
+  "candidate_sha": "3c4c049140bc7763e11ac750103982cb1ddaae35",
+  "result_comment_id": 5417228274,
+  "nonce": "h15-fail-complete-20260825T2145Z"
+}
