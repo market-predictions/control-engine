@@ -1,0 +1,1 @@
+H14 lifecycle reuses the proven Gate-8 bootstrap B1 actuator. No semantic inference or candidate mutation occurs on this branch.
