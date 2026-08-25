@@ -210,9 +210,7 @@ jobs:
           [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$candidate_pr" =~ ^[0-9]+$ ]]
 
-          assurance_class="$(jq -r --arg task "$task_id" '.tasks[] | select(.task_id==$task) | if ((.instruction // "") | contains("CONTROL_ASSURANCE_CLASS=DEEP")) then "DEEP" else "STANDARD" end' "$state/control/DISPATCH_QUEUE.json")"
-          lease_seconds=900
-          if [ "$assurance_class" = DEEP ]; then lease_seconds=5400; fi
+          lease_seconds=5400
           designated_ci_run_id="$(python - "$state/control/DISPATCH_QUEUE.json" "$task_id" <<'PYCI'
           import json, re, sys
           q=json.load(open(sys.argv[1], encoding='utf-8')); task_id=sys.argv[2]
@@ -248,7 +246,6 @@ jobs:
           printf 'candidate_pr=%s\n' "$candidate_pr" >> "$GITHUB_OUTPUT"
           printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
           printf 'designated_ci_run_id=%s\n' "$designated_ci_run_id" >> "$GITHUB_OUTPUT"
-          printf 'assurance_class=%s\n' "$assurance_class" >> "$GITHUB_OUTPUT"
 
       - name: Collect exact evidence and execute deterministic route
         id: evidence
