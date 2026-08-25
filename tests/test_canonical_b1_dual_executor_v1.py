@@ -406,6 +406,7 @@ def test_deep_real_classifier_observes_page2_blocker_despite_clean_completion_re
         if "/issues/comments/321/reactions?" in path:
             assert "&page=1" in path
             return [{
+                "id": 999,
                 "content": "+1",
                 "user": {"login": "chatgpt-codex-connector[bot]"},
             }]
@@ -438,3 +439,95 @@ def test_deep_real_classifier_observes_page2_blocker_despite_clean_completion_re
     assert any("P1 BLOCKER" in finding for finding in result["findings"])
     assert ("GET", "/repos/market-predictions/control-engine/pulls/70/comments?per_page=100&page=2") in observed
     assert ("GET", "/repos/market-predictions/control-engine/pulls/70/comments?per_page=100&page=3") not in observed
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"commit_id": None},
+        {"commit_id": CANDIDATE, "original_commit_id": "b" * 40},
+        {"commit_id": CANDIDATE, "pull_request_review_id": None},
+    ],
+)
+def test_deep_page2_malformed_trusted_comment_fails_closed_before_clean_pass(monkeypatch, malformed):
+    monkeypatch.setenv("CONTROL_GITHUB_WRITE_TOKEN", "token")
+    request_body = {"value": None}
+    request_created_at = "2026-08-24T22:00:00Z"
+    review_id = 777
+
+    def fake_gh_json(token, method, path, payload=None, accept=None):
+        if method == "POST":
+            request_body["value"] = payload["body"]
+            return {"id": 321, "user": {"login": "market-predictions"}}
+        if "/pulls/70/reviews?" in path:
+            return [{
+                "id": review_id,
+                "user": {"login": "chatgpt-codex-connector"},
+                "state": "COMMENTED",
+                "submitted_at": "2026-08-24T22:00:10Z",
+                "commit_id": CANDIDATE,
+                "body": "Codex terminal exact-head review",
+            }]
+        if "/pulls/70/comments?" in path:
+            if "&page=1" in path:
+                return [{} for _ in range(100)]
+            item = {
+                "id": 888,
+                "user": {"login": "chatgpt-codex-connector"},
+                "pull_request_review_id": review_id,
+                "commit_id": CANDIDATE,
+                "body": "P1 BLOCKER THAT MUST NOT DISAPPEAR",
+                "created_at": "2026-08-24T22:00:11Z",
+            }
+            item.update(malformed)
+            return [item]
+        if "/issues/comments/321/reactions?" in path:
+            return [{
+                "id": 999,
+                "content": "+1",
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+            }]
+        if "/issues/70/comments?" in path:
+            return [{
+                "id": 321,
+                "user": {"login": "market-predictions"},
+                "body": request_body["value"],
+                "created_at": request_created_at,
+                "updated_at": request_created_at,
+            }]
+        raise AssertionError((method, path))
+
+    monkeypatch.setattr(mod, "_gh_json", fake_gh_json)
+    with pytest.raises(mod.CanonicalB1Error, match="trusted DEEP review comment"):
+        mod._deep(
+            task=_queue()["tasks"][0],
+            run_id=RUN_ID,
+            candidate_sha=CANDIDATE,
+            repository="market-predictions/control-engine",
+            pr_number=70,
+            timeout_seconds=1,
+        )
+
+
+def test_deep_ignores_malformed_untrusted_page2_noise(monkeypatch):
+    request_start = "2026-08-24T22:00:00Z"
+    mod._validate_deep_snapshot_records(
+        reviews=[{
+            "id": 777,
+            "user": {"login": "chatgpt-codex-connector"},
+            "state": "COMMENTED",
+            "submitted_at": "2026-08-24T22:00:10Z",
+            "commit_id": CANDIDATE,
+        }, {"user": {"login": "random-user"}, "commit_id": None}],
+        review_comments=[{"user": {"login": "random-user"}, "commit_id": None}],
+        reactions=[{"user": {"login": "random-user"}, "content": None}],
+        issue_comments=[{
+            "id": 321,
+            "user": {"login": "market-predictions"},
+            "body": "request",
+            "created_at": request_start,
+            "updated_at": request_start,
+        }, {"user": {"login": "random-user"}}],
+        request_comment_id=321,
+        trusted_actuator_login="market-predictions",
+    )
