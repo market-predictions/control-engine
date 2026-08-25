@@ -1,12 +1,12 @@
-name: Gate-8 H11 B1 Lifecycle Actuator V1
+name: Gate-8 H12 B1 Lifecycle Actuator V1
 
-# Temporary deterministic pre-activation actuator for CONTROL-199 Gate-8 H11.
+# Temporary deterministic pre-activation actuator for CONTROL-199 Gate-8 H12.
 # Lifecycle only: no semantic inference, repair, merge, release, or profile activation.
 
 on:
   push:
     branches:
-      - control/199-g8-h11-b1-lifecycle-actuator-v1
+      - control/199-g8-h12-b1-lifecycle-actuator-v1
     paths:
       - .control/g8-h11-b1-lifecycle-command.json
       - .github/workflows/g8-h11-b1-lifecycle-actuator-v1.yml
@@ -16,7 +16,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: control-199-g8-h11-b1-lifecycle-actuator-v1
+  group: control-199-g8-h12-b1-lifecycle-actuator-v1
   cancel-in-progress: false
 
 env:
@@ -24,12 +24,13 @@ env:
   CONTROL_RUNTIME_REF: control-runtime-state
   CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
   CONTROL_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
-  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H11
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H12
   CONTROL_CANDIDATE_SHA: d132eb1436ebc33d9ff18327644997b6883d155a
+  CONTROL_DEEP_LEASE_SECONDS: '5400'
 
 jobs:
   lifecycle:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h11-b1-lifecycle-actuator-v1'
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h12-b1-lifecycle-actuator-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -72,7 +73,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Claim and exact-readback H11 B1
+      - name: Claim and exact-readback H12 B1
         shell: bash
         env:
           CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -103,17 +104,17 @@ jobs:
           import json, os, sys
           value = json.load(open(sys.argv[1], encoding='utf-8'))
           if value.get('selected') is not True:
-              raise SystemExit('H11 is not currently selectable')
+              raise SystemExit('H12 is not currently selectable')
           if value.get('task_id') != os.environ['CONTROL_TASK_ID']:
-              raise SystemExit(f"H11 is not deterministic preferred B1 task: {value.get('task_id')}")
+              raise SystemExit(f"H12 is not deterministic preferred B1 task: {value.get('task_id')}")
           if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
-              raise SystemExit('H11 candidate binding mismatch')
+              raise SystemExit('H12 candidate binding mismatch')
           if value.get('attempt', 0) >= value.get('max_attempts', 0):
-              raise SystemExit('H11 attempt budget exhausted before claim')
+              raise SystemExit('H12 attempt budget exhausted before claim')
           PY
           GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
             --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$CONTROL_TASK_ID" \
-            --worker-instance B1 --backend github-actions/g8-h11-b1-lifecycle-actuator-v1 --lease-seconds 900 \
+            --worker-instance B1 --backend github-actions/g8-h12-b1-lifecycle-actuator-v1 --lease-seconds "$CONTROL_DEEP_LEASE_SECONDS" \
             > "$RUNNER_TEMP/claim.json"
           run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
           [ -n "$run_id" ] && [ "$run_id" != null ]
@@ -122,7 +123,12 @@ jobs:
           python control_engine/scheduled_worker_b.py assert-claim --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --task-id "$CONTROL_TASK_ID" --output "$RUNNER_TEMP/readback.json" >/dev/null
           [ "$(jq -r '.run_id' "$RUNNER_TEMP/readback.json")" = "$run_id" ]
           [ "$(jq -r '.candidate_sha' "$RUNNER_TEMP/readback.json")" = "$CONTROL_CANDIDATE_SHA" ]
-          echo "G8_H11_B1_LIFECYCLE=START_PROVEN"
-          echo "G8_H11_B1_TASK_ID=$CONTROL_TASK_ID"
-          echo "G8_H11_B1_RUN_ID=$run_id"
-          echo "G8_H11_B1_CANDIDATE_SHA=$CONTROL_CANDIDATE_SHA"
+          queue_expiry="$(jq -r --arg task "$CONTROL_TASK_ID" '.tasks[]|select(.task_id==$task)|.claim_expires_at' "$state/control/DISPATCH_QUEUE.json")"
+          run_expiry="$(jq -r --arg run "$run_id" '.runs[]|select(.run_id==$run)|.lease_expires_at' "$state/control/DISPATCH_RUNS.json")"
+          [ -n "$queue_expiry" ] && [ "$queue_expiry" != null ]
+          [ "$queue_expiry" = "$run_expiry" ]
+          echo "G8_H12_B1_LIFECYCLE=START_PROVEN"
+          echo "G8_H12_B1_TASK_ID=$CONTROL_TASK_ID"
+          echo "G8_H12_B1_RUN_ID=$run_id"
+          echo "G8_H12_B1_CANDIDATE_SHA=$CONTROL_CANDIDATE_SHA"
+          echo "G8_H12_B1_LEASE_EXPIRES_AT=$queue_expiry"
