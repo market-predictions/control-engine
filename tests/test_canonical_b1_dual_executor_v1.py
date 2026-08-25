@@ -106,11 +106,19 @@ def test_active_profile_requires_exact_standard_token_budget():
             mod._profile(profile)
 
 
-def test_workflow_pins_private_b_and_rechecks_active_profile_before_mutation():
+def test_workflow_pins_private_b_and_rechecks_active_profile_before_each_mutation():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455" in text
     assert '[ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]' in text
-    assert text.count('assert_active_profile "$state"') >= 2
+    assert text.count('assert_active_profile "$state"') >= 3
+
+    terminal = text.split("- name: Revalidate exact claim and persist terminal result", 1)[1]
+    terminal = terminal.split("- name: Publish bounded liveness", 1)[0]
+    loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
+    clone = 'git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"'
+    guard = 'assert_active_profile "$state"'
+    complete = 'control_connected_worker_runtime_v1.py" complete'
+    assert loop.index(clone) < loop.index(guard) < loop.index(complete)
 
 
 def test_start_proven_rejects_wrong_worker_and_expired_lease():
