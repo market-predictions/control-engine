@@ -1,0 +1,171 @@
+name: Gate-8 H17 B1 B0 Actuator V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .control/g8-h17-b1-lifecycle-command.json
+      - .github/workflows/g8-h17-b1-b0-actuator-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-199-g8-h17-b1-b0-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_ENGINE_REPOSITORY: market-predictions/control-engine
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H17
+  CONTROL_CANDIDATE_SHA: 9310d79f35bac61235d796b7434fa3e6a9b9b274
+  CONTROL_BASE_SHA: 0e0594b822cc15098fa8612a8c675e984f08d87d
+  CONTROL_PR_NUMBER: '70'
+  CONTROL_CI_RUN_ID: '32904950184'
+  CONTROL_CI_WORKFLOW_ID: '337765381'
+  CONTROL_DEEP_LEASE_SECONDS: '5400'
+
+jobs:
+  b0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact H17 command envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .version == "1.0" and .action == "claim_and_prove_b0" and
+            .task_id == env.CONTROL_TASK_ID and .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.nonce | type == "string") and (.nonce | length > 0)
+          ' .control/g8-h17-b1-lifecycle-command.json >/dev/null
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Claim H17 and prove authoritative B0 facts
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          state="$RUNNER_TEMP/control-state"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+
+          profile="$state/control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json"
+          jq -e '
+            .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+            .status == "CANDIDATE_GATE8" and
+            .lifecycle_authority.repository == env.CONTROL_PLANE_REPOSITORY and
+            .lifecycle_authority.runtime_ref == env.CONTROL_RUNTIME_REF and
+            .lifecycle_authority.role == "governance_release_assurance" and
+            .lifecycle_authority.worker_instance == "B1" and
+            .lifecycle_authority.capacity == 1 and
+            .principal_manual_relay_count == 0
+          ' "$profile" >/dev/null
+
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${CONTROL_ENGINE_REPOSITORY}/pulls/${CONTROL_PR_NUMBER}" > "$RUNNER_TEMP/pr.json"
+          jq -e '.state == "open" and .draft == true and .merged_at == null and .head.sha == env.CONTROL_CANDIDATE_SHA and .base.sha == env.CONTROL_BASE_SHA' "$RUNNER_TEMP/pr.json" >/dev/null
+
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${CONTROL_ENGINE_REPOSITORY}/actions/runs/${CONTROL_CI_RUN_ID}" > "$RUNNER_TEMP/ci.json"
+          jq -e '
+            .id == (env.CONTROL_CI_RUN_ID|tonumber) and
+            .workflow_id == (env.CONTROL_CI_WORKFLOW_ID|tonumber) and
+            .status == "completed" and .conclusion == "success" and
+            .head_sha == env.CONTROL_CANDIDATE_SHA and .head_branch == "control/199-g8-b1-profile-activation-v1"
+          ' "$RUNNER_TEMP/ci.json" >/dev/null
+
+          selection="$RUNNER_TEMP/selection.json"
+          PYTHONPATH="$b_code" python - "$state/control/DISPATCH_QUEUE.json" "$selection" <<'PY'
+          import json, sys
+          from tools.control_parallel_execution_v1 import INSTANCE_B1, select_task_for_instance
+          from tools.control_queue_v1 import ROLE_B
+          q=json.load(open(sys.argv[1], encoding='utf-8'))
+          t=select_task_for_instance(q, ROLE_B, INSTANCE_B1)
+          v={"selected": t is not None}
+          if t:
+              for k in ("task_id","state","candidate_sha","attempt","max_attempts","priority","depends_on"):
+                  v[k]=t.get(k)
+          json.dump(v, open(sys.argv[2],'w',encoding='utf-8'))
+          print('CONTROL_B1_SELECTION=' + json.dumps(v, sort_keys=True))
+          PY
+          python - "$selection" <<'PY'
+          import json, os, sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          if v.get('selected') is not True: raise SystemExit('H17 is not currently selectable')
+          if v.get('task_id') != os.environ['CONTROL_TASK_ID']: raise SystemExit(f"H17 is not deterministic preferred B1 task: {v.get('task_id')}")
+          if v.get('state') != 'ASSURANCE_QUEUED': raise SystemExit('H17 not queued')
+          if v.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']: raise SystemExit('H17 candidate mismatch')
+          if v.get('attempt',0) >= v.get('max_attempts',0): raise SystemExit('H17 attempt budget exhausted')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
+            --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$CONTROL_TASK_ID" \
+            --worker-instance B1 --backend github-actions/g8-h17-b1-b0-actuator-v1 --lease-seconds "$CONTROL_DEEP_LEASE_SECONDS" > "$RUNNER_TEMP/claim.json"
+          run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
+          [ -n "$run_id" ] && [ "$run_id" != null ]
+
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python control_engine/scheduled_worker_b.py assert-claim --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --task-id "$CONTROL_TASK_ID" --output "$RUNNER_TEMP/readback.json" >/dev/null
+          [ "$(jq -r '.run_id' "$RUNNER_TEMP/readback.json")" = "$run_id" ]
+          [ "$(jq -r '.candidate_sha' "$RUNNER_TEMP/readback.json")" = "$CONTROL_CANDIDATE_SHA" ]
+          qs="$(jq -r --arg task "$CONTROL_TASK_ID" '.tasks[]|select(.task_id==$task)|.claim_started_at' "$state/control/DISPATCH_QUEUE.json")"
+          qe="$(jq -r --arg task "$CONTROL_TASK_ID" '.tasks[]|select(.task_id==$task)|.claim_expires_at' "$state/control/DISPATCH_QUEUE.json")"
+          rs="$(jq -r --arg run "$run_id" '.runs[]|select(.run_id==$run)|.started_at' "$state/control/DISPATCH_RUNS.json")"
+          re="$(jq -r --arg run "$run_id" '.runs[]|select(.run_id==$run)|.lease_expires_at' "$state/control/DISPATCH_RUNS.json")"
+          [ "$qs" = "$rs" ] && [ "$qe" = "$re" ]
+          python - "$qs" "$qe" <<'PY'
+          from datetime import datetime
+          import sys
+          a=datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')); b=datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'))
+          if int((b-a).total_seconds()) != 5400: raise SystemExit('H17 lease is not exactly 5400 seconds')
+          PY
+          jq -e '.status == "CANDIDATE_GATE8" and .lifecycle_authority.capacity == 1 and .principal_manual_relay_count == 0' "$state/control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json" >/dev/null
+
+          echo "G8_H17_B0=PASS"
+          echo "G8_H17_B1_LIFECYCLE=START_PROVEN"
+          echo "G8_H17_B1_RUN_ID=$run_id"
+          echo "G8_H17_B1_CANDIDATE_SHA=$CONTROL_CANDIDATE_SHA"
+          echo "G8_H17_B1_LEASE_STARTED_AT=$qs"
+          echo "G8_H17_B1_LEASE_EXPIRES_AT=$qe"
+          echo "G8_H17_PR_STATE=OPEN_DRAFT_UNMERGED_EXACT_HEAD_BASE"
+          echo "G8_H17_CI=32904950184_SUCCESS_WORKFLOW_337765381_EXACT_HEAD"
+          echo "G8_H17_PROFILE=CANDIDATE_GATE8_B1_CAPACITY_1_RELAY_0"
+          echo "G8_H17_PRIVATE_B_CODE_SHA=$CONTROL_B_CODE_SHA"
