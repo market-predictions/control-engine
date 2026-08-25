@@ -86,7 +86,19 @@ jobs:
           [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
           git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
           selection="$RUNNER_TEMP/selection.json"
-          python control_engine/scheduled_worker_b.py select-b1 --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$selection" >/dev/null
+          PYTHONPATH="$b_code" python - "$state/control/DISPATCH_QUEUE.json" "$selection" <<'PY'
+          import json, sys
+          from tools.control_parallel_execution_v1 import INSTANCE_B1, select_task_for_instance
+          from tools.control_queue_v1 import ROLE_B
+          queue = json.load(open(sys.argv[1], encoding='utf-8'))
+          selected = select_task_for_instance(queue, ROLE_B, INSTANCE_B1)
+          value = {"selected": selected is not None}
+          if selected is not None:
+              for key in ("task_id","state","candidate_sha","attempt","max_attempts","priority","depends_on"):
+                  value[key] = selected.get(key)
+          json.dump(value, open(sys.argv[2], 'w', encoding='utf-8'))
+          print("CONTROL_B1_SELECTION=" + json.dumps(value, sort_keys=True))
+          PY
           python - "$selection" <<'PY'
           import json, os, sys
           value = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -96,6 +108,8 @@ jobs:
               raise SystemExit(f"H8R2 is not deterministic preferred B1 task: {value.get('task_id')}")
           if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
               raise SystemExit('H8R2 candidate binding mismatch')
+          if value.get('attempt', 0) >= value.get('max_attempts', 0):
+              raise SystemExit('H8R2 attempt budget exhausted before claim')
           PY
           GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
             --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$CONTROL_TASK_ID" \
