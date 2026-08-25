@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "action": "claim",
-  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H11",
+  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H11R2",
   "candidate_sha": "d132eb1436ebc33d9ff18327644997b6883d155a",
-  "nonce": "h11-trigger-20260825T1649Z"
+  "nonce": "h11r2-trigger-20260825T1832Z"
 }
