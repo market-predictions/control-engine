@@ -206,9 +206,10 @@ def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
         '.head_sha == $sha',
         '.status == "completed"',
         '.conclusion == "success"',
-        '--argjson workflow_id "$CONTROL_CI_WORKFLOW_ID"',
+        '--argjson workflow_id "$ci_workflow_id"',
         '--argjson run_id "$ci_run_id"',
         'printf \'ci_run_id=%s\\n\' "$ci_run_id" >> "$GITHUB_OUTPUT"',
+        'printf \'ci_workflow_id=%s\\n\' "$ci_workflow_id" >> "$GITHUB_OUTPUT"',
         '--pr-json "$RUNNER_TEMP/pr-before.json"',
     ):
         assert token in evidence
@@ -218,6 +219,7 @@ def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
     for token in (
         'TARGET_BASE_SHA: ${{ steps.evidence.outputs.base_sha }}',
         'REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}',
+        'REQUIRED_CI_WORKFLOW_ID: ${{ steps.evidence.outputs.ci_workflow_id }}',
         '.draft == true',
         '.head.sha == $sha',
         '.base.sha == $base',
@@ -225,7 +227,7 @@ def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
         '.id == $run_id',
         '.status == "completed"',
         '.conclusion == "success"',
-        '--argjson workflow_id "$CONTROL_CI_WORKFLOW_ID"',
+        '--argjson workflow_id "$REQUIRED_CI_WORKFLOW_ID"',
         '--argjson run_id "$REQUIRED_CI_RUN_ID"',
     ):
         assert token in terminal
@@ -234,13 +236,24 @@ def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
     assert loop.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"') == 1
 
 
-def test_workflow_ci_binding_uses_immutable_workflow_id_not_display_name():
+def test_workflow_ci_binding_is_repository_scoped_and_immutable_through_completion():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "CONTROL_CI_WORKFLOW_ID: 337765381" in text
+    assert "CONTROL_CI_WORKFLOW_ID: 337765381" not in text
+    evidence = text.split("- name: Collect exact evidence and execute deterministic route", 1)[1]
+    evidence = evidence.split("- name: Revalidate exact claim and persist terminal result", 1)[0]
+    assert 'repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}' in evidence
+    assert 'ci_workflow_id=' in evidence
+    assert '.workflow_id // empty' in evidence
+    assert '[[ "$ci_workflow_id" =~ ^[0-9]+$ ]]' in evidence
+    assert '--argjson workflow_id "$ci_workflow_id"' in evidence
+    assert 'ci_workflow_id=%s' in evidence
     assert text.count('.workflow_id == $workflow_id') >= 2
     assert text.count('.id == $run_id') >= 2
     assert '.name == "Control Engine CI"' not in text
     assert 'REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}' in text
+    assert 'REQUIRED_CI_WORKFLOW_ID: ${{ steps.evidence.outputs.ci_workflow_id }}' in text
+    terminal = text.split("- name: Revalidate exact claim and persist terminal result", 1)[1]
+    assert '--argjson workflow_id "$REQUIRED_CI_WORKFLOW_ID"' in terminal
 
 
 def test_start_proven_rejects_wrong_worker_and_expired_lease():
