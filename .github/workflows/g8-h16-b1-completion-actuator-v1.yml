@@ -1,0 +1,161 @@
+name: Gate-8 H16 B1 Completion Actuator V1
+
+# Temporary deterministic lifecycle-only completion actuator for START_PROVEN H16.
+# It consumes an explicit canonical result JSON from private Control issue #199.
+# No semantic inference, repair, merge, release, or profile activation.
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .control/g8-h16-b1-completion-command.json
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-199-g8-h16-b1-completion-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_ENGINE_REPOSITORY: market-predictions/control-engine
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H16
+  CONTROL_ACTIVE_RUN_ID: run-a6b19c12-f91c-4812-9b67-422206a5d2e5
+  CONTROL_CANDIDATE_SHA: 930c8076a934b90e3c54d0adcd0bc44561ecd713
+  CONTROL_BASE_SHA: 0e0594b822cc15098fa8612a8c675e984f08d87d
+  CONTROL_PR_NUMBER: '70'
+
+jobs:
+  complete:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h13-b1-lifecycle-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact H16 completion command
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.control/g8-h16-b1-completion-command.json
+          jq -e '
+            .version == "1.0" and .action == "complete" and
+            .task_id == env.CONTROL_TASK_ID and
+            .active_run_id == env.CONTROL_ACTIVE_RUN_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.result_comment_id | type == "number") and (.result_comment_id > 0) and
+            (.nonce | type == "string") and (.nonce | length > 0) and
+            (keys | sort) == (["action","active_run_id","candidate_sha","nonce","result_comment_id","task_id","version"] | sort)
+          ' "$f" >/dev/null
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-issues: 'read'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Fetch pinned lifecycle code and exact H16 result
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+          echo "CONTROL_B_CODE_DIR=$b_code" >> "$GITHUB_ENV"
+          echo "CONTROL_PRIVATE_URL=$private_url" >> "$GITHUB_ENV"
+
+          cid="$(jq -r '.result_comment_id' .control/g8-h16-b1-completion-command.json)"
+          result="$RUNNER_TEMP/result.json"
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${CONTROL_PLANE_REPOSITORY}/issues/comments/${cid}" --jq '.body' > "$result"
+          jq -e --arg task "$CONTROL_TASK_ID" --arg cand "$CONTROL_CANDIDATE_SHA" --arg run "$CONTROL_ACTIVE_RUN_ID" '
+            .version == "1.0" and .task_id == $task and .run_id == $run and
+            .role == "governance_release_assurance" and
+            (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE") and
+            .candidate_sha == $cand and (.summary | type == "string") and
+            (.findings | type == "array") and all(.findings[]; type == "string") and
+            (.evidence | type == "array") and all(.evidence[]; type == "string") and
+            (keys | sort) == (["candidate_sha","evidence","findings","outcome","role","run_id","summary","task_id","version"] | sort)
+          ' "$result" >/dev/null
+          echo "REVIEWER_RESULT=$result" >> "$GITHUB_ENV"
+
+      - name: Revalidate exact candidate and current H16 claim
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${CONTROL_ENGINE_REPOSITORY}/pulls/${CONTROL_PR_NUMBER}" > "$RUNNER_TEMP/pr.json"
+          jq -e '.state == "open" and .draft == true and .merged_at == null and .head.sha == env.CONTROL_CANDIDATE_SHA and .base.sha == env.CONTROL_BASE_SHA' "$RUNNER_TEMP/pr.json" >/dev/null
+          state="$RUNNER_TEMP/precomplete-state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$CONTROL_PRIVATE_URL" "$state"
+          PYTHONPATH="$CONTROL_B_CODE_DIR" python - "$state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          from tools.control_parallel_execution_v1 import assert_claim_current
+          from tools.control_queue_v1 import ROLE_B
+          q=json.load(open(sys.argv[1], encoding='utf-8'))
+          t=assert_claim_current(q, task_id=os.environ['CONTROL_TASK_ID'], role=ROLE_B, worker_instance='B1', run_id=os.environ['CONTROL_ACTIVE_RUN_ID'], now=datetime.now(timezone.utc))
+          if t.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('H16 current claim candidate mismatch')
+          PY
+
+      - name: Persist result first and complete exact H16 claim
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          success=false
+          for n in 1 2 3; do
+            state="$RUNNER_TEMP/complete-$n"; rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$CONTROL_PRIVATE_URL" "$state"
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+              --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
+              --task-id "$CONTROL_TASK_ID" --worker-instance B1 --active-run-id "$CONTROL_ACTIVE_RUN_ID" --result "$REVIEWER_RESULT" \
+              > "$RUNNER_TEMP/complete-$n.log" 2>&1
+            rc=$?; set -e
+            if [ "$rc" = 0 ]; then success=true; break; fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/complete-$n.log"; then continue; fi
+            cat "$RUNNER_TEMP/complete-$n.log"; exit 2
+          done
+          [ "$success" = true ]
+          final="$RUNNER_TEMP/final"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$CONTROL_PRIVATE_URL" "$final"
+          jq -e --arg task "$CONTROL_TASK_ID" --arg run "$CONTROL_ACTIVE_RUN_ID" '
+            [.tasks[]|select(.task_id==$task)]|length==1 and
+            .[0].active_run_id==null and .[0].active_role==null and .[0].active_worker_instance==null and
+            .[0].last_terminal_completion_run_id==$run
+          ' "$final/control/DISPATCH_QUEUE.json" >/dev/null
+          echo 'G8_H16_B1_COMPLETION=TERMINAL_GHOST_FREE'
