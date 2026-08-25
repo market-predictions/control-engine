@@ -59,6 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::add-mask::$CONTROL_TOKEN"
+          python -m pip install --quiet pytest
           private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
           state="$RUNNER_TEMP/state"
           target="$RUNNER_TEMP/target"
