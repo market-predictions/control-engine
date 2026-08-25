@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "action": "repair_exact_head",
+  "task_id": "CONTROL-199-G8-PR70-REPOSITORY-CI-WORKFLOW-BINDING-REPAIR-R18",
+  "expected_head": "3c4c049140bc7763e11ac750103982cb1ddaae35",
+  "target_branch": "control/199-g8-b1-profile-activation-v1",
+  "finding_comment_id": 3857698973,
+  "nonce": "r18-repair-20260825T2148Z"
+}
