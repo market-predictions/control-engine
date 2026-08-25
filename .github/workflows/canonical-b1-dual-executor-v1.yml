@@ -248,11 +248,29 @@ jobs:
           [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
           [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
           private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+
+          assert_active_profile() {
+            local state="$1"
+            local profile="$state/$CONTROL_PROFILE_PATH"
+            [ -f "$profile" ]
+            jq -e '
+              .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+              .version == "1.0" and
+              .status == "ACTIVE" and
+              .lifecycle_authority.role == "governance_release_assurance" and
+              .lifecycle_authority.worker_instance == "B1" and
+              .lifecycle_authority.capacity == 1 and
+              .standard.max_tokens == 1024 and
+              .principal_manual_relay_count == 0
+            ' "$profile" >/dev/null
+          }
+
           success=false
           for cas_attempt in 1 2 3; do
             state="$RUNNER_TEMP/complete-${cas_attempt}"
             rm -rf "$state"
             git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            assert_active_profile "$state"
             set +e
             GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
               --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
