@@ -1,0 +1,100 @@
+name: Gate-8 R16 Deterministic Apply V2
+
+on:
+  push:
+    branches:
+      - control/199-g8-h11-b1-lifecycle-actuator-v1
+    paths:
+      - .control/g8-r16-apply-v2-command.json
+      - .github/workflows/g8-r16-deterministic-apply-v2.yml
+      - scripts/g8_r16_apply_v2.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-199-g8-r16-deterministic-apply-v2
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_TASK_ID: CONTROL-199-G8-PR70-FINAL-VALIDATION-BOUNDARY-REPAIR-R16
+  CONTROL_CANDIDATE_BRANCH: control/199-g8-b1-profile-activation-v1
+  CONTROL_EXPECTED_HEAD: d132eb1436ebc33d9ff18327644997b6883d155a
+
+jobs:
+  apply:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h11-b1-lifecycle-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate exact command
+        run: |
+          set -euo pipefail
+          jq -e '.version=="1.0" and .action=="apply" and .task_id==env.CONTROL_TASK_ID and .expected_head==env.CONTROL_EXPECTED_HEAD and (.nonce|type=="string") and (.nonce|length>0)' .control/g8-r16-apply-v2-command.json >/dev/null
+      - name: Preflight GitHub App
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+      - name: Create short-lived token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Reprove claim, apply, test, publish
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          state="$RUNNER_TEMP/state"
+          target="$RUNNER_TEMP/target"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python - "$state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          q=json.load(open(sys.argv[1], encoding='utf-8')); rows=[x for x in q['tasks'] if x.get('task_id')==os.environ['CONTROL_TASK_ID']]
+          if len(rows)!=1: raise SystemExit('R16 task identity mismatch')
+          t=rows[0]; exp=datetime.fromisoformat(t['claim_expires_at'].replace('Z','+00:00'))
+          if t.get('state')!='REPAIR_EXECUTING' or t.get('active_role')!='implementation_operations' or t.get('active_worker_instance')!='A1': raise SystemExit('R16 START_PROVEN missing')
+          if t.get('candidate_sha')!=os.environ['CONTROL_EXPECTED_HEAD'] or exp<=datetime.now(timezone.utc): raise SystemExit('R16 identity/lease mismatch')
+          if q.get('principal_manual_relay_count')!=0 or t.get('principal_manual_relay_count')!=0: raise SystemExit('relay invariant changed')
+          print('R16_START_PROVEN=' + t['active_run_id'])
+          PY
+          git clone --quiet --single-branch --branch "$CONTROL_CANDIDATE_BRANCH" "https://x-access-token:${CONTROL_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$target"
+          [ "$(git -C "$target" rev-parse HEAD)" = "$CONTROL_EXPECTED_HEAD" ]
+          python scripts/g8_r16_apply_v2.py "$target"
+          python -m py_compile "$target/scripts/canonical_b1_dual_executor_v1.py"
+          python -m pytest -q "$target/tests/test_canonical_b1_dual_executor_v1.py"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python - "$state/control/DISPATCH_QUEUE.json" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          q=json.load(open(sys.argv[1], encoding='utf-8')); t=next(x for x in q['tasks'] if x.get('task_id')==os.environ['CONTROL_TASK_ID'])
+          exp=datetime.fromisoformat(t['claim_expires_at'].replace('Z','+00:00'))
+          if t.get('state')!='REPAIR_EXECUTING' or t.get('active_worker_instance')!='A1' or exp<=datetime.now(timezone.utc): raise SystemExit('R16 claim lost before publish')
+          PY
+          [ "$(git -C "$target" rev-parse HEAD)" = "$CONTROL_EXPECTED_HEAD" ]
+          changed="$(git -C "$target" status --porcelain | awk '{print $2}' | sort)"
+          expected="$(printf '%s\n' '.github/workflows/canonical-b1-dual-executor-v1.yml' 'scripts/canonical_b1_dual_executor_v1.py' 'tests/test_canonical_b1_dual_executor_v1.py' | sort)"
+          [ "$changed" = "$expected" ]
+          git -C "$target" config user.name 'control-r16-deterministic-apply[bot]'
+          git -C "$target" config user.email 'control-r16-deterministic-apply[bot]@users.noreply.github.com'
+          git -C "$target" add -- .github/workflows/canonical-b1-dual-executor-v1.yml scripts/canonical_b1_dual_executor_v1.py tests/test_canonical_b1_dual_executor_v1.py
+          git -C "$target" commit -m 'CONTROL #199: close final Gate-8 validation boundaries'
+          git -C "$target" push origin "HEAD:refs/heads/${CONTROL_CANDIDATE_BRANCH}"
+          echo "R16_CANDIDATE=$(git -C "$target" rev-parse HEAD)"
