@@ -579,12 +579,13 @@ def test_trusted_review_comment_valid_linkage_remains_accepted():
     mod._validate_deep_snapshot_records(**_valid_deep_records())
 
 
-def test_workflow_uses_bounded_deep_lease_and_exact_designated_ci_run():
+def test_workflow_uses_unified_b1_lease_and_exact_designated_ci_run():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r3" in text
     assert "CONTROL_PRIVATE_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60" in text
-    assert "lease_seconds=900" in text
-    assert 'if [ "$assurance_class" = DEEP ]; then lease_seconds=5400; fi' in text
+    assert "lease_seconds=5400" in text
+    assert "lease_seconds=900" not in text
+    assert "assurance_class=" not in text
     assert '--lease-seconds "$lease_seconds"' in text
     assert "steps.claim.outputs.designated_ci_run_id" in text
     assert 'ci_run_id="$DESIGNATED_CI_RUN_ID"' in text
