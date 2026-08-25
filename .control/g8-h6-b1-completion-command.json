@@ -1,8 +1,9 @@
 {
   "version": "1.0",
-  "action": "renew",
+  "action": "complete",
   "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H6",
   "candidate_sha": "e91f80a7cc079979511b80a578020d72bcb436cc",
   "active_run_id": "run-607f441c-1ec6-46ec-9893-e35cbecdc943",
-  "nonce": "g8-h6-renew-20260825T0518Z-01"
+  "review_comment_id": 5405769704,
+  "nonce": "g8-h6-complete-20260825T0519Z-01"
 }
