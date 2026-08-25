@@ -558,9 +558,7 @@ def _deep(
     if not isinstance(actuator_login, str) or not actuator_login:
         raise CanonicalB1Error("DEEP trusted actuator login missing")
 
-    deadline = time.monotonic() + timeout_seconds
-    last_summary = "No terminal Codex review evidence is present yet for the current request."
-    while time.monotonic() < deadline:
+    def read_snapshot():
         reviews = _gh_list_all(token, f"/repos/{repository}/pulls/{pr_number}/reviews")
         review_comments = _gh_list_all(token, f"/repos/{repository}/pulls/{pr_number}/comments")
         reactions = _gh_list_all(
@@ -577,7 +575,10 @@ def _deep(
             request_comment_id=comment_id,
             trusted_actuator_login=actuator_login,
         )
-        decision = classify_trusted_review_snapshot(
+        return reviews, review_comments, reactions, issue_comments
+
+    def classify_snapshot(reviews, review_comments, reactions, issue_comments):
+        return classify_trusted_review_snapshot(
             task_id=task["task_id"],
             handover_id=task["handover_id"],
             candidate_sha=candidate_sha,
@@ -589,7 +590,24 @@ def _deep(
             trigger_reactions=reactions,
             issue_comments=issue_comments,
         )
+
+    deadline = time.monotonic() + timeout_seconds
+    last_summary = "No terminal Codex review evidence is present yet for the current request."
+    while time.monotonic() < deadline:
+        reviews, review_comments, reactions, issue_comments = read_snapshot()
+        decision = classify_snapshot(reviews, review_comments, reactions, issue_comments)
         last_summary = decision.summary
+
+        if decision.status == "COMPLETE" and decision.verdict is not None:
+            # Terminal completion was observed. Re-read all paginated evidence after that
+            # observation so a blocker that became visible during the first sequential
+            # collection cannot be hidden behind a fresh terminal review/reaction.
+            reviews, review_comments, reactions, issue_comments = read_snapshot()
+            decision = classify_snapshot(reviews, review_comments, reactions, issue_comments)
+            last_summary = decision.summary
+
+        if decision.status == "EXECUTION_UNAVAILABLE":
+            raise CanonicalB1Error(decision.summary)
         if decision.status == "COMPLETE" and decision.verdict is not None:
             return _result(
                 task_id=task["task_id"],
@@ -604,8 +622,6 @@ def _deep(
                     f"reviewed_commit={decision.reviewed_commit or ''}",
                 ],
             )
-        if decision.status == "EXECUTION_UNAVAILABLE":
-            raise CanonicalB1Error(decision.summary)
         time.sleep(15)
     raise CanonicalB1Error(f"DEEP terminal evidence timeout: {last_summary}")
 

@@ -454,6 +454,71 @@ def test_deep_real_classifier_observes_page2_blocker_despite_clean_completion_re
     assert ("GET", "/repos/market-predictions/control-engine/pulls/70/comments?per_page=100&page=3") not in observed
 
 
+def test_deep_refetches_paginated_findings_after_observing_completion(monkeypatch):
+    monkeypatch.setenv("CONTROL_GITHUB_WRITE_TOKEN", "token")
+    request_body = {"value": None}
+    request_created_at = "2026-08-25T22:00:00Z"
+    review_id = 1777
+    review_comment_reads = {"count": 0}
+
+    def fake_gh_json(token, method, path, payload=None, accept=None):
+        if method == "POST":
+            request_body["value"] = payload["body"]
+            return {"id": 1321, "user": {"login": "market-predictions"}}
+        if "/pulls/70/reviews?" in path:
+            return [{
+                "id": review_id,
+                "user": {"login": "chatgpt-codex-connector"},
+                "state": "COMMENTED",
+                "submitted_at": "2026-08-25T22:00:10Z",
+                "commit_id": CANDIDATE,
+                "body": "Codex terminal exact-head review",
+            }]
+        if "/pulls/70/comments?" in path:
+            review_comment_reads["count"] += 1
+            if review_comment_reads["count"] == 1:
+                return []
+            return [{
+                "id": 1888,
+                "user": {"login": "chatgpt-codex-connector"},
+                "pull_request_review_id": review_id,
+                "commit_id": CANDIDATE,
+                "body": "P1 BLOCKER VISIBLE ONLY AFTER COMPLETION OBSERVED",
+                "created_at": "2026-08-25T22:00:11Z",
+                "path": "scripts/canonical_b1_dual_executor_v1.py",
+                "line": 568,
+            }]
+        if "/issues/comments/1321/reactions?" in path:
+            return [{
+                "id": 1999,
+                "content": "+1",
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+            }]
+        if "/issues/70/comments?" in path:
+            return [{
+                "id": 1321,
+                "user": {"login": "market-predictions"},
+                "body": request_body["value"],
+                "created_at": request_created_at,
+                "updated_at": request_created_at,
+            }]
+        raise AssertionError((method, path))
+
+    monkeypatch.setattr(mod, "_gh_json", fake_gh_json)
+    result = mod._deep(
+        task=_queue()["tasks"][0],
+        run_id=RUN_ID,
+        candidate_sha=CANDIDATE,
+        repository="market-predictions/control-engine",
+        pr_number=70,
+        timeout_seconds=1,
+    )
+
+    assert review_comment_reads["count"] == 2
+    assert result["outcome"] == "FAIL"
+    assert any("VISIBLE ONLY AFTER COMPLETION" in finding for finding in result["findings"])
+
+
 @pytest.mark.parametrize(
     "malformed",
     [
