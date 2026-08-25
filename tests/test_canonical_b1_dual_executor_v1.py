@@ -117,8 +117,8 @@ def test_workflow_pins_private_b_and_rechecks_terminal_contract_before_each_muta
     loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
     clone = 'git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"'
     guard = 'assert_active_profile "$state"'
-    head_check = '[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]'
-    state_check = '[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]'
+    head_check = """[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]"""
+    state_check = """[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]"""
     complete = 'control_connected_worker_runtime_v1.py" complete'
     assert loop.index(clone) < loop.index(guard) < loop.index(head_check) < loop.index(state_check) < loop.index(complete)
     assert loop.count(head_check) == 1
