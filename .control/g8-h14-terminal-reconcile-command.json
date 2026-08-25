@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "action": "reconcile_terminal_completion",
+  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H14",
+  "active_run_id": "run-f81d806c-8446-490b-ac27-6693dab00e22",
+  "candidate_sha": "3c4c049140bc7763e11ac750103982cb1ddaae35",
+  "completion_ref": "control/claim-completions/CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H14--run-f81d806c-8446-490b-ac27-6693dab00e22.json",
+  "result_ref": "control/worker-results/CONTROL-199-G8-ACTIVATION-H14.json",
+  "result_blob_sha": "2e5c1938426427dad3a1085dc2fec42ede7ef057",
+  "nonce": "h14-terminal-reconcile-20260825T2135Z"
+}
