@@ -1,9 +1,8 @@
 {
   "version": "1.0",
-  "action": "complete",
-  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H12",
-  "candidate_sha": "d132eb1436ebc33d9ff18327644997b6883d155a",
-  "active_run_id": "run-b8a83801-0a7a-4849-b64f-0483945c529e",
-  "review_comment_id": 5415296591,
-  "nonce": "h12-complete-20260825T1903Z"
+  "action": "renew",
+  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H13",
+  "candidate_sha": "967413e25c3fa298ac0980a351671cff1eb9232a",
+  "active_run_id": "run-a2319916-fea2-49e8-b62d-5f8f51fc4ef2",
+  "nonce": "h13-renew-20260825T2013Z"
 }
