@@ -1,0 +1,194 @@
+name: Gate-8 H14 Terminal Reconcile V1
+
+# Temporary deterministic crash-recovery actuator for CONTROL-199 Gate-8 H14.
+# Consumes only the already-immutable H14 CONTROL_TERMINAL_COMPLETION_V1 record.
+# No semantic inference, candidate mutation, repair, merge, release, or profile activation.
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .control/g8-h14-terminal-reconcile-command.json
+      - .github/workflows/g8-h14-terminal-reconcile-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-199-g8-h14-terminal-reconcile-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H14
+  CONTROL_ACTIVE_RUN_ID: run-f81d806c-8446-490b-ac27-6693dab00e22
+  CONTROL_CANDIDATE_SHA: 3c4c049140bc7763e11ac750103982cb1ddaae35
+  CONTROL_COMPLETION_REF: control/claim-completions/CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H14--run-f81d806c-8446-490b-ac27-6693dab00e22.json
+  CONTROL_RESULT_REF: control/worker-results/CONTROL-199-G8-ACTIVATION-H14.json
+  CONTROL_RESULT_BLOB_SHA: 2e5c1938426427dad3a1085dc2fec42ede7ef057
+
+jobs:
+  reconcile:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h13-b1-lifecycle-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact recovery command envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .version == "1.0" and
+            .action == "reconcile_terminal_completion" and
+            .task_id == env.CONTROL_TASK_ID and
+            .active_run_id == env.CONTROL_ACTIVE_RUN_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            .completion_ref == env.CONTROL_COMPLETION_REF and
+            .result_ref == env.CONTROL_RESULT_REF and
+            .result_blob_sha == env.CONTROL_RESULT_BLOB_SHA and
+            (.nonce | type == "string") and (.nonce | length > 0) and
+            (keys | sort) == (["action","active_run_id","candidate_sha","completion_ref","nonce","result_blob_sha","result_ref","task_id","version"] | sort)
+          ' .control/g8-h14-terminal-reconcile-command.json >/dev/null
+
+      - name: Preflight GitHub App identity and installation
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Consume exact H14 terminal completion and close dispatch run
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          state="$RUNNER_TEMP/control-state"
+          one_completion="$RUNNER_TEMP/h14-completion-only"
+
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+
+          completion="$state/$CONTROL_COMPLETION_REF"
+          result="$state/$CONTROL_RESULT_REF"
+          [ -f "$completion" ] && [ -f "$result" ]
+          [ "$(git -C "$state" rev-parse "HEAD:$CONTROL_RESULT_REF")" = "$CONTROL_RESULT_BLOB_SHA" ]
+          jq -e '
+            .protocol_id == "CONTROL_TERMINAL_COMPLETION_V1" and
+            .version == "1.0" and
+            .task_id == env.CONTROL_TASK_ID and
+            .role == "governance_release_assurance" and
+            .worker_instance == "B1" and
+            .active_run_id == env.CONTROL_ACTIVE_RUN_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            .outcome == "EXECUTION_UNAVAILABLE" and
+            .next_state == "EXECUTION_UNAVAILABLE" and
+            .result_ref == env.CONTROL_RESULT_REF and
+            .result_blob_sha == env.CONTROL_RESULT_BLOB_SHA
+          ' "$completion" >/dev/null
+          jq -e --arg task "$CONTROL_TASK_ID" --arg run "$CONTROL_ACTIVE_RUN_ID" --arg sha "$CONTROL_CANDIDATE_SHA" '
+            .tasks[] | select(.task_id == $task) |
+            .state == "ASSURANCE_EXECUTING" and
+            .active_role == "governance_release_assurance" and
+            .active_worker_instance == "B1" and
+            .active_run_id == $run and
+            .candidate_sha == $sha
+          ' "$state/control/DISPATCH_QUEUE.json" >/dev/null
+
+          mkdir -p "$one_completion"
+          cp "$completion" "$one_completion/$(basename "$completion")"
+          PYTHONPATH="$b_code" python "$b_code/tools/control_terminal_completion_v1.py" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --runtime-root "$state" \
+            --completion-dir "$one_completion" \
+            --write > "$RUNNER_TEMP/reconcile-output.txt"
+          grep -F '"finalized": ["CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H14"]' "$RUNNER_TEMP/reconcile-output.txt" >/dev/null
+
+          PYTHONPATH="$b_code" python - "$state/control/DISPATCH_RUNS.json" "$completion" <<'PY'
+          import json, os, sys
+          runs_path, completion_path = sys.argv[1:]
+          runs = json.load(open(runs_path, encoding="utf-8"))
+          record = json.load(open(completion_path, encoding="utf-8"))
+          matches = [r for r in runs.get("runs", []) if r.get("run_id") == os.environ["CONTROL_ACTIVE_RUN_ID"]]
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one H14 dispatch run")
+          run = matches[0]
+          if run.get("task_id") != os.environ["CONTROL_TASK_ID"] or run.get("outcome") != "EXECUTING":
+              raise SystemExit("H14 dispatch run is not the exact executing run")
+          run["outcome"] = record["outcome"]
+          run["heartbeat_at"] = record["completed_at"]
+          run["finished_at"] = record["completed_at"]
+          with open(runs_path, "w", encoding="utf-8") as handle:
+              json.dump(runs, handle, indent=2)
+              handle.write("\n")
+          PY
+
+          PYTHONPATH="$b_code" python - "$state" "$CONTROL_RUNTIME_REF" <<'PY'
+          import sys
+          from pathlib import Path
+          from tools.control_connected_worker_runtime_v1 import _commit_and_push
+          root = Path(sys.argv[1])
+          runtime_ref = sys.argv[2]
+          commit = _commit_and_push(
+              root,
+              runtime_ref,
+              paths=["control/DISPATCH_QUEUE.json", "control/DISPATCH_RUNS.json"],
+              message="runtime: reconcile H14 terminal completion",
+          )
+          print("CONTROL_H14_TERMINAL_RECONCILE_COMMIT=" + commit)
+          PY
+
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python - "$state/control/DISPATCH_QUEUE.json" "$state/control/DISPATCH_RUNS.json" <<'PY'
+          import json, os, sys
+          queue = json.load(open(sys.argv[1], encoding="utf-8"))
+          runs = json.load(open(sys.argv[2], encoding="utf-8"))
+          task = next(t for t in queue["tasks"] if t["task_id"] == os.environ["CONTROL_TASK_ID"])
+          if task.get("state") != "EXECUTION_UNAVAILABLE":
+              raise SystemExit("H14 did not reach EXECUTION_UNAVAILABLE")
+          if task.get("active_run_id") is not None or task.get("active_worker_instance") is not None:
+              raise SystemExit("H14 active claim was not cleared")
+          if task.get("last_terminal_completion_run_id") != os.environ["CONTROL_ACTIVE_RUN_ID"]:
+              raise SystemExit("H14 terminal run provenance missing")
+          if task.get("last_terminal_completion_result_ref") != os.environ["CONTROL_RESULT_REF"]:
+              raise SystemExit("H14 terminal result provenance missing")
+          h15 = next(t for t in queue["tasks"] if t["task_id"] == "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H15")
+          if h15.get("state") != "ASSURANCE_QUEUED" or h15.get("candidate_sha") != os.environ["CONTROL_CANDIDATE_SHA"]:
+              raise SystemExit("H15 is not queued on the exact frozen candidate")
+          run = next(r for r in runs["runs"] if r["run_id"] == os.environ["CONTROL_ACTIVE_RUN_ID"])
+          if run.get("outcome") != "EXECUTION_UNAVAILABLE" or not run.get("finished_at"):
+              raise SystemExit("H14 dispatch run was not closed")
+          print("G8_H14_TERMINAL_RECONCILE=PROVEN")
+          print("G8_H14_FINAL_STATE=" + task["state"])
+          print("G8_H15_STATE=" + h15["state"])
+          PY
