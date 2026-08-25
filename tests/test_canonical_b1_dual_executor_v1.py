@@ -137,6 +137,23 @@ def test_active_profile_requires_exact_standard_token_budget():
             mod._profile(profile)
 
 
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("standard", "executor", "other-executor"),
+        ("standard", "endpoint_class", "other-endpoint"),
+        ("deep", "executor", "other-deep-executor"),
+        ("deep", "request_marker", "OTHER_REQUEST_MARKER"),
+        ("deep", "trusted_request_envelope_required", False),
+    ],
+)
+def test_active_profile_rejects_h9_omitted_contract_fields(section, field, value):
+    profile = _profile()
+    profile[section][field] = value
+    with pytest.raises(mod.CanonicalB1Error):
+        mod._profile(profile)
+
+
 def test_workflow_full_profile_guard_precedes_reconcile_claim_and_terminal_mutations():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455" in text
@@ -184,10 +201,13 @@ def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
         '"$RUNNER_TEMP/pr-binding-before.json"',
         '"$RUNNER_TEMP/pr-binding-after.json"',
         'cmp -s "$RUNNER_TEMP/pr-binding-before.json" "$RUNNER_TEMP/pr-binding-after.json"',
-        '.name == "Control Engine CI"',
+        '.workflow_id == $workflow_id',
+        '.id == $run_id',
         '.head_sha == $sha',
         '.status == "completed"',
         '.conclusion == "success"',
+        '--argjson workflow_id "$CONTROL_CI_WORKFLOW_ID"',
+        '--argjson run_id "$ci_run_id"',
         'printf \'ci_run_id=%s\\n\' "$ci_run_id" >> "$GITHUB_OUTPUT"',
         '--pr-json "$RUNNER_TEMP/pr-before.json"',
     ):
@@ -201,14 +221,26 @@ def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
         '.draft == true',
         '.head.sha == $sha',
         '.base.sha == $base',
-        '.name == "Control Engine CI"',
+        '.workflow_id == $workflow_id',
+        '.id == $run_id',
         '.status == "completed"',
         '.conclusion == "success"',
+        '--argjson workflow_id "$CONTROL_CI_WORKFLOW_ID"',
+        '--argjson run_id "$REQUIRED_CI_RUN_ID"',
     ):
         assert token in terminal
 
     loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
     assert loop.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"') == 1
+
+
+def test_workflow_ci_binding_uses_immutable_workflow_id_not_display_name():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "CONTROL_CI_WORKFLOW_ID: 337765381" in text
+    assert text.count('.workflow_id == $workflow_id') >= 2
+    assert text.count('.id == $run_id') >= 2
+    assert '.name == "Control Engine CI"' not in text
+    assert 'REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}' in text
 
 
 def test_start_proven_rejects_wrong_worker_and_expired_lease():

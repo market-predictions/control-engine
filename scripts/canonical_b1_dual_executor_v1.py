@@ -86,6 +86,8 @@ def _profile(profile: dict[str, Any]) -> dict[str, Any]:
     deep = profile.get("deep")
     if not isinstance(standard, dict) or not isinstance(deep, dict):
         raise CanonicalB1Error("profile executors missing")
+    if standard.get("executor") != "cloudflare-workers-ai" or standard.get("endpoint_class") != "direct-workers-ai":
+        raise CanonicalB1Error("profile STANDARD executor/endpoint contract mismatch")
     if standard.get("model") != MODEL_ID or standard.get("semantic_calls_per_run") != 1:
         raise CanonicalB1Error("profile STANDARD model/call contract mismatch")
     if any(standard.get(key) is not False for key in ("tools_enabled", "automatic_retry", "provider_fallback", "model_fallback", "paid_fallback")):
@@ -93,10 +95,12 @@ def _profile(profile: dict[str, Any]) -> dict[str, Any]:
     max_tokens = standard.get("max_tokens")
     if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens != 1024:
         raise CanonicalB1Error("profile STANDARD max_tokens invalid")
+    if deep.get("executor") != "native-codex-github-review" or deep.get("request_marker") != "CONTROL_B1_CODEX_DEEP_REQUEST_V1":
+        raise CanonicalB1Error("profile DEEP executor/request contract mismatch")
     trusted = deep.get("trusted_connector_logins")
     if not isinstance(trusted, list) or sorted(trusted) != sorted(["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]):
         raise CanonicalB1Error("profile DEEP trusted connector set mismatch")
-    if deep.get("review_only") is not True or deep.get("exact_head_required") is not True:
+    if deep.get("review_only") is not True or deep.get("exact_head_required") is not True or deep.get("trusted_request_envelope_required") is not True:
         raise CanonicalB1Error("profile DEEP review boundary mismatch")
     if profile.get("principal_manual_relay_count") != 0:
         raise CanonicalB1Error("profile principal relay invariant violated")

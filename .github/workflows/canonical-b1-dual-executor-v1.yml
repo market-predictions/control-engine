@@ -21,6 +21,7 @@ env:
   CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
   CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
   CONTROL_PROFILE_PATH: control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json
+  CONTROL_CI_WORKFLOW_ID: 337765381
 
 jobs:
   canonical-b1:
@@ -268,10 +269,10 @@ jobs:
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs?head_sha=${TARGET_CANDIDATE_SHA}&per_page=100" > "$RUNNER_TEMP/workflow-runs.json"
 
           ci_run_id="$(
-            jq -r --arg sha "$TARGET_CANDIDATE_SHA" '
+            jq -r --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$CONTROL_CI_WORKFLOW_ID" '
               [.workflow_runs[] |
                 select(
-                  .name == "Control Engine CI" and
+                  .workflow_id == $workflow_id and
                   .head_sha == $sha and
                   .status == "completed" and
                   .conclusion == "success"
@@ -281,8 +282,9 @@ jobs:
           )"
           [[ "$ci_run_id" =~ ^[0-9]+$ ]]
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
-          jq -e --arg sha "$TARGET_CANDIDATE_SHA" '
-            .name == "Control Engine CI" and
+          jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$CONTROL_CI_WORKFLOW_ID" --argjson run_id "$ci_run_id" '
+            .id == $run_id and
+            .workflow_id == $workflow_id and
             .head_sha == $sha and
             .status == "completed" and
             .conclusion == "success"
@@ -369,8 +371,9 @@ jobs:
             ' "$RUNNER_TEMP/complete-pr.json" >/dev/null
 
             GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"
-            jq -e --arg sha "$TARGET_CANDIDATE_SHA" '
-              .name == "Control Engine CI" and
+            jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$CONTROL_CI_WORKFLOW_ID" --argjson run_id "$REQUIRED_CI_RUN_ID" '
+              .id == $run_id and
+              .workflow_id == $workflow_id and
               .head_sha == $sha and
               .status == "completed" and
               .conclusion == "success"
