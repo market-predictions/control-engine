@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "action": "renew",
+  "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H11",
+  "candidate_sha": "d132eb1436ebc33d9ff18327644997b6883d155a",
+  "active_run_id": "run-615ff241-fd46-418e-a257-1f39ebfe2854",
+  "nonce": "h11-renew-stage-20260825T1828"
+}
