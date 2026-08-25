@@ -22,8 +22,8 @@ concurrency:
 env:
   CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
   CONTROL_RUNTIME_REF: control-runtime-state
-  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
-  CONTROL_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
   CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H12
   CONTROL_CANDIDATE_SHA: d132eb1436ebc33d9ff18327644997b6883d155a
   CONTROL_DEEP_LEASE_SECONDS: '5400'
@@ -107,7 +107,7 @@ jobs:
             queue_blob="$(git -C "$state" rev-parse HEAD:control/DISPATCH_QUEUE.json)"
             PYTHONPATH="$CONTROL_B_CODE_DIR" python - "$state/control/DISPATCH_QUEUE.json" "$state/control/DISPATCH_RUNS.json" "$run_id" <<'PY'
           import json, os, sys
-          from datetime import datetime, timedelta, timezone
+          from datetime import datetime, timezone
           from pathlib import Path
           from tools.control_parallel_execution_v1 import renew_claim, validate_parallel_queue
           from tools.control_queue_v1 import ROLE_B
@@ -120,11 +120,11 @@ jobs:
           task=matches[0]; attempt=task.get('attempt'); claim_count=task.get('claim_count')
           now=datetime.now(timezone.utc).replace(microsecond=0)
           lease_seconds=int(os.environ['CONTROL_DEEP_LEASE_SECONDS'])
-          expires=(now+timedelta(seconds=lease_seconds)).isoformat().replace('+00:00','Z')
           queue=renew_claim(queue, task_id=os.environ['CONTROL_TASK_ID'], role=ROLE_B, worker_instance='B1', run_id=run_id, now=now, lease_seconds=lease_seconds)
           task=[x for x in queue['tasks'] if x.get('task_id')==os.environ['CONTROL_TASK_ID']][0]
           if task.get('attempt')!=attempt or task.get('claim_count')!=claim_count:
               raise SystemExit('renew altered attempt history')
+          expiry=task.get('claim_expires_at')
           run_matches=[x for x in runs.get('runs',[]) if x.get('run_id')==run_id]
           if len(run_matches)!=1:
               raise SystemExit('run identity mismatch')
@@ -132,11 +132,11 @@ jobs:
           if run.get('task_id')!=os.environ['CONTROL_TASK_ID'] or run.get('role')!='governance_release_assurance' or run.get('outcome')!='EXECUTING':
               raise SystemExit('run is not current H12 B1 execution')
           run['heartbeat_at']=now.isoformat().replace('+00:00','Z')
-          run['lease_expires_at']=expires
+          run['lease_expires_at']=expiry
           validate_parallel_queue(queue)
           queue_path.write_text(json.dumps(queue,indent=2)+'\n')
           runs_path.write_text(json.dumps(runs,indent=2)+'\n')
-          print(expires)
+          print(expiry)
           PY
             expected_expiry="$(PYTHONPATH="$CONTROL_B_CODE_DIR" python - "$state/control/DISPATCH_QUEUE.json" "$state/control/DISPATCH_RUNS.json" "$run_id" <<'PY'
           import json, os, sys
