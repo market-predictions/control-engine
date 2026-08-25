@@ -1,0 +1,145 @@
+name: Gate-8 H6 B1 Lifecycle Actuator V1
+
+# Temporary deterministic pre-activation actuator for CONTROL-199 Gate-8 H6.
+# Lifecycle only: no semantic inference, merge, or profile activation.
+
+on:
+  push:
+    branches:
+      - control/199-g8-h6-b1-lifecycle-actuator-v1
+    paths:
+      - .control/g8-h6-b1-lifecycle-command.json
+      - .github/workflows/g8-h6-b1-lifecycle-actuator-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-199-g8-h6-b1-lifecycle-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r2
+  CONTROL_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H6
+  CONTROL_CANDIDATE_SHA: e91f80a7cc079979511b80a578020d72bcb436cc
+
+jobs:
+  lifecycle:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h6-b1-lifecycle-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact command envelope
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=.control/g8-h6-b1-lifecycle-command.json
+          jq -e '
+            .version == "1.0" and
+            (.action == "hold" or .action == "claim") and
+            .task_id == env.CONTROL_TASK_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.nonce | type == "string") and (.nonce | length > 0) and
+            (keys | sort) == (["action","candidate_sha","nonce","task_id","version"] | sort)
+          ' "$file" >/dev/null
+          printf 'action=%s\n' "$(jq -r '.action' "$file")" >> "$GITHUB_OUTPUT"
+
+      - name: Hold without private mutation
+        if: steps.command.outputs.action == 'hold'
+        run: echo 'G8_H6_B1_LIFECYCLE=HOLD'
+
+      - name: Preflight GitHub App identity and installation
+        if: steps.command.outputs.action == 'claim'
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        if: steps.command.outputs.action == 'claim'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Setup Python
+        if: steps.command.outputs.action == 'claim'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Claim and exact-readback H6 B1
+        if: steps.command.outputs.action == 'claim'
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          state="$RUNNER_TEMP/control-state"
+
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          selection="$RUNNER_TEMP/selection.json"
+          python control_engine/scheduled_worker_b.py select-b1 \
+            --code-dir "$b_code" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --output "$selection" >/dev/null
+
+          python - "$selection" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          if value.get('selected') is not True:
+              raise SystemExit('H6 is not currently selectable')
+          if value.get('task_id') != os.environ['CONTROL_TASK_ID']:
+              raise SystemExit(f"H6 is not deterministic preferred B1 task: {value.get('task_id')}")
+          if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('H6 candidate binding mismatch')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" \
+            python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
+              --runtime-root "$state" \
+              --runtime-ref "$CONTROL_RUNTIME_REF" \
+              --task-id "$CONTROL_TASK_ID" \
+              --worker-instance B1 \
+              --backend github-actions/g8-h6-b1-lifecycle-actuator-v1 \
+              --lease-seconds 900 \
+              > "$RUNNER_TEMP/claim.json"
+
+          run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
+          [ -n "$run_id" ] && [ "$run_id" != null ]
+
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python control_engine/scheduled_worker_b.py assert-claim \
+            --code-dir "$b_code" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --task-id "$CONTROL_TASK_ID" \
+            --output "$RUNNER_TEMP/readback.json" >/dev/null
+          [ "$(jq -r '.run_id' "$RUNNER_TEMP/readback.json")" = "$run_id" ]
+          [ "$(jq -r '.candidate_sha' "$RUNNER_TEMP/readback.json")" = "$CONTROL_CANDIDATE_SHA" ]
+
+          echo "G8_H6_B1_LIFECYCLE=START_PROVEN"
+          echo "G8_H6_B1_TASK_ID=$CONTROL_TASK_ID"
+          echo "G8_H6_B1_RUN_ID=$run_id"
+          echo "G8_H6_B1_CANDIDATE_SHA=$CONTROL_CANDIDATE_SHA"
