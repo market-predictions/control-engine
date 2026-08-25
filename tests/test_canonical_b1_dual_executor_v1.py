@@ -106,7 +106,7 @@ def test_active_profile_requires_exact_standard_token_budget():
             mod._profile(profile)
 
 
-def test_workflow_pins_private_b_and_rechecks_active_profile_before_each_mutation():
+def test_workflow_pins_private_b_and_rechecks_terminal_contract_before_each_mutation():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455" in text
     assert '[ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]' in text
@@ -117,8 +117,12 @@ def test_workflow_pins_private_b_and_rechecks_active_profile_before_each_mutatio
     loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
     clone = 'git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"'
     guard = 'assert_active_profile "$state"'
+    head_check = '[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]'
+    state_check = '[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]'
     complete = 'control_connected_worker_runtime_v1.py" complete'
-    assert loop.index(clone) < loop.index(guard) < loop.index(complete)
+    assert loop.index(clone) < loop.index(guard) < loop.index(head_check) < loop.index(state_check) < loop.index(complete)
+    assert loop.count(head_check) == 1
+    assert loop.count(state_check) == 1
 
     required_terminal_contract = [
         '.protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"',
