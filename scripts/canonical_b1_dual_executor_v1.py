@@ -32,6 +32,7 @@ PROFILE_ID = "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"
 ROLE = "governance_release_assurance"
 WORKER = "B1"
 PROVENANCE_ID = "CONTROL_STANDARD_EXECUTOR_PROVENANCE_V1"
+TRUSTED_CODEX_LOGINS = frozenset({"chatgpt-codex-connector", "chatgpt-codex-connector[bot]"})
 
 
 class CanonicalB1Error(RuntimeError):
@@ -98,7 +99,7 @@ def _profile(profile: dict[str, Any]) -> dict[str, Any]:
     if deep.get("executor") != "native-codex-github-review" or deep.get("request_marker") != "CONTROL_B1_CODEX_DEEP_REQUEST_V1":
         raise CanonicalB1Error("profile DEEP executor/request contract mismatch")
     trusted = deep.get("trusted_connector_logins")
-    if not isinstance(trusted, list) or sorted(trusted) != sorted(["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"]):
+    if not isinstance(trusted, list) or sorted(trusted) != sorted(TRUSTED_CODEX_LOGINS):
         raise CanonicalB1Error("profile DEEP trusted connector set mismatch")
     if deep.get("review_only") is not True or deep.get("exact_head_required") is not True or deep.get("trusted_request_envelope_required") is not True:
         raise CanonicalB1Error("profile DEEP review boundary mismatch")
@@ -355,12 +356,113 @@ def _gh_list_all(token: str, path: str, *, accept: str | None = None) -> list[An
     separator = "&" if "?" in path else "?"
     while True:
         value = _gh_json(token, "GET", f"{path}{separator}per_page=100&page={page}", accept=accept)
-        if not isinstance(value, list):
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
             raise CanonicalB1Error("GitHub API paginated list response invalid")
         items.extend(value)
         if len(value) < 100:
             return items
         page += 1
+
+
+def _record_login(item: dict[str, Any]) -> str:
+    user = item.get("user")
+    if isinstance(user, dict) and isinstance(user.get("login"), str):
+        return user["login"]
+    value = item.get("user_login")
+    return value if isinstance(value, str) else ""
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _record_event_time(item: dict[str, Any]) -> datetime:
+    for key in ("submitted_at", "created_at"):
+        value = item.get(key)
+        if value is None:
+            continue
+        try:
+            return _parse_ts(value)
+        except (CanonicalB1Error, ValueError) as exc:
+            raise CanonicalB1Error("trusted DEEP evidence timestamp invalid") from exc
+    raise CanonicalB1Error("trusted DEEP evidence timestamp missing")
+
+
+def _validate_commit_binding(item: dict[str, Any], kind: str) -> None:
+    values: list[str] = []
+    for key in ("commit_id", "original_commit_id", "reviewed_commit"):
+        if key not in item:
+            continue
+        value = item.get(key)
+        if not isinstance(value, str) or len(value) != 40 or any(ch not in "0123456789abcdef" for ch in value):
+            raise CanonicalB1Error(f"trusted {kind} commit binding invalid")
+        values.append(value)
+    if not values or len(set(values)) != 1:
+        raise CanonicalB1Error(f"trusted {kind} commit binding invalid")
+
+
+def _validate_deep_snapshot_records(
+    *,
+    reviews: list[dict[str, Any]],
+    review_comments: list[dict[str, Any]],
+    reactions: list[dict[str, Any]],
+    issue_comments: list[dict[str, Any]],
+    request_comment_id: int,
+    trusted_actuator_login: str,
+) -> None:
+    current = next((item for item in issue_comments if item.get("id") == request_comment_id), None)
+    if current is None or _record_login(current) != trusted_actuator_login:
+        raise CanonicalB1Error("trusted DEEP request comment missing or owner mismatch")
+    if not _positive_int(current.get("id")) or not isinstance(current.get("body"), str):
+        raise CanonicalB1Error("trusted DEEP request comment malformed")
+    request_start = _record_event_time(current)
+    if "updated_at" in current:
+        try:
+            _parse_ts(current.get("updated_at"))
+        except (CanonicalB1Error, ValueError) as exc:
+            raise CanonicalB1Error("trusted DEEP request comment timestamp invalid") from exc
+
+    for item in issue_comments:
+        if _record_login(item) != trusted_actuator_login:
+            continue
+        if not _positive_int(item.get("id")) or not isinstance(item.get("body"), str):
+            raise CanonicalB1Error("trusted DEEP actuator comment malformed")
+        _record_event_time(item)
+        if "updated_at" in item:
+            try:
+                _parse_ts(item.get("updated_at"))
+            except (CanonicalB1Error, ValueError) as exc:
+                raise CanonicalB1Error("trusted DEEP actuator comment timestamp invalid") from exc
+
+    for item in reviews:
+        if _record_login(item) not in TRUSTED_CODEX_LOGINS:
+            continue
+        event_time = _record_event_time(item)
+        if event_time < request_start:
+            continue
+        if not _positive_int(item.get("id")) or not isinstance(item.get("state"), str) or not item.get("state"):
+            raise CanonicalB1Error("trusted DEEP review malformed")
+        _validate_commit_binding(item, "DEEP review")
+
+    for item in review_comments:
+        if _record_login(item) not in TRUSTED_CODEX_LOGINS:
+            continue
+        event_time = _record_event_time(item)
+        if event_time < request_start:
+            continue
+        if (
+            not _positive_int(item.get("id"))
+            or not _positive_int(item.get("pull_request_review_id"))
+            or not isinstance(item.get("body"), str)
+        ):
+            raise CanonicalB1Error("trusted DEEP review comment malformed")
+        _validate_commit_binding(item, "DEEP review comment")
+
+    for item in reactions:
+        if _record_login(item) not in TRUSTED_CODEX_LOGINS:
+            continue
+        if not _positive_int(item.get("id")) or not isinstance(item.get("content"), str) or not item.get("content"):
+            raise CanonicalB1Error("trusted DEEP reaction malformed")
 
 
 def _standard(
@@ -443,7 +545,7 @@ def _deep(
         acceptance_criteria=task["acceptance_criteria"],
     )
     created = _gh_json(token, "POST", f"/repos/{repository}/issues/{pr_number}/comments", {"body": body})
-    if not isinstance(created, dict) or not isinstance(created.get("id"), int):
+    if not isinstance(created, dict) or not _positive_int(created.get("id")):
         raise CanonicalB1Error("DEEP request comment creation failed")
     comment_id = created["id"]
     user = created.get("user")
@@ -462,6 +564,14 @@ def _deep(
             accept="application/vnd.github+json",
         )
         issue_comments = _gh_list_all(token, f"/repos/{repository}/issues/{pr_number}/comments")
+        _validate_deep_snapshot_records(
+            reviews=reviews,
+            review_comments=review_comments,
+            reactions=reactions,
+            issue_comments=issue_comments,
+            request_comment_id=comment_id,
+            trusted_actuator_login=actuator_login,
+        )
         decision = classify_trusted_review_snapshot(
             task_id=task["task_id"],
             handover_id=task["handover_id"],
