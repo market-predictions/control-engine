@@ -260,7 +260,17 @@ jobs:
               .lifecycle_authority.role == "governance_release_assurance" and
               .lifecycle_authority.worker_instance == "B1" and
               .lifecycle_authority.capacity == 1 and
+              .standard.model == "@cf/openai/gpt-oss-120b" and
+              .standard.semantic_calls_per_run == 1 and
+              .standard.tools_enabled == false and
+              .standard.automatic_retry == false and
+              .standard.provider_fallback == false and
+              .standard.model_fallback == false and
+              .standard.paid_fallback == false and
               .standard.max_tokens == 1024 and
+              (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
+              .deep.review_only == true and
+              .deep.exact_head_required == true and
               .principal_manual_relay_count == 0
             ' "$profile" >/dev/null
           }
