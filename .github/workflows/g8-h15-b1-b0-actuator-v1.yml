@@ -1,0 +1,199 @@
+name: Gate-8 H15 B1 B0 Actuator V1
+
+# Temporary deterministic pre-activation actuator for CONTROL-199 Gate-8 H15.
+# Claims the exact H15 B1 task and proves only authoritative B0/live facts.
+# No semantic inference, candidate mutation, repair, merge, release, or profile activation.
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .control/g8-h15-b1-lifecycle-command.json
+      - .github/workflows/g8-h15-b1-b0-actuator-v1.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-199-g8-h15-b1-b0-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_ENGINE_REPOSITORY: market-predictions/control-engine
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H15
+  CONTROL_CANDIDATE_SHA: 3c4c049140bc7763e11ac750103982cb1ddaae35
+  CONTROL_BASE_SHA: 0e0594b822cc15098fa8612a8c675e984f08d87d
+  CONTROL_PR_NUMBER: '70'
+  CONTROL_CI_RUN_ID: '32897605820'
+  CONTROL_CI_WORKFLOW_ID: '337765381'
+  CONTROL_DEEP_LEASE_SECONDS: '5400'
+
+jobs:
+  b0:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/199-g8-h13-b1-lifecycle-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate exact H15 command envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .version == "1.0" and .action == "claim_and_prove_b0" and
+            .task_id == env.CONTROL_TASK_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.nonce | type == "string") and (.nonce | length > 0) and
+            (keys | sort) == (["action","candidate_sha","nonce","task_id","version"] | sort)
+          ' .control/g8-h15-b1-lifecycle-command.json >/dev/null
+
+      - name: Preflight GitHub App identity and installation
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Claim H15 and prove authoritative B0 facts
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          state="$RUNNER_TEMP/control-state"
+
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+
+          # B0-1: private candidate profile is still pre-activation, single-B1, zero relay.
+          profile="$state/control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json"
+          jq -e '
+            .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+            .status == "CANDIDATE_GATE8" and
+            .lifecycle_authority.repository == env.CONTROL_PLANE_REPOSITORY and
+            .lifecycle_authority.runtime_ref == env.CONTROL_RUNTIME_REF and
+            .lifecycle_authority.role == "governance_release_assurance" and
+            .lifecycle_authority.worker_instance == "B1" and
+            .lifecycle_authority.capacity == 1 and
+            .principal_manual_relay_count == 0
+          ' "$profile" >/dev/null
+
+          # B0-2: exact PR snapshot remains open/draft/unmerged on the frozen head/base.
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${CONTROL_ENGINE_REPOSITORY}/pulls/${CONTROL_PR_NUMBER}" > "$RUNNER_TEMP/pr.json"
+          jq -e '
+            .state == "open" and .draft == true and .merged_at == null and
+            .head.sha == env.CONTROL_CANDIDATE_SHA and .base.sha == env.CONTROL_BASE_SHA
+          ' "$RUNNER_TEMP/pr.json" >/dev/null
+
+          # B0-3: designated immutable CI run is completed/success on the exact frozen head/base.
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${CONTROL_ENGINE_REPOSITORY}/actions/runs/${CONTROL_CI_RUN_ID}" > "$RUNNER_TEMP/ci.json"
+          jq -e '
+            .id == (env.CONTROL_CI_RUN_ID|tonumber) and
+            .workflow_id == (env.CONTROL_CI_WORKFLOW_ID|tonumber) and
+            .status == "completed" and .conclusion == "success" and
+            .head_sha == env.CONTROL_CANDIDATE_SHA and .head_branch == "control/199-g8-b1-profile-activation-v1"
+          ' "$RUNNER_TEMP/ci.json" >/dev/null
+
+          # B0-4: H15 must be the deterministic preferred selectable B1 task before claim.
+          selection="$RUNNER_TEMP/selection.json"
+          PYTHONPATH="$b_code" python - "$state/control/DISPATCH_QUEUE.json" "$selection" <<'PY'
+          import json, sys
+          from tools.control_parallel_execution_v1 import INSTANCE_B1, select_task_for_instance
+          from tools.control_queue_v1 import ROLE_B
+          queue = json.load(open(sys.argv[1], encoding='utf-8'))
+          selected = select_task_for_instance(queue, ROLE_B, INSTANCE_B1)
+          value = {"selected": selected is not None}
+          if selected is not None:
+              for key in ("task_id","state","candidate_sha","attempt","max_attempts","priority","depends_on"):
+                  value[key] = selected.get(key)
+          json.dump(value, open(sys.argv[2], 'w', encoding='utf-8'))
+          print('CONTROL_B1_SELECTION=' + json.dumps(value, sort_keys=True))
+          PY
+          python - "$selection" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          if value.get('selected') is not True:
+              raise SystemExit('H15 is not currently selectable')
+          if value.get('task_id') != os.environ['CONTROL_TASK_ID']:
+              raise SystemExit(f"H15 is not deterministic preferred B1 task: {value.get('task_id')}")
+          if value.get('state') != 'ASSURANCE_QUEUED':
+              raise SystemExit('H15 is not ASSURANCE_QUEUED before claim')
+          if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('H15 candidate binding mismatch')
+          if value.get('attempt', 0) >= value.get('max_attempts', 0):
+              raise SystemExit('H15 attempt budget exhausted before claim')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
+            --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$CONTROL_TASK_ID" \
+            --worker-instance B1 --backend github-actions/g8-h15-b1-b0-actuator-v1 --lease-seconds "$CONTROL_DEEP_LEASE_SECONDS" \
+            > "$RUNNER_TEMP/claim.json"
+          run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
+          [ -n "$run_id" ] && [ "$run_id" != null ]
+
+          # B0-5: fresh exact private readback proves START_PROVEN and exact 5400s queue/run lease binding.
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python control_engine/scheduled_worker_b.py assert-claim --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --task-id "$CONTROL_TASK_ID" --output "$RUNNER_TEMP/readback.json" >/dev/null
+          [ "$(jq -r '.run_id' "$RUNNER_TEMP/readback.json")" = "$run_id" ]
+          [ "$(jq -r '.candidate_sha' "$RUNNER_TEMP/readback.json")" = "$CONTROL_CANDIDATE_SHA" ]
+          queue_started="$(jq -r --arg task "$CONTROL_TASK_ID" '.tasks[]|select(.task_id==$task)|.claim_started_at' "$state/control/DISPATCH_QUEUE.json")"
+          queue_expiry="$(jq -r --arg task "$CONTROL_TASK_ID" '.tasks[]|select(.task_id==$task)|.claim_expires_at' "$state/control/DISPATCH_QUEUE.json")"
+          run_started="$(jq -r --arg run "$run_id" '.runs[]|select(.run_id==$run)|.started_at' "$state/control/DISPATCH_RUNS.json")"
+          run_expiry="$(jq -r --arg run "$run_id" '.runs[]|select(.run_id==$run)|.lease_expires_at' "$state/control/DISPATCH_RUNS.json")"
+          [ "$queue_started" = "$run_started" ] && [ "$queue_expiry" = "$run_expiry" ]
+          python - "$queue_started" "$queue_expiry" <<'PY'
+          from datetime import datetime
+          import sys
+          start=datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+          end=datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'))
+          if int((end-start).total_seconds()) != 5400:
+              raise SystemExit('H15 lease is not exactly 5400 seconds')
+          PY
+
+          # B0-6: profile must still be unchanged after claim readback.
+          jq -e '.status == "CANDIDATE_GATE8" and .lifecycle_authority.capacity == 1 and .principal_manual_relay_count == 0' \
+            "$state/control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json" >/dev/null
+
+          echo "G8_H15_B0=PASS"
+          echo "G8_H15_B1_LIFECYCLE=START_PROVEN"
+          echo "G8_H15_B1_TASK_ID=$CONTROL_TASK_ID"
+          echo "G8_H15_B1_RUN_ID=$run_id"
+          echo "G8_H15_B1_CANDIDATE_SHA=$CONTROL_CANDIDATE_SHA"
+          echo "G8_H15_B1_LEASE_STARTED_AT=$queue_started"
+          echo "G8_H15_B1_LEASE_EXPIRES_AT=$queue_expiry"
+          echo "G8_H15_PR_STATE=OPEN_DRAFT_UNMERGED_EXACT_HEAD_BASE"
+          echo "G8_H15_CI=32897605820_SUCCESS_WORKFLOW_337765381_EXACT_HEAD"
+          echo "G8_H15_PROFILE=CANDIDATE_GATE8_B1_CAPACITY_1_RELAY_0"
+          echo "G8_H15_PRIVATE_B_CODE_SHA=$CONTROL_B_CODE_SHA"
