@@ -281,6 +281,8 @@ jobs:
             rm -rf "$state"
             git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
             assert_active_profile "$state"
+            [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
+            [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
             set +e
             GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
               --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
