@@ -120,6 +120,29 @@ def test_workflow_pins_private_b_and_rechecks_active_profile_before_each_mutatio
     complete = 'control_connected_worker_runtime_v1.py" complete'
     assert loop.index(clone) < loop.index(guard) < loop.index(complete)
 
+    required_terminal_contract = [
+        '.protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"',
+        '.version == "1.0"',
+        '.status == "ACTIVE"',
+        '.lifecycle_authority.role == "governance_release_assurance"',
+        '.lifecycle_authority.worker_instance == "B1"',
+        '.lifecycle_authority.capacity == 1',
+        '.standard.model == "@cf/openai/gpt-oss-120b"',
+        '.standard.semantic_calls_per_run == 1',
+        '.standard.tools_enabled == false',
+        '.standard.automatic_retry == false',
+        '.standard.provider_fallback == false',
+        '.standard.model_fallback == false',
+        '.standard.paid_fallback == false',
+        '.standard.max_tokens == 1024',
+        '(.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort)',
+        '.deep.review_only == true',
+        '.deep.exact_head_required == true',
+        '.principal_manual_relay_count == 0',
+    ]
+    for predicate in required_terminal_contract:
+        assert predicate in terminal
+
 
 def test_start_proven_rejects_wrong_worker_and_expired_lease():
     with pytest.raises(mod.CanonicalB1Error, match="role/worker"):
