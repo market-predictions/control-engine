@@ -77,9 +77,11 @@ jobs:
           PY
           git clone --quiet --single-branch --branch "$CONTROL_CANDIDATE_BRANCH" "https://x-access-token:${CONTROL_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$target"
           [ "$(git -C "$target" rev-parse HEAD)" = "$CONTROL_EXPECTED_HEAD" ]
-          python scripts/g8_r16_apply_v2.py "$target"
-          python -m py_compile "$target/scripts/canonical_b1_dual_executor_v1.py"
-          python -m pytest -q "$target/tests/test_canonical_b1_dual_executor_v1.py"
+          PYTHONDONTWRITEBYTECODE=1 python scripts/g8_r16_apply_v2.py "$target"
+          PYTHONDONTWRITEBYTECODE=1 python -m py_compile "$target/scripts/canonical_b1_dual_executor_v1.py"
+          PYTHONDONTWRITEBYTECODE=1 python -m pytest -q "$target/tests/test_canonical_b1_dual_executor_v1.py"
+          find "$target" -type d -name __pycache__ -prune -exec rm -rf {} +
+          find "$target" -type f -name '*.pyc' -delete
           rm -rf "$state"
           git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
           python - "$state/control/DISPATCH_QUEUE.json" <<'PY'
