@@ -1,8 +1,9 @@
 {
   "version": "1.0",
-  "action": "renew",
+  "action": "complete",
   "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H10",
   "candidate_sha": "4c167d04cb7fc6169e08385775dad25939752c22",
   "active_run_id": "run-7179433b-13ff-4d36-b244-e560eb886fa0",
-  "nonce": "h10-renew-20260825T1625Z"
+  "review_comment_id": 5413513828,
+  "nonce": "h10-complete-20260825T1630Z"
 }
