@@ -44,12 +44,15 @@ def _profile(status="ACTIVE"):
             "paid_fallback": False,
         },
         "deep": {
+            "executor": "native-codex-github-review",
+            "request_marker": "CONTROL_B1_CODEX_DEEP_REQUEST_V1",
             "trusted_connector_logins": [
                 "chatgpt-codex-connector",
                 "chatgpt-codex-connector[bot]",
             ],
             "review_only": True,
             "exact_head_required": True,
+            "trusted_request_envelope_required": True,
         },
         "principal_manual_relay_count": 0,
     }
@@ -83,6 +86,34 @@ def _queue(*, worker="B1", expires_delta=timedelta(minutes=10)):
     }
 
 
+def _required_profile_predicates():
+    return [
+        '.protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"',
+        '.version == "1.0"',
+        '.status == "ACTIVE"',
+        '.lifecycle_authority.role == "governance_release_assurance"',
+        '.lifecycle_authority.worker_instance == "B1"',
+        '.lifecycle_authority.capacity == 1',
+        '.standard.executor == "cloudflare-workers-ai"',
+        '.standard.model == "@cf/openai/gpt-oss-120b"',
+        '.standard.endpoint_class == "direct-workers-ai"',
+        '.standard.semantic_calls_per_run == 1',
+        '.standard.tools_enabled == false',
+        '.standard.automatic_retry == false',
+        '.standard.provider_fallback == false',
+        '.standard.model_fallback == false',
+        '.standard.paid_fallback == false',
+        '.standard.max_tokens == 1024',
+        '.deep.executor == "native-codex-github-review"',
+        '.deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1"',
+        '(.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort)',
+        '.deep.review_only == true',
+        '.deep.exact_head_required == true',
+        '.deep.trusted_request_envelope_required == true',
+        '.principal_manual_relay_count == 0',
+    ]
+
+
 def test_candidate_profile_cannot_execute():
     with pytest.raises(mod.CanonicalB1Error, match="not ACTIVE"):
         mod._profile(_profile("CANDIDATE_GATE8"))
@@ -106,46 +137,78 @@ def test_active_profile_requires_exact_standard_token_budget():
             mod._profile(profile)
 
 
-def test_workflow_pins_private_b_and_rechecks_terminal_contract_before_each_mutation():
+def test_workflow_full_profile_guard_precedes_reconcile_claim_and_terminal_mutations():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455" in text
     assert '[ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]' in text
-    assert text.count('assert_active_profile "$state"') >= 3
+
+    claim = text.split("- name: Reconcile, select and claim exact preferred B1", 1)[1]
+    claim = claim.split("- name: Collect exact evidence and execute deterministic route", 1)[0]
+    terminal = text.split("- name: Revalidate exact claim and persist terminal result", 1)[1]
+    terminal = terminal.split("- name: Publish bounded liveness", 1)[0]
+
+    for predicate in _required_profile_predicates():
+        assert predicate in claim
+        assert predicate in terminal
+
+    reconcile_loop = claim.split("for cas_attempt in 1 2 3; do", 1)[1]
+    push = 'git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}"'
+    assert reconcile_loop.index('assert_active_profile "$state"') < reconcile_loop.index(push)
+
+    claim_call = 'control_connected_worker_runtime_v1.py" claim'
+    selection = "python control_engine/scheduled_worker_b.py select-b1"
+    last_guard_before_claim = claim.rfind('assert_active_profile "$state"', 0, claim.index(claim_call))
+    assert claim.index(selection) < last_guard_before_claim < claim.index(claim_call)
+
+    terminal_loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
+    clone = 'git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"'
+    guard = 'assert_active_profile "$state"'
+    pr_snapshot = 'gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"'
+    ci_snapshot = 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"'
+    complete = 'control_connected_worker_runtime_v1.py" complete'
+    assert terminal_loop.index(clone) < terminal_loop.index(guard) < terminal_loop.index(pr_snapshot) < terminal_loop.index(ci_snapshot) < terminal_loop.index(complete)
+
+
+def test_workflow_freezes_pr_evidence_snapshot_and_requires_exact_head_ci():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    evidence = text.split("- name: Collect exact evidence and execute deterministic route", 1)[1]
+    evidence = evidence.split("- name: Revalidate exact claim and persist terminal result", 1)[0]
+
+    for token in (
+        '"$RUNNER_TEMP/pr-before.json"',
+        '.state == "open"',
+        '.draft == true',
+        '.merged != true',
+        '.head.sha == $sha',
+        '(.base.sha | type == "string" and test("^[0-9a-f]{40}$"))',
+        '"$RUNNER_TEMP/pr-binding-before.json"',
+        '"$RUNNER_TEMP/pr-binding-after.json"',
+        'cmp -s "$RUNNER_TEMP/pr-binding-before.json" "$RUNNER_TEMP/pr-binding-after.json"',
+        '.name == "Control Engine CI"',
+        '.head_sha == $sha',
+        '.status == "completed"',
+        '.conclusion == "success"',
+        'printf \'ci_run_id=%s\\n\' "$ci_run_id" >> "$GITHUB_OUTPUT"',
+        '--pr-json "$RUNNER_TEMP/pr-before.json"',
+    ):
+        assert token in evidence
 
     terminal = text.split("- name: Revalidate exact claim and persist terminal result", 1)[1]
     terminal = terminal.split("- name: Publish bounded liveness", 1)[0]
-    loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
-    clone = 'git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"'
-    guard = 'assert_active_profile "$state"'
-    head_check = """[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]"""
-    state_check = """[ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]"""
-    complete = 'control_connected_worker_runtime_v1.py" complete'
-    assert loop.index(clone) < loop.index(guard) < loop.index(head_check) < loop.index(state_check) < loop.index(complete)
-    assert loop.count(head_check) == 1
-    assert loop.count(state_check) == 1
+    for token in (
+        'TARGET_BASE_SHA: ${{ steps.evidence.outputs.base_sha }}',
+        'REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}',
+        '.draft == true',
+        '.head.sha == $sha',
+        '.base.sha == $base',
+        '.name == "Control Engine CI"',
+        '.status == "completed"',
+        '.conclusion == "success"',
+    ):
+        assert token in terminal
 
-    required_terminal_contract = [
-        '.protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"',
-        '.version == "1.0"',
-        '.status == "ACTIVE"',
-        '.lifecycle_authority.role == "governance_release_assurance"',
-        '.lifecycle_authority.worker_instance == "B1"',
-        '.lifecycle_authority.capacity == 1',
-        '.standard.model == "@cf/openai/gpt-oss-120b"',
-        '.standard.semantic_calls_per_run == 1',
-        '.standard.tools_enabled == false',
-        '.standard.automatic_retry == false',
-        '.standard.provider_fallback == false',
-        '.standard.model_fallback == false',
-        '.standard.paid_fallback == false',
-        '.standard.max_tokens == 1024',
-        '(.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort)',
-        '.deep.review_only == true',
-        '.deep.exact_head_required == true',
-        '.principal_manual_relay_count == 0',
-    ]
-    for predicate in required_terminal_contract:
-        assert predicate in terminal
+    loop = terminal.split("for cas_attempt in 1 2 3; do", 1)[1]
+    assert loop.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"') == 1
 
 
 def test_start_proven_rejects_wrong_worker_and_expired_lease():

@@ -90,10 +90,26 @@ jobs:
           jq -e '
             .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
             .version == "1.0" and
+            .status == "ACTIVE" and
             .lifecycle_authority.role == "governance_release_assurance" and
             .lifecycle_authority.worker_instance == "B1" and
             .lifecycle_authority.capacity == 1 and
+            .standard.executor == "cloudflare-workers-ai" and
+            .standard.model == "@cf/openai/gpt-oss-120b" and
+            .standard.endpoint_class == "direct-workers-ai" and
+            .standard.semantic_calls_per_run == 1 and
+            .standard.tools_enabled == false and
+            .standard.automatic_retry == false and
+            .standard.provider_fallback == false and
+            .standard.model_fallback == false and
+            .standard.paid_fallback == false and
             .standard.max_tokens == 1024 and
+            .deep.executor == "native-codex-github-review" and
+            .deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1" and
+            (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
+            .deep.review_only == true and
+            .deep.exact_head_required == true and
+            .deep.trusted_request_envelope_required == true and
             .principal_manual_relay_count == 0
           ' "$profile" >/dev/null
           echo 'active=true' >> "$GITHUB_OUTPUT"
@@ -127,7 +143,22 @@ jobs:
               .lifecycle_authority.role == "governance_release_assurance" and
               .lifecycle_authority.worker_instance == "B1" and
               .lifecycle_authority.capacity == 1 and
+              .standard.executor == "cloudflare-workers-ai" and
+              .standard.model == "@cf/openai/gpt-oss-120b" and
+              .standard.endpoint_class == "direct-workers-ai" and
+              .standard.semantic_calls_per_run == 1 and
+              .standard.tools_enabled == false and
+              .standard.automatic_retry == false and
+              .standard.provider_fallback == false and
+              .standard.model_fallback == false and
+              .standard.paid_fallback == false and
               .standard.max_tokens == 1024 and
+              .deep.executor == "native-codex-github-review" and
+              .deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1" and
+              (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
+              .deep.review_only == true and
+              .deep.exact_head_required == true and
+              .deep.trusted_request_envelope_required == true and
               .principal_manual_relay_count == 0
             ' "$profile" >/dev/null
           }
@@ -149,6 +180,7 @@ jobs:
             [ "$(git -C "$state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
             [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
             if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              assert_active_profile "$state"
               git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
               git -C "$state" commit --quiet -m 'runtime: canonical B1 reconcile before selection'
               git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}" || continue
@@ -177,6 +209,7 @@ jobs:
           [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$candidate_pr" =~ ^[0-9]+$ ]]
 
+          assert_active_profile "$state"
           GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
             --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$task_id" \
             --worker-instance B1 --backend github-actions/canonical-b1-dual-executor-v1 --lease-seconds 900 > "$RUNNER_TEMP/claim.json"
@@ -197,6 +230,7 @@ jobs:
           printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
 
       - name: Collect exact evidence and execute deterministic route
+        id: evidence
         if: steps.profile.outputs.active == 'true' && steps.claim.outputs.selected == 'true'
         shell: bash
         env:
@@ -217,18 +251,55 @@ jobs:
           git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
           cp "$state/$CONTROL_PROFILE_PATH" "$RUNNER_TEMP/profile.json"
 
-          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr.json"
-          [ "$(jq -r '.head.sha' "$RUNNER_TEMP/pr.json")" = "$TARGET_CANDIDATE_SHA" ]
-          [ "$(jq -r '.state' "$RUNNER_TEMP/pr.json")" = open ]
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr-before.json"
+          jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson number "$TARGET_PR" '
+            .number == $number and
+            .state == "open" and
+            .draft == true and
+            .merged != true and
+            .head.sha == $sha and
+            (.base.sha | type == "string" and test("^[0-9a-f]{40}$"))
+          ' "$RUNNER_TEMP/pr-before.json" >/dev/null
+          base_sha="$(jq -r '.base.sha' "$RUNNER_TEMP/pr-before.json")"
+          jq -S '{number,state,draft,merged,head_sha:.head.sha,base_sha:.base.sha}' "$RUNNER_TEMP/pr-before.json" > "$RUNNER_TEMP/pr-binding-before.json"
+
           GH_TOKEN="$CONTROL_TOKEN" gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}/files?per_page=100" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/changed-files.json"
           GH_TOKEN="$CONTROL_TOKEN" gh api -H 'Accept: application/vnd.github.v3.diff' "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/candidate.diff"
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs?head_sha=${TARGET_CANDIDATE_SHA}&per_page=100" > "$RUNNER_TEMP/workflow-runs.json"
+
+          ci_run_id="$(
+            jq -r --arg sha "$TARGET_CANDIDATE_SHA" '
+              [.workflow_runs[] |
+                select(
+                  .name == "Control Engine CI" and
+                  .head_sha == $sha and
+                  .status == "completed" and
+                  .conclusion == "success"
+                )
+              ] | sort_by(.id) | last | .id // empty
+            ' "$RUNNER_TEMP/workflow-runs.json"
+          )"
+          [[ "$ci_run_id" =~ ^[0-9]+$ ]]
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
+          jq -e --arg sha "$TARGET_CANDIDATE_SHA" '
+            .name == "Control Engine CI" and
+            .head_sha == $sha and
+            .status == "completed" and
+            .conclusion == "success"
+          ' "$RUNNER_TEMP/required-ci.json" >/dev/null
+
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr-after.json"
+          jq -S '{number,state,draft,merged,head_sha:.head.sha,base_sha:.base.sha}' "$RUNNER_TEMP/pr-after.json" > "$RUNNER_TEMP/pr-binding-after.json"
+          cmp -s "$RUNNER_TEMP/pr-binding-before.json" "$RUNNER_TEMP/pr-binding-after.json"
+
+          printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+          printf 'ci_run_id=%s\n' "$ci_run_id" >> "$GITHUB_OUTPUT"
 
           python scripts/canonical_b1_dual_executor_v1.py \
             --profile "$RUNNER_TEMP/profile.json" \
             --queue "$state/control/DISPATCH_QUEUE.json" \
             --task-id "$TASK_ID" --run-id "$ACTIVE_RUN_ID" --repository "$TARGET_REPOSITORY" \
-            --candidate-sha "$TARGET_CANDIDATE_SHA" --pr-json "$RUNNER_TEMP/pr.json" \
+            --candidate-sha "$TARGET_CANDIDATE_SHA" --pr-json "$RUNNER_TEMP/pr-before.json" \
             --changed-files-json "$RUNNER_TEMP/changed-files.json" --workflow-runs "$RUNNER_TEMP/workflow-runs.json" \
             --diff "$RUNNER_TEMP/candidate.diff" --deep-timeout-seconds 420 --output "$RUNNER_TEMP/result.json"
           jq -e '.version == "1.0" and .task_id == env.TASK_ID and .run_id == env.ACTIVE_RUN_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE" or .outcome == "EXECUTION_UNAVAILABLE")' "$RUNNER_TEMP/result.json" >/dev/null
@@ -242,11 +313,11 @@ jobs:
           TARGET_REPOSITORY: ${{ steps.claim.outputs.repository }}
           TARGET_CANDIDATE_SHA: ${{ steps.claim.outputs.candidate_sha }}
           TARGET_PR: ${{ steps.claim.outputs.candidate_pr }}
+          TARGET_BASE_SHA: ${{ steps.evidence.outputs.base_sha }}
+          REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}
           ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
         run: |
           set -euo pipefail
-          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
-          [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
           private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
 
           assert_active_profile() {
@@ -260,7 +331,9 @@ jobs:
               .lifecycle_authority.role == "governance_release_assurance" and
               .lifecycle_authority.worker_instance == "B1" and
               .lifecycle_authority.capacity == 1 and
+              .standard.executor == "cloudflare-workers-ai" and
               .standard.model == "@cf/openai/gpt-oss-120b" and
+              .standard.endpoint_class == "direct-workers-ai" and
               .standard.semantic_calls_per_run == 1 and
               .standard.tools_enabled == false and
               .standard.automatic_retry == false and
@@ -268,9 +341,12 @@ jobs:
               .standard.model_fallback == false and
               .standard.paid_fallback == false and
               .standard.max_tokens == 1024 and
+              .deep.executor == "native-codex-github-review" and
+              .deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1" and
               (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
               .deep.review_only == true and
               .deep.exact_head_required == true and
+              .deep.trusted_request_envelope_required == true and
               .principal_manual_relay_count == 0
             ' "$profile" >/dev/null
           }
@@ -281,8 +357,25 @@ jobs:
             rm -rf "$state"
             git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
             assert_active_profile "$state"
-            [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.head.sha')" = "$TARGET_CANDIDATE_SHA" ]
-            [ "$(GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" --jq '.state')" = open ]
+
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"
+            jq -e --arg sha "$TARGET_CANDIDATE_SHA" --arg base "$TARGET_BASE_SHA" --argjson number "$TARGET_PR" '
+              .number == $number and
+              .state == "open" and
+              .draft == true and
+              .merged != true and
+              .head.sha == $sha and
+              .base.sha == $base
+            ' "$RUNNER_TEMP/complete-pr.json" >/dev/null
+
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"
+            jq -e --arg sha "$TARGET_CANDIDATE_SHA" '
+              .name == "Control Engine CI" and
+              .head_sha == $sha and
+              .status == "completed" and
+              .conclusion == "success"
+            ' "$RUNNER_TEMP/complete-ci.json" >/dev/null
+
             set +e
             GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
               --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
