@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "action": "hold",
+  "action": "claim",
   "task_id": "CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H6",
   "candidate_sha": "e91f80a7cc079979511b80a578020d72bcb436cc",
-  "nonce": "g8-h6-hold-20260825T0512Z-01"
+  "nonce": "g8-h6-claim-20260825T0514Z-01"
 }
