@@ -434,6 +434,7 @@ def _validate_deep_snapshot_records(
             except (CanonicalB1Error, ValueError) as exc:
                 raise CanonicalB1Error("trusted DEEP actuator comment timestamp invalid") from exc
 
+    trusted_review_ids: set[int] = set()
     for item in reviews:
         if _record_login(item) not in TRUSTED_CODEX_LOGINS:
             continue
@@ -443,6 +444,7 @@ def _validate_deep_snapshot_records(
         if not _positive_int(item.get("id")) or not isinstance(item.get("state"), str) or not item.get("state"):
             raise CanonicalB1Error("trusted DEEP review malformed")
         _validate_commit_binding(item, "DEEP review")
+        trusted_review_ids.add(item["id"])
 
     for item in review_comments:
         if _record_login(item) not in TRUSTED_CODEX_LOGINS:
@@ -454,8 +456,11 @@ def _validate_deep_snapshot_records(
             not _positive_int(item.get("id"))
             or not _positive_int(item.get("pull_request_review_id"))
             or not isinstance(item.get("body"), str)
+            or not item.get("body", "").strip()
         ):
             raise CanonicalB1Error("trusted DEEP review comment malformed")
+        if item["pull_request_review_id"] not in trusted_review_ids:
+            raise CanonicalB1Error("trusted DEEP review comment linkage invalid")
         _validate_commit_binding(item, "DEEP review comment")
 
     for item in reactions:

@@ -16,8 +16,8 @@ concurrency:
 env:
   CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
   CONTROL_RUNTIME_REF: control-runtime-state
-  CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r2
-  CONTROL_PRIVATE_B_CODE_SHA: 97ef7de0007b4886e336182c7a9a0ee20ae77455
+  CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_PRIVATE_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
   CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
   CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
   CONTROL_PROFILE_PATH: control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json
@@ -210,10 +210,28 @@ jobs:
           [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$candidate_pr" =~ ^[0-9]+$ ]]
 
+          assurance_class="$(jq -r --arg task "$task_id" '.tasks[] | select(.task_id==$task) | if ((.instruction // "") | contains("CONTROL_ASSURANCE_CLASS=DEEP")) then "DEEP" else "STANDARD" end' "$state/control/DISPATCH_QUEUE.json")"
+          lease_seconds=900
+          if [ "$assurance_class" = DEEP ]; then lease_seconds=5400; fi
+          designated_ci_run_id="$(python - "$state/control/DISPATCH_QUEUE.json" "$task_id" <<'PYCI'
+          import json, re, sys
+          q=json.load(open(sys.argv[1], encoding='utf-8')); task_id=sys.argv[2]
+          rows=[x for x in q['tasks'] if x.get('task_id')==task_id]
+          if len(rows)!=1: raise SystemExit('designated CI task identity mismatch')
+          t=rows[0]; texts=[t.get('instruction',''), *t.get('acceptance_criteria',[])]
+          ids=set()
+          for text in texts:
+              if isinstance(text,str): ids.update(re.findall(r'\bCI run[ _-]*(\d+)\b', text, flags=re.I))
+          if len(ids)!=1: raise SystemExit('exactly one designated CI run identity is required')
+          print(next(iter(ids)))
+          PYCI
+          )"
+          [[ "$designated_ci_run_id" =~ ^[0-9]+$ ]]
+
           assert_active_profile "$state"
           GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
             --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$task_id" \
-            --worker-instance B1 --backend github-actions/canonical-b1-dual-executor-v1 --lease-seconds 900 > "$RUNNER_TEMP/claim.json"
+            --worker-instance B1 --backend github-actions/canonical-b1-dual-executor-v1 --lease-seconds "$lease_seconds" > "$RUNNER_TEMP/claim.json"
           run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
           [ -n "$run_id" ] && [ "$run_id" != null ]
 
@@ -229,6 +247,8 @@ jobs:
           printf 'candidate_sha=%s\n' "$candidate_sha" >> "$GITHUB_OUTPUT"
           printf 'candidate_pr=%s\n' "$candidate_pr" >> "$GITHUB_OUTPUT"
           printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+          printf 'designated_ci_run_id=%s\n' "$designated_ci_run_id" >> "$GITHUB_OUTPUT"
+          printf 'assurance_class=%s\n' "$assurance_class" >> "$GITHUB_OUTPUT"
 
       - name: Collect exact evidence and execute deterministic route
         id: evidence
@@ -244,6 +264,7 @@ jobs:
           TARGET_CANDIDATE_SHA: ${{ steps.claim.outputs.candidate_sha }}
           TARGET_PR: ${{ steps.claim.outputs.candidate_pr }}
           ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+          DESIGNATED_CI_RUN_ID: ${{ steps.claim.outputs.designated_ci_run_id }}
           PYTHONPATH: .
         run: |
           set -euo pipefail
@@ -268,18 +289,7 @@ jobs:
           GH_TOKEN="$CONTROL_TOKEN" gh api -H 'Accept: application/vnd.github.v3.diff' "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/candidate.diff"
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs?head_sha=${TARGET_CANDIDATE_SHA}&per_page=100" > "$RUNNER_TEMP/workflow-runs.json"
 
-          ci_run_id="$(
-            jq -r --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$CONTROL_CI_WORKFLOW_ID" '
-              [.workflow_runs[] |
-                select(
-                  .workflow_id == $workflow_id and
-                  .head_sha == $sha and
-                  .status == "completed" and
-                  .conclusion == "success"
-                )
-              ] | sort_by(.id) | last | .id // empty
-            ' "$RUNNER_TEMP/workflow-runs.json"
-          )"
+          ci_run_id="$DESIGNATED_CI_RUN_ID"
           [[ "$ci_run_id" =~ ^[0-9]+$ ]]
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
           jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$CONTROL_CI_WORKFLOW_ID" --argjson run_id "$ci_run_id" '
