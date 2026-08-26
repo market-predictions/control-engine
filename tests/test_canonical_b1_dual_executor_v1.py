@@ -668,4 +668,5 @@ def test_workflow_uses_unified_b1_lease_and_exact_designated_ci_run():
     assert "steps.claim.outputs.designated_ci_run_id" in text
     assert 'ci_run_id="$DESIGNATED_CI_RUN_ID"' in text
     assert "sort_by(.id) | last" not in text
-    assert "exactly one designated CI run identity is required" in text
+    assert "if len(ids) == 1:" in text
+    assert "exactly one designated CI run identity is required" not in text
