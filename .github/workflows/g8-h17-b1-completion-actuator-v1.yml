@@ -1,0 +1,126 @@
+name: Gate-8 H17 B1 Completion Actuator V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/g8-h17-b1-completion-actuator-v1.yml
+      - .control/g8-h17-b1-completion-command.json
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-199-g8-h17-b1-completion-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
+  CONTROL_TASK_ID: CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H17
+  CONTROL_ACTIVE_RUN_ID: run-439a2529-9783-4e36-8e6b-af9a8bfc5019
+  CONTROL_CANDIDATE_SHA: 9310d79f35bac61235d796b7434fa3e6a9b9b274
+  CONTROL_BASE_SHA: 0e0594b822cc15098fa8612a8c675e984f08d87d
+  CONTROL_PR_NUMBER: '70'
+
+jobs:
+  complete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate command
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .version == "1.0" and .action == "complete" and
+            .task_id == env.CONTROL_TASK_ID and
+            .active_run_id == env.CONTROL_ACTIVE_RUN_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            .result_comment_id == 5421681861
+          ' .control/g8-h17-b1-completion-command.json >/dev/null
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-issues: 'read'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Persist result and complete exact H17 claim
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          git clone --quiet --single-branch --branch "$CONTROL_B_CODE_REF" "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_B_CODE_SHA" ]
+
+          result="$RUNNER_TEMP/result.json"
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${CONTROL_PLANE_REPOSITORY}/issues/comments/5421681861" --jq '.body' > "$result"
+          jq -e --arg task "$CONTROL_TASK_ID" --arg run "$CONTROL_ACTIVE_RUN_ID" --arg cand "$CONTROL_CANDIDATE_SHA" '
+            .version == "1.0" and .task_id == $task and .run_id == $run and
+            .role == "governance_release_assurance" and .outcome == "FAIL" and
+            .candidate_sha == $cand and (.findings|type)=="array" and (.evidence|type)=="array"
+          ' "$result" >/dev/null
+
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/market-predictions/control-engine/pulls/${CONTROL_PR_NUMBER}" > "$RUNNER_TEMP/pr.json"
+          jq -e '.state == "open" and .draft == true and .merged_at == null and .head.sha == env.CONTROL_CANDIDATE_SHA and .base.sha == env.CONTROL_BASE_SHA' "$RUNNER_TEMP/pr.json" >/dev/null
+
+          success=false
+          for n in 1 2 3; do
+            state="$RUNNER_TEMP/state-$n"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" complete \
+              --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
+              --task-id "$CONTROL_TASK_ID" --worker-instance B1 --active-run-id "$CONTROL_ACTIVE_RUN_ID" --result "$result" \
+              > "$RUNNER_TEMP/complete-$n.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then success=true; break; fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/complete-$n.log"; then continue; fi
+            cat "$RUNNER_TEMP/complete-$n.log"
+            exit 2
+          done
+          [ "$success" = true ]
+
+          final="$RUNNER_TEMP/final"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$final"
+          jq -e --arg task "$CONTROL_TASK_ID" --arg run "$CONTROL_ACTIVE_RUN_ID" '
+            [.tasks[]|select(.task_id==$task)]|length==1 and
+            .[0].state=="BLOCKED" and .[0].last_verdict=="FAIL" and
+            .[0].active_run_id==null and .[0].active_role==null and .[0].active_worker_instance==null and
+            .[0].last_terminal_completion_run_id==$run
+          ' "$final/control/DISPATCH_QUEUE.json" >/dev/null
+          echo G8_H17_B1_COMPLETION=TERMINAL_GHOST_FREE
