@@ -28,7 +28,7 @@ import urllib.request
 CONTROL_REPOSITORY = "market-predictions/control-plane"
 CONTROL_RUNTIME_REF = "control-runtime-state"
 CONTROL_CODE_REF = "control/171-intake-queue-reconciliation-v1"
-CONTROL_CODE_SHA = "ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"
+CONTROL_CODE_SHA = "265c6e607c3735f6e98bb74d1f1ba6162e5e9b79"
 MAX_CAS_ATTEMPTS = 7
 LEASE_MINUTES = 75
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")

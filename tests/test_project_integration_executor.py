@@ -90,7 +90,7 @@ def test_reconcile_write_scope_admits_only_flat_project_intake_json() -> None:
 
 def test_executor_is_pinned_and_never_contains_paid_or_model_provider_path() -> None:
     source = integration.Path(integration.__file__).read_text(encoding="utf-8")
-    assert integration.CONTROL_CODE_SHA == "ca9c9759a07fd4943e31a94d81a3af7c1aaf9534"
+    assert integration.CONTROL_CODE_SHA == "265c6e607c3735f6e98bb74d1f1ba6162e5e9b79"
     assert "CONTROL_CLOUDFLARE" not in source
     assert "merge_method\": \"merge" in source
     assert '"sha": candidate_sha' in source
