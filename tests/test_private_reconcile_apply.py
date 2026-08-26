@@ -20,7 +20,7 @@ def test_reconciler_is_deterministic_state_only():
     assert "control/DISPATCH_QUEUE.json" in text
     assert "control/DISPATCH_RUNS.json" in text
     assert 'RECONCILE_CODE_REF = "control/171-intake-queue-reconciliation-v1"' in text
-    assert 'RECONCILE_CODE_SHA = "03f22d679a4bcea36870df83a6b7c5c35f1c2d35"' in text
+    assert 'RECONCILE_CODE_SHA = "265c6e607c3735f6e98bb74d1f1ba6162e5e9b79"' in text
     assert text.index("dispatcher_reconcile") < text.index("superseded_intake_reconcile")
     assert text.index("superseded_intake_reconcile") < text.index("project_intake_reconcile")
     for token in (

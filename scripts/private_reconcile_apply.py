@@ -23,7 +23,7 @@ from scripts import project_integration_executor as integration
 
 
 RECONCILE_CODE_REF = "control/171-intake-queue-reconciliation-v1"
-RECONCILE_CODE_SHA = "03f22d679a4bcea36870df83a6b7c5c35f1c2d35"
+RECONCILE_CODE_SHA = "265c6e607c3735f6e98bb74d1f1ba6162e5e9b79"
 
 
 def _run_stage(name: str, cmd: list[str]) -> None:
