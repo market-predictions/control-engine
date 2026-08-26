@@ -1,0 +1,112 @@
+name: Control B1 Attempt Budget Hotfix V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/control-b1-attempt-budget-hotfix-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-b1-attempt-budget-hotfix-v1
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived hotfix token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            control-plane
+            control-engine
+          permission-contents: write
+
+      - name: Apply exact selector fix and repin production B1
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+
+          private="$RUNNER_TEMP/control-plane"
+          public="$RUNNER_TEMP/control-engine"
+          private_branch='runtime/public-b-v2-code-r3'
+          old_private_sha='01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60'
+          public_parent='ba473bdcc6b0669bbabcf36a1d40edc636328139'
+
+          git clone --quiet --single-branch --branch "$private_branch" "https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-plane.git" "$private"
+          [ "$(git -C "$private" rev-parse HEAD)" = "$old_private_sha" ]
+
+          python - "$private/tools/control_parallel_execution_v1.py" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+          old = '''    for task in queue["tasks"]:\n        if not base_is_eligible(task, role, tasks):\n            continue\n        if _resource_conflict(queue, task):\n            continue\n        eligible.append(task)\n'''
+          new = '''    for task in queue["tasks"]:\n        attempt = task.get("attempt")\n        maximum = task.get("max_attempts")\n        if (\n            isinstance(attempt, int)\n            and not isinstance(attempt, bool)\n            and isinstance(maximum, int)\n            and not isinstance(maximum, bool)\n            and attempt >= maximum\n        ):\n            continue\n        if not base_is_eligible(task, role, tasks):\n            continue\n        if _resource_conflict(queue, task):\n            continue\n        eligible.append(task)\n'''
+          if text.count(old) != 1:
+              raise SystemExit('selector target absent or non-unique')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+          git -C "$private" diff --check
+          [ "$(git -C "$private" diff --name-only)" = 'tools/control_parallel_execution_v1.py' ]
+          (cd "$private" && python -m unittest tests.test_control_parallel_execution_v1)
+          git -C "$private" config user.name 'control-canonical-b1[bot]'
+          git -C "$private" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
+          git -C "$private" add -- tools/control_parallel_execution_v1.py
+          git -C "$private" commit --quiet -m 'fix: skip attempt-exhausted tasks in stable selector'
+          [ "$(git -C "$private" rev-parse HEAD^)" = "$old_private_sha" ]
+          new_private_sha="$(git -C "$private" rev-parse HEAD)"
+          git -C "$private" push --quiet origin "HEAD:refs/heads/${private_branch}"
+
+          git clone --quiet --single-branch --branch main "https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-engine.git" "$public"
+          [ "$(git -C "$public" rev-parse HEAD)" = "$public_parent" ]
+          python - "$public/.github/workflows/canonical-b1-dual-executor-v1.yml" "$old_private_sha" "$new_private_sha" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          old, new = sys.argv[2], sys.argv[3]
+          text = path.read_text(encoding='utf-8')
+          needle = f'  CONTROL_PRIVATE_B_CODE_SHA: {old}'
+          replacement = f'  CONTROL_PRIVATE_B_CODE_SHA: {new}'
+          if text.count(needle) != 1:
+              raise SystemExit('production B pin target absent or non-unique')
+          path.write_text(text.replace(needle, replacement), encoding='utf-8')
+          PY
+          git -C "$public" diff --check
+          [ "$(git -C "$public" diff --name-only)" = '.github/workflows/canonical-b1-dual-executor-v1.yml' ]
+          git -C "$public" config user.name 'control-canonical-b1[bot]'
+          git -C "$public" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
+          git -C "$public" add -- .github/workflows/canonical-b1-dual-executor-v1.yml
+          git -C "$public" commit --quiet -m 'fix: repin canonical B1 attempt-budget selector'
+          [ "$(git -C "$public" rev-parse HEAD^)" = "$public_parent" ]
+          git -C "$public" push --quiet origin HEAD:refs/heads/main
+
+          echo "PRIVATE_B_SHA=$new_private_sha"
+          echo "PUBLIC_MAIN_SHA=$(git -C "$public" rev-parse HEAD)"
+          echo 'CONTROL_B1_ATTEMPT_BUDGET_HOTFIX=COMMITTED'
