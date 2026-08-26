@@ -578,6 +578,24 @@ def _deep(
         return reviews, review_comments, reactions, issue_comments
 
     def classify_snapshot(reviews, review_comments, reactions, issue_comments):
+        normalized_review_comments = []
+        for item in review_comments:
+            normalized = item
+            body = item.get("body") if _record_login(item) in TRUSTED_CODEX_LOGINS else None
+            if isinstance(body, str):
+                first_line, separator, remainder = body.partition("\n")
+                badge_end = first_line.find("</sub></sub>  ")
+                if (
+                    badge_end > 0
+                    and first_line.startswith("**<sub><sub>![P")
+                    and " Badge](https://img.shields.io/badge/P" in first_line[:badge_end]
+                ):
+                    title = first_line[badge_end + len("</sub></sub>  "):]
+                    if title.startswith("CONTROL_B1_INDETERMINATE:"):
+                        normalized = dict(item)
+                        normalized["body"] = title + (separator + remainder if separator else "")
+            normalized_review_comments.append(normalized)
+
         return classify_trusted_review_snapshot(
             task_id=task["task_id"],
             handover_id=task["handover_id"],
@@ -586,7 +604,7 @@ def _deep(
             acceptance_criteria=task["acceptance_criteria"],
             trusted_actuator_login=actuator_login,
             reviews=reviews,
-            review_comments=review_comments,
+            review_comments=normalized_review_comments,
             trigger_reactions=reactions,
             issue_comments=issue_comments,
         )
