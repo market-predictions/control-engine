@@ -10,6 +10,8 @@ WORKFLOW = ROOT / ".github" / "workflows" / "scheduled-worker-a-v2.yml"
 
 def test_reconciler_is_deterministic_state_only():
     text = SCRIPT.read_text(encoding="utf-8")
+    assert "control_superseded_intake_reconcile_v1.py" in text
+    assert "superseded_intake_reconcile" in text
     assert "control_project_intake_reconcile_v1.py" in text
     assert "dispatcher_reconcile" in text
     assert "queue_validate" in text
@@ -17,6 +19,10 @@ def test_reconciler_is_deterministic_state_only():
     assert "_persist(" in text
     assert "control/DISPATCH_QUEUE.json" in text
     assert "control/DISPATCH_RUNS.json" in text
+    assert 'RECONCILE_CODE_REF = "control/171-intake-queue-reconciliation-v1"' in text
+    assert 'RECONCILE_CODE_SHA = "03f22d679a4bcea36870df83a6b7c5c35f1c2d35"' in text
+    assert text.index("dispatcher_reconcile") < text.index("superseded_intake_reconcile")
+    assert text.index("superseded_intake_reconcile") < text.index("project_intake_reconcile")
     for token in (
         "CONTROL_CLOUDFLARE_API_TOKEN",
         "CONTROL_CLOUDFLARE_ACCOUNT_ID",
