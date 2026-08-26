@@ -19,6 +19,8 @@ from scripts import project_integration_executor as integration
 
 
 LEASE_MINUTES = 75
+A1_CONTROL_CODE_REF = "runtime/public-a1-code-r1"
+A1_CONTROL_CODE_SHA = "a55e2a0d791ca55450ec135415e4aa9a48be361d"
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -39,6 +41,20 @@ def _find(queue: dict, task_id: str) -> dict:
     if len(matches) != 1:
         raise RuntimeError("canonical task identity is not unique")
     return matches[0]
+
+
+def _fetch_a1_code(token: str, code_dir: Path) -> None:
+    """Fetch the immutable A1 lifecycle snapshot without repinning other actuators."""
+    integration._init_repo(code_dir, f"https://github.com/{integration.CONTROL_REPOSITORY}.git")
+    integration._private_git(
+        token,
+        code_dir,
+        ["fetch", "--quiet", "--depth=1", "origin", f"refs/heads/{A1_CONTROL_CODE_REF}"],
+    )
+    integration._run(["git", "checkout", "--detach", "--quiet", "FETCH_HEAD"], cwd=code_dir)
+    actual = integration._run(["git", "rev-parse", "HEAD"], cwd=code_dir).stdout.strip()
+    if actual != A1_CONTROL_CODE_SHA:
+        raise RuntimeError("private A1 lifecycle code SHA mismatch")
 
 
 def _assert_current_a1_claim(queue: dict, task_id: str) -> dict:
@@ -76,7 +92,7 @@ def main() -> int:
             code_dir = root / "code"
             state_dir = root / "state"
 
-            integration._fetch_code(token, code_dir)
+            _fetch_a1_code(token, code_dir)
             integration._init_repo(state_dir, f"https://github.com/{integration.CONTROL_REPOSITORY}.git")
             integration._run(["git", "config", "user.name", "control-a1-claim[bot]"], cwd=state_dir)
             integration._run(["git", "config", "user.email", "control-a1-claim[bot]@users.noreply.github.com"], cwd=state_dir)
