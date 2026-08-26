@@ -1,0 +1,431 @@
+name: Canonical B1 Dual Executor V1
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-canonical-b1-dual-executor-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_PRIVATE_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60
+  CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
+  CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
+  CONTROL_PROFILE_PATH: control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json
+
+jobs:
+  canonical-b1:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout canonical public executor
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate public executor syntax
+        run: |
+          set -euo pipefail
+          python -m py_compile control_engine/scheduled_worker_b.py control_engine/cloudflare_b1.py control_engine/codex_b1.py control_engine/codex_b1_strict.py scripts/canonical_b1_dual_executor_v1.py
+
+      - name: Preflight GitHub App
+        id: app-preflight
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-actions: 'read'
+          permission-pull-requests: 'read'
+          permission-issues: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Read ACTIVE profile before any lifecycle mutation
+        id: profile
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          state="$RUNNER_TEMP/profile-state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          profile="$state/$CONTROL_PROFILE_PATH"
+          if [ ! -f "$profile" ]; then
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            echo 'CANONICAL_B1=IDLE_PROFILE_ABSENT'
+            exit 0
+          fi
+          status="$(jq -r '.status // ""' "$profile")"
+          if [ "$status" != ACTIVE ]; then
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            echo "CANONICAL_B1=IDLE_PROFILE_${status:-INVALID}"
+            exit 0
+          fi
+          jq -e '
+            .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+            .version == "1.0" and
+            .status == "ACTIVE" and
+            .lifecycle_authority.role == "governance_release_assurance" and
+            .lifecycle_authority.worker_instance == "B1" and
+            .lifecycle_authority.capacity == 1 and
+            .standard.executor == "cloudflare-workers-ai" and
+            .standard.model == "@cf/openai/gpt-oss-120b" and
+            .standard.endpoint_class == "direct-workers-ai" and
+            .standard.semantic_calls_per_run == 1 and
+            .standard.tools_enabled == false and
+            .standard.automatic_retry == false and
+            .standard.provider_fallback == false and
+            .standard.model_fallback == false and
+            .standard.paid_fallback == false and
+            .standard.max_tokens == 1024 and
+            .deep.executor == "native-codex-github-review" and
+            .deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1" and
+            (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
+            .deep.review_only == true and
+            .deep.exact_head_required == true and
+            .deep.trusted_request_envelope_required == true and
+            .principal_manual_relay_count == 0
+          ' "$profile" >/dev/null
+          echo 'active=true' >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile, select and claim exact preferred B1
+        id: claim
+        if: steps.profile.outputs.active == 'true'
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          a_code="$RUNNER_TEMP/control-a-code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_B_CODE_REF" "$private_url" "$b_code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_A_CODE_REF" "$private_url" "$a_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]
+          [ "$(git -C "$a_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_A_CODE_SHA" ]
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+
+          assert_active_profile() {
+            local state="$1"
+            local profile="$state/$CONTROL_PROFILE_PATH"
+            [ -f "$profile" ]
+            jq -e '
+              .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+              .version == "1.0" and
+              .status == "ACTIVE" and
+              .lifecycle_authority.role == "governance_release_assurance" and
+              .lifecycle_authority.worker_instance == "B1" and
+              .lifecycle_authority.capacity == 1 and
+              .standard.executor == "cloudflare-workers-ai" and
+              .standard.model == "@cf/openai/gpt-oss-120b" and
+              .standard.endpoint_class == "direct-workers-ai" and
+              .standard.semantic_calls_per_run == 1 and
+              .standard.tools_enabled == false and
+              .standard.automatic_retry == false and
+              .standard.provider_fallback == false and
+              .standard.model_fallback == false and
+              .standard.paid_fallback == false and
+              .standard.max_tokens == 1024 and
+              .deep.executor == "native-codex-github-review" and
+              .deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1" and
+              (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
+              .deep.review_only == true and
+              .deep.exact_head_required == true and
+              .deep.trusted_request_envelope_required == true and
+              .principal_manual_relay_count == 0
+            ' "$profile" >/dev/null
+          }
+
+          reconciled=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/reconcile-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            assert_active_profile "$state"
+            git -C "$state" config user.name 'control-canonical-b1[bot]'
+            git -C "$state" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
+            observed_ref="$(git -C "$state" rev-parse HEAD)"
+            observed_blob="$(git -C "$state" rev-parse 'HEAD:control/DISPATCH_QUEUE.json')"
+            python "$a_code/dispatcher/cli.py" reconcile --queue "$state/control/DISPATCH_QUEUE.json" --runs "$state/control/DISPATCH_RUNS.json" >/dev/null
+            python "$a_code/tools/control_project_intake_reconcile_v1.py" --queue "$state/control/DISPATCH_QUEUE.json" --intake-dir "$state/control/project-intake" --handover-dir "$state/control/handovers" --worker-result-dir "$state/control/worker-results" --write --report "$RUNNER_TEMP/intake-report.json" >/dev/null
+            python "$a_code/dispatcher/cli.py" validate --queue "$state/control/DISPATCH_QUEUE.json" >/dev/null
+            git -C "$state" fetch --quiet origin "refs/heads/${CONTROL_RUNTIME_REF}"
+            [ "$(git -C "$state" rev-parse FETCH_HEAD)" = "$observed_ref" ] || continue
+            [ "$(git -C "$state" rev-parse 'FETCH_HEAD:control/DISPATCH_QUEUE.json')" = "$observed_blob" ] || continue
+            if [ -n "$(git -C "$state" status --porcelain -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake)" ]; then
+              assert_active_profile "$state"
+              git -C "$state" add -- control/DISPATCH_QUEUE.json control/DISPATCH_RUNS.json control/project-intake
+              git -C "$state" commit --quiet -m 'runtime: canonical B1 reconcile before selection'
+              git -C "$state" push --quiet origin "HEAD:refs/heads/${CONTROL_RUNTIME_REF}" || continue
+            fi
+            reconciled=true
+            break
+          done
+          [ "$reconciled" = true ]
+
+          state="$RUNNER_TEMP/claim-state"
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          assert_active_profile "$state"
+          selection="$RUNNER_TEMP/selection.json"
+          python control_engine/scheduled_worker_b.py select-b1 --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$selection" >/dev/null
+          if [ "$(jq -r '.selected' "$selection")" != true ]; then
+            echo 'selected=false' >> "$GITHUB_OUTPUT"
+            echo 'CANONICAL_B1=IDLE_NO_ELIGIBLE_TASK'
+            exit 0
+          fi
+          task_id="$(jq -r '.task_id' "$selection")"
+          repository="$(jq -r '.repository' "$selection")"
+          candidate_sha="$(jq -r '.candidate_sha' "$selection")"
+          candidate_pr="$(jq -r '.candidate_pr' "$selection")"
+          [ -n "$task_id" ] && [ "$task_id" != null ]
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$candidate_pr" =~ ^[0-9]+$ ]]
+
+          lease_seconds=5400
+          designated_ci_run_id="$(python - "$state/control/DISPATCH_QUEUE.json" "$task_id" <<'PYCI'
+          import json, re, sys
+          q=json.load(open(sys.argv[1], encoding='utf-8')); task_id=sys.argv[2]
+          rows=[x for x in q['tasks'] if x.get('task_id')==task_id]
+          if len(rows)!=1: raise SystemExit('designated CI task identity mismatch')
+          t=rows[0]; texts=[t.get('instruction',''), *t.get('acceptance_criteria',[])]
+          ids=set()
+          for text in texts:
+              if isinstance(text,str): ids.update(re.findall(r'\bCI run[ _-]*(\d+)\b', text, flags=re.I))
+          if len(ids)!=1: raise SystemExit('exactly one designated CI run identity is required')
+          print(next(iter(ids)))
+          PYCI
+          )"
+          [[ "$designated_ci_run_id" =~ ^[0-9]+$ ]]
+
+          assert_active_profile "$state"
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
+            --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$task_id" \
+            --worker-instance B1 --backend github-actions/canonical-b1-dual-executor-v1 --lease-seconds "$lease_seconds" > "$RUNNER_TEMP/claim.json"
+          run_id="$(jq -r '.run_id' "$RUNNER_TEMP/claim.json")"
+          [ -n "$run_id" ] && [ "$run_id" != null ]
+
+          rm -rf "$state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          python control_engine/scheduled_worker_b.py assert-claim --code-dir "$b_code" --queue "$state/control/DISPATCH_QUEUE.json" --task-id "$task_id" --output "$RUNNER_TEMP/claim-readback.json" >/dev/null
+          [ "$(jq -r '.run_id' "$RUNNER_TEMP/claim-readback.json")" = "$run_id" ]
+          [ "$(jq -r '.candidate_sha' "$RUNNER_TEMP/claim-readback.json")" = "$candidate_sha" ]
+
+          echo 'selected=true' >> "$GITHUB_OUTPUT"
+          printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
+          printf 'repository=%s\n' "$repository" >> "$GITHUB_OUTPUT"
+          printf 'candidate_sha=%s\n' "$candidate_sha" >> "$GITHUB_OUTPUT"
+          printf 'candidate_pr=%s\n' "$candidate_pr" >> "$GITHUB_OUTPUT"
+          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+          printf 'designated_ci_run_id=%s\n' "$designated_ci_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Collect exact evidence and execute deterministic route
+        id: evidence
+        if: steps.profile.outputs.active == 'true' && steps.claim.outputs.selected == 'true'
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTROL_GITHUB_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTROL_CLOUDFLARE_API_TOKEN: ${{ secrets.CONTROL_CLOUDFLARE_API_TOKEN }}
+          CONTROL_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CONTROL_CLOUDFLARE_ACCOUNT_ID }}
+          TASK_ID: ${{ steps.claim.outputs.task_id }}
+          TARGET_REPOSITORY: ${{ steps.claim.outputs.repository }}
+          TARGET_CANDIDATE_SHA: ${{ steps.claim.outputs.candidate_sha }}
+          TARGET_PR: ${{ steps.claim.outputs.candidate_pr }}
+          ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+          DESIGNATED_CI_RUN_ID: ${{ steps.claim.outputs.designated_ci_run_id }}
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          state="$RUNNER_TEMP/review-state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+          cp "$state/$CONTROL_PROFILE_PATH" "$RUNNER_TEMP/profile.json"
+
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr-before.json"
+          jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson number "$TARGET_PR" '
+            .number == $number and
+            .state == "open" and
+            .draft == true and
+            .merged != true and
+            .head.sha == $sha and
+            (.base.sha | type == "string" and test("^[0-9a-f]{40}$"))
+          ' "$RUNNER_TEMP/pr-before.json" >/dev/null
+          base_sha="$(jq -r '.base.sha' "$RUNNER_TEMP/pr-before.json")"
+          jq -S '{number,state,draft,merged,head_sha:.head.sha,base_sha:.base.sha}' "$RUNNER_TEMP/pr-before.json" > "$RUNNER_TEMP/pr-binding-before.json"
+
+          GH_TOKEN="$CONTROL_TOKEN" gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}/files?per_page=100" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/changed-files.json"
+          GH_TOKEN="$CONTROL_TOKEN" gh api -H 'Accept: application/vnd.github.v3.diff' "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/candidate.diff"
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs?head_sha=${TARGET_CANDIDATE_SHA}&per_page=100" > "$RUNNER_TEMP/workflow-runs.json"
+
+          ci_run_id="$DESIGNATED_CI_RUN_ID"
+          [[ "$ci_run_id" =~ ^[0-9]+$ ]]
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
+          ci_workflow_id="$(jq -r '.workflow_id // empty' "$RUNNER_TEMP/required-ci.json")"
+          [[ "$ci_workflow_id" =~ ^[0-9]+$ ]]
+          jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$ci_workflow_id" --argjson run_id "$ci_run_id" '
+            .id == $run_id and
+            .workflow_id == $workflow_id and
+            .head_sha == $sha and
+            .status == "completed" and
+            .conclusion == "success"
+          ' "$RUNNER_TEMP/required-ci.json" >/dev/null
+
+          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr-after.json"
+          jq -S '{number,state,draft,merged,head_sha:.head.sha,base_sha:.base.sha}' "$RUNNER_TEMP/pr-after.json" > "$RUNNER_TEMP/pr-binding-after.json"
+          cmp -s "$RUNNER_TEMP/pr-binding-before.json" "$RUNNER_TEMP/pr-binding-after.json"
+
+          printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+          printf 'ci_run_id=%s\n' "$ci_run_id" >> "$GITHUB_OUTPUT"
+          printf 'ci_workflow_id=%s\n' "$ci_workflow_id" >> "$GITHUB_OUTPUT"
+
+          python scripts/canonical_b1_dual_executor_v1.py \
+            --profile "$RUNNER_TEMP/profile.json" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --task-id "$TASK_ID" --run-id "$ACTIVE_RUN_ID" --repository "$TARGET_REPOSITORY" \
+            --candidate-sha "$TARGET_CANDIDATE_SHA" --pr-json "$RUNNER_TEMP/pr-before.json" \
+            --changed-files-json "$RUNNER_TEMP/changed-files.json" --workflow-runs "$RUNNER_TEMP/workflow-runs.json" \
+            --diff "$RUNNER_TEMP/candidate.diff" --deep-timeout-seconds 420 --output "$RUNNER_TEMP/result.json"
+          jq -e '.version == "1.0" and .task_id == env.TASK_ID and .run_id == env.ACTIVE_RUN_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE" or .outcome == "EXECUTION_UNAVAILABLE")' "$RUNNER_TEMP/result.json" >/dev/null
+
+      - name: Revalidate exact claim and persist terminal result
+        if: steps.profile.outputs.active == 'true' && steps.claim.outputs.selected == 'true'
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+          TASK_ID: ${{ steps.claim.outputs.task_id }}
+          TARGET_REPOSITORY: ${{ steps.claim.outputs.repository }}
+          TARGET_CANDIDATE_SHA: ${{ steps.claim.outputs.candidate_sha }}
+          TARGET_PR: ${{ steps.claim.outputs.candidate_pr }}
+          TARGET_BASE_SHA: ${{ steps.evidence.outputs.base_sha }}
+          REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}
+          REQUIRED_CI_WORKFLOW_ID: ${{ steps.evidence.outputs.ci_workflow_id }}
+          ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+
+          assert_active_profile() {
+            local state="$1"
+            local profile="$state/$CONTROL_PROFILE_PATH"
+            [ -f "$profile" ]
+            jq -e '
+              .protocol_id == "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1" and
+              .version == "1.0" and
+              .status == "ACTIVE" and
+              .lifecycle_authority.role == "governance_release_assurance" and
+              .lifecycle_authority.worker_instance == "B1" and
+              .lifecycle_authority.capacity == 1 and
+              .standard.executor == "cloudflare-workers-ai" and
+              .standard.model == "@cf/openai/gpt-oss-120b" and
+              .standard.endpoint_class == "direct-workers-ai" and
+              .standard.semantic_calls_per_run == 1 and
+              .standard.tools_enabled == false and
+              .standard.automatic_retry == false and
+              .standard.provider_fallback == false and
+              .standard.model_fallback == false and
+              .standard.paid_fallback == false and
+              .standard.max_tokens == 1024 and
+              .deep.executor == "native-codex-github-review" and
+              .deep.request_marker == "CONTROL_B1_CODEX_DEEP_REQUEST_V1" and
+              (.deep.trusted_connector_logins | sort) == (["chatgpt-codex-connector", "chatgpt-codex-connector[bot]"] | sort) and
+              .deep.review_only == true and
+              .deep.exact_head_required == true and
+              .deep.trusted_request_envelope_required == true and
+              .principal_manual_relay_count == 0
+            ' "$profile" >/dev/null
+          }
+
+          success=false
+          for cas_attempt in 1 2 3; do
+            state="$RUNNER_TEMP/complete-${cas_attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
+            assert_active_profile "$state"
+
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"
+            jq -e --arg sha "$TARGET_CANDIDATE_SHA" --arg base "$TARGET_BASE_SHA" --argjson number "$TARGET_PR" '
+              .number == $number and
+              .state == "open" and
+              .draft == true and
+              .merged != true and
+              .head.sha == $sha and
+              .base.sha == $base
+            ' "$RUNNER_TEMP/complete-pr.json" >/dev/null
+
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"
+            jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$REQUIRED_CI_WORKFLOW_ID" --argjson run_id "$REQUIRED_CI_RUN_ID" '
+              .id == $run_id and
+              .workflow_id == $workflow_id and
+              .head_sha == $sha and
+              .status == "completed" and
+              .conclusion == "success"
+            ' "$RUNNER_TEMP/complete-ci.json" >/dev/null
+
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+              --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --github-repository "$CONTROL_PLANE_REPOSITORY" \
+              --task-id "$TASK_ID" --worker-instance B1 --active-run-id "$ACTIVE_RUN_ID" --result "$RUNNER_TEMP/result.json" \
+              > "$RUNNER_TEMP/complete-${cas_attempt}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then success=true; break; fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/complete-${cas_attempt}.log"; then continue; fi
+            cat "$RUNNER_TEMP/complete-${cas_attempt}.log"
+            exit 2
+          done
+          [ "$success" = true ]
+
+          final="$RUNNER_TEMP/final-state"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$final"
+          python control_engine/scheduled_worker_b.py assert-finalized --code-dir "$CONTROL_B_CODE_DIR" --queue "$final/control/DISPATCH_QUEUE.json" --task-id "$TASK_ID" --run-id "$ACTIVE_RUN_ID" >/dev/null
+          echo "CANONICAL_B1=$(jq -r '.outcome' "$RUNNER_TEMP/result.json")"
+
+      - name: Publish bounded liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          PROFILE_ACTIVE: ${{ steps.profile.outputs.active }}
+          SELECTED: ${{ steps.claim.outputs.selected }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description="CANONICAL_B1_${JOB_STATUS}"
+          if [ "$JOB_STATUS" = success ]; then state=success; fi
+          if [ "${PROFILE_ACTIVE:-}" != true ]; then
+            state=success
+            description=CANONICAL_B1_PROFILE_INACTIVE
+          elif [ "${SELECTED:-}" != true ]; then
+            state=success
+            description=CANONICAL_B1_IDLE
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context='control/canonical-b1-dual-executor' -f description="$description" >/dev/null
