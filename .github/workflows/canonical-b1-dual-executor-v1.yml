@@ -219,7 +219,7 @@ jobs:
           rows=[x for x in q['tasks'] if x.get('task_id')==task_id]
           if len(rows)!=1: raise SystemExit('designated evidence task identity mismatch')
           t=rows[0]; texts=[t.get('instruction',''), *t.get('acceptance_criteria',[])]
-          values=set()
+          ids=set()
           if marker == 'native':
               pattern=r'\bCI run[ _-]*(\d+)\b'
           elif marker == 'public_run':
@@ -227,9 +227,9 @@ jobs:
           else:
               pattern=r'\bPUBLIC_CONTROL_CI_EXECUTOR_SHA[ =:]+([0-9a-f]{40})\b'
           for text in texts:
-              if isinstance(text,str): values.update(re.findall(pattern, text, flags=re.I))
-          if len(values) > 1: raise SystemExit('ambiguous designated evidence marker')
-          if values: print(next(iter(values)))
+              if isinstance(text,str): ids.update(re.findall(pattern, text, flags=re.I))
+          if len(ids) > 1: raise SystemExit('ambiguous designated evidence marker')
+          if len(ids) == 1: print(next(iter(ids)))
           PYMARKER
           }
           designated_ci_run_id="$(read_task_marker native)"
