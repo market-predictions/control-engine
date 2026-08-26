@@ -21,6 +21,7 @@ env:
   CONTROL_PRIVATE_A_CODE_REF: recovery/187-policy-metadata-r1
   CONTROL_PRIVATE_A_CODE_SHA: 62cf2a88edd8700c073e51274d331210c7a36900
   CONTROL_PROFILE_PATH: control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json
+  PUBLIC_CONTROL_CI_WORKFLOW_PATH: .github/workflows/private-control-deterministic-validation-v1.yml
 
 jobs:
   canonical-b1:
@@ -210,19 +211,36 @@ jobs:
           [[ "$candidate_pr" =~ ^[0-9]+$ ]]
 
           lease_seconds=5400
-          designated_ci_run_id="$(python - "$state/control/DISPATCH_QUEUE.json" "$task_id" <<'PYCI'
+          read_task_marker() {
+            local marker="$1"
+            python - "$state/control/DISPATCH_QUEUE.json" "$task_id" "$marker" <<'PYMARKER'
           import json, re, sys
-          q=json.load(open(sys.argv[1], encoding='utf-8')); task_id=sys.argv[2]
+          q=json.load(open(sys.argv[1], encoding='utf-8')); task_id=sys.argv[2]; marker=sys.argv[3]
           rows=[x for x in q['tasks'] if x.get('task_id')==task_id]
-          if len(rows)!=1: raise SystemExit('designated CI task identity mismatch')
+          if len(rows)!=1: raise SystemExit('designated evidence task identity mismatch')
           t=rows[0]; texts=[t.get('instruction',''), *t.get('acceptance_criteria',[])]
-          ids=set()
+          values=set()
+          if marker == 'native':
+              pattern=r'\bCI run[ _-]*(\d+)\b'
+          elif marker == 'public_run':
+              pattern=r'\bPUBLIC_CONTROL_CI_RUN_ID[ =:]+(\d+)\b'
+          else:
+              pattern=r'\bPUBLIC_CONTROL_CI_EXECUTOR_SHA[ =:]+([0-9a-f]{40})\b'
           for text in texts:
-              if isinstance(text,str): ids.update(re.findall(r'\bCI run[ _-]*(\d+)\b', text, flags=re.I))
-          if len(ids) == 1:
-              print(next(iter(ids)))
-          PYCI
-          )"
+              if isinstance(text,str): values.update(re.findall(pattern, text, flags=re.I))
+          if len(values) > 1: raise SystemExit('ambiguous designated evidence marker')
+          if values: print(next(iter(values)))
+          PYMARKER
+          }
+          designated_ci_run_id="$(read_task_marker native)"
+          designated_public_ci_run_id="$(read_task_marker public_run)"
+          designated_public_ci_executor_sha="$(read_task_marker public_sha)"
+          if [ -n "$designated_public_ci_run_id" ] || [ -n "$designated_public_ci_executor_sha" ]; then
+            [ -n "$designated_public_ci_run_id" ] && [ -n "$designated_public_ci_executor_sha" ]
+            [ -z "$designated_ci_run_id" ]
+            [ "$repository" = "$CONTROL_PLANE_REPOSITORY" ]
+          fi
+
           assert_active_profile "$state"
           GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" claim \
             --runtime-root "$state" --runtime-ref "$CONTROL_RUNTIME_REF" --task-id "$task_id" \
@@ -243,6 +261,8 @@ jobs:
           printf 'candidate_pr=%s\n' "$candidate_pr" >> "$GITHUB_OUTPUT"
           printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
           printf 'designated_ci_run_id=%s\n' "$designated_ci_run_id" >> "$GITHUB_OUTPUT"
+          printf 'designated_public_ci_run_id=%s\n' "$designated_public_ci_run_id" >> "$GITHUB_OUTPUT"
+          printf 'designated_public_ci_executor_sha=%s\n' "$designated_public_ci_executor_sha" >> "$GITHUB_OUTPUT"
 
       - name: Collect exact evidence and execute deterministic route
         id: evidence
@@ -259,6 +279,8 @@ jobs:
           TARGET_PR: ${{ steps.claim.outputs.candidate_pr }}
           ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
           DESIGNATED_CI_RUN_ID: ${{ steps.claim.outputs.designated_ci_run_id }}
+          DESIGNATED_PUBLIC_CI_RUN_ID: ${{ steps.claim.outputs.designated_public_ci_run_id }}
+          DESIGNATED_PUBLIC_CI_EXECUTOR_SHA: ${{ steps.claim.outputs.designated_public_ci_executor_sha }}
           PYTHONPATH: .
         run: |
           set -euo pipefail
@@ -287,25 +309,54 @@ jobs:
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs?head_sha=${TARGET_CANDIDATE_SHA}&per_page=100" > "$RUNNER_TEMP/workflow-runs.json"
 
           ci_run_id="$DESIGNATED_CI_RUN_ID"
-          [[ "$ci_run_id" =~ ^[0-9]+$ ]]
-          GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
-          ci_workflow_id="$(jq -r '.workflow_id // empty' "$RUNNER_TEMP/required-ci.json")"
-          [[ "$ci_workflow_id" =~ ^[0-9]+$ ]]
-          jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$ci_workflow_id" --argjson run_id "$ci_run_id" '
-            .id == $run_id and
-            .workflow_id == $workflow_id and
-            .head_sha == $sha and
-            .status == "completed" and
-            .conclusion == "success"
-          ' "$RUNNER_TEMP/required-ci.json" >/dev/null
+          ci_repository="$TARGET_REPOSITORY"
+          ci_executor_sha=""
+          if [ -n "$DESIGNATED_PUBLIC_CI_RUN_ID" ]; then
+            [ "$TARGET_REPOSITORY" = "$CONTROL_PLANE_REPOSITORY" ]
+            [ -z "$ci_run_id" ]
+            [[ "$DESIGNATED_PUBLIC_CI_RUN_ID" =~ ^[0-9]+$ ]]
+            [[ "$DESIGNATED_PUBLIC_CI_EXECUTOR_SHA" =~ ^[0-9a-f]{40}$ ]]
+            ci_repository="$GITHUB_REPOSITORY"
+            ci_run_id="$DESIGNATED_PUBLIC_CI_RUN_ID"
+            ci_executor_sha="$DESIGNATED_PUBLIC_CI_EXECUTOR_SHA"
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${ci_repository}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
+            ci_workflow_id="$(jq -r '.workflow_id // empty' "$RUNNER_TEMP/required-ci.json")"
+            [[ "$ci_workflow_id" =~ ^[0-9]+$ ]]
+            expected_title="Control private candidate ${TARGET_CANDIDATE_SHA}"
+            jq -e --arg sha "$ci_executor_sha" --arg title "$expected_title" --arg path "$PUBLIC_CONTROL_CI_WORKFLOW_PATH" --argjson workflow_id "$ci_workflow_id" --argjson run_id "$ci_run_id" '
+              .id == $run_id and
+              .workflow_id == $workflow_id and
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .path == $path and
+              .display_title == $title and
+              .status == "completed" and
+              .conclusion == "success"
+            ' "$RUNNER_TEMP/required-ci.json" >/dev/null
+          else
+            [[ "$ci_run_id" =~ ^[0-9]+$ ]]
+            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ci_run_id}" > "$RUNNER_TEMP/required-ci.json"
+            ci_workflow_id="$(jq -r '.workflow_id // empty' "$RUNNER_TEMP/required-ci.json")"
+            [[ "$ci_workflow_id" =~ ^[0-9]+$ ]]
+            jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$ci_workflow_id" --argjson run_id "$ci_run_id" '
+              .id == $run_id and
+              .workflow_id == $workflow_id and
+              .head_sha == $sha and
+              .status == "completed" and
+              .conclusion == "success"
+            ' "$RUNNER_TEMP/required-ci.json" >/dev/null
+          fi
 
           GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/pr-after.json"
           jq -S '{number,state,draft,merged,head_sha:.head.sha,base_sha:.base.sha}' "$RUNNER_TEMP/pr-after.json" > "$RUNNER_TEMP/pr-binding-after.json"
           cmp -s "$RUNNER_TEMP/pr-binding-before.json" "$RUNNER_TEMP/pr-binding-after.json"
 
           printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+          printf 'ci_repository=%s\n' "$ci_repository" >> "$GITHUB_OUTPUT"
           printf 'ci_run_id=%s\n' "$ci_run_id" >> "$GITHUB_OUTPUT"
           printf 'ci_workflow_id=%s\n' "$ci_workflow_id" >> "$GITHUB_OUTPUT"
+          printf 'ci_executor_sha=%s\n' "$ci_executor_sha" >> "$GITHUB_OUTPUT"
 
           python scripts/canonical_b1_dual_executor_v1.py \
             --profile "$RUNNER_TEMP/profile.json" \
@@ -340,8 +391,10 @@ jobs:
           TARGET_CANDIDATE_SHA: ${{ steps.claim.outputs.candidate_sha }}
           TARGET_PR: ${{ steps.claim.outputs.candidate_pr }}
           TARGET_BASE_SHA: ${{ steps.evidence.outputs.base_sha }}
+          REQUIRED_CI_REPOSITORY: ${{ steps.evidence.outputs.ci_repository }}
           REQUIRED_CI_RUN_ID: ${{ steps.evidence.outputs.ci_run_id }}
           REQUIRED_CI_WORKFLOW_ID: ${{ steps.evidence.outputs.ci_workflow_id }}
+          REQUIRED_CI_EXECUTOR_SHA: ${{ steps.evidence.outputs.ci_executor_sha }}
           ACTIVE_RUN_ID: ${{ steps.claim.outputs.run_id }}
         run: |
           set -euo pipefail
@@ -397,14 +450,33 @@ jobs:
               .base.sha == $base
             ' "$RUNNER_TEMP/complete-pr.json" >/dev/null
 
-            GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"
-            jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$REQUIRED_CI_WORKFLOW_ID" --argjson run_id "$REQUIRED_CI_RUN_ID" '
-              .id == $run_id and
-              .workflow_id == $workflow_id and
-              .head_sha == $sha and
-              .status == "completed" and
-              .conclusion == "success"
-            ' "$RUNNER_TEMP/complete-ci.json" >/dev/null
+            if [ "$REQUIRED_CI_REPOSITORY" = "$TARGET_REPOSITORY" ]; then
+              GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"
+              jq -e --arg sha "$TARGET_CANDIDATE_SHA" --argjson workflow_id "$REQUIRED_CI_WORKFLOW_ID" --argjson run_id "$REQUIRED_CI_RUN_ID" '
+                .id == $run_id and
+                .workflow_id == $workflow_id and
+                .head_sha == $sha and
+                .status == "completed" and
+                .conclusion == "success"
+              ' "$RUNNER_TEMP/complete-ci.json" >/dev/null
+            else
+              [ "$TARGET_REPOSITORY" = "$CONTROL_PLANE_REPOSITORY" ]
+              [ "$REQUIRED_CI_REPOSITORY" = "$GITHUB_REPOSITORY" ]
+              [[ "$REQUIRED_CI_EXECUTOR_SHA" =~ ^[0-9a-f]{40}$ ]]
+              GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${REQUIRED_CI_REPOSITORY}/actions/runs/${REQUIRED_CI_RUN_ID}" > "$RUNNER_TEMP/complete-ci.json"
+              expected_title="Control private candidate ${TARGET_CANDIDATE_SHA}"
+              jq -e --arg sha "$REQUIRED_CI_EXECUTOR_SHA" --arg title "$expected_title" --arg path "$PUBLIC_CONTROL_CI_WORKFLOW_PATH" --argjson workflow_id "$REQUIRED_CI_WORKFLOW_ID" --argjson run_id "$REQUIRED_CI_RUN_ID" '
+                .id == $run_id and
+                .workflow_id == $workflow_id and
+                .head_sha == $sha and
+                .head_branch == "main" and
+                .event == "workflow_dispatch" and
+                .path == $path and
+                .display_title == $title and
+                .status == "completed" and
+                .conclusion == "success"
+              ' "$RUNNER_TEMP/complete-ci.json" >/dev/null
+            fi
 
             fi
 
