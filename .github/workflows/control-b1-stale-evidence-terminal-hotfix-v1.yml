@@ -1,0 +1,155 @@
+name: Control B1 Stale Evidence Terminal Hotfix V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/control-b1-stale-evidence-terminal-hotfix-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-b1-stale-evidence-terminal-hotfix-v1
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create bounded repair token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            control-plane
+            control-engine
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Terminalize current stale claim and patch production failure semantics
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+
+          task='CONTROL-199-G8-B1-PROFILE-ACTIVATION-ASSURE-H11R2'
+          run='run-4739366f-81a8-4d7d-b67e-6b2f1e66cbf3'
+          candidate='d132eb1436ebc33d9ff18327644997b6883d155a'
+          b_sha='a55e2a0d791ca55450ec135415e4aa9a48be361d'
+          public_parent='0e0facf713d88ab5a1d16d8d4dced73fbac31203'
+          runtime_ref='control-runtime-state'
+
+          b_code="$RUNNER_TEMP/b-code"
+          state="$RUNNER_TEMP/state"
+          public="$RUNNER_TEMP/public"
+          private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-plane.git"
+          public_url="https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-engine.git"
+
+          git clone --quiet --single-branch --branch runtime/public-b-v2-code-r3 "$private_url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$b_sha" ]
+          git clone --quiet --single-branch --branch "$runtime_ref" "$private_url" "$state"
+          jq -e --arg task "$task" --arg run "$run" --arg sha "$candidate" '
+            [.tasks[] | select(.task_id == $task)] | length == 1 and
+            (.tasks[] | select(.task_id == $task) |
+              .state == "ASSURANCE_EXECUTING" and
+              .active_run_id == $run and
+              .active_worker_instance == "B1" and
+              .candidate_sha == $sha)
+          ' "$state/control/DISPATCH_QUEUE.json" >/dev/null
+
+          result="$RUNNER_TEMP/stale-result.json"
+          jq -n --arg task "$task" --arg run "$run" --arg sha "$candidate" '{
+            version:"1.0",
+            task_id:$task,
+            run_id:$run,
+            role:"governance_release_assurance",
+            outcome:"EXECUTION_UNAVAILABLE",
+            summary:"Candidate evidence became stale before semantic execution; no assurance verdict was produced.",
+            candidate_sha:$sha,
+            findings:["EXECUTION_UNAVAILABLE: PR #70 is already merged and no longer matches the frozen open/draft assurance binding."],
+            evidence:["production canonical B1 run 32949817509", "claim run " + $run, "semantic execution did not start"]
+          }' > "$result"
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$b_code" python "$b_code/tools/control_connected_worker_runtime_v1.py" complete \
+            --runtime-root "$state" --runtime-ref "$runtime_ref" --github-repository market-predictions/control-plane \
+            --task-id "$task" --worker-instance B1 --active-run-id "$run" --result "$result" >/dev/null
+
+          git clone --quiet --single-branch --branch "$runtime_ref" "$private_url" "$RUNNER_TEMP/readback"
+          python "$GITHUB_WORKSPACE/control_engine/scheduled_worker_b.py" assert-finalized \
+            --code-dir "$b_code" --queue "$RUNNER_TEMP/readback/control/DISPATCH_QUEUE.json" \
+            --task-id "$task" --run-id "$run" >/dev/null
+
+          git clone --quiet --single-branch --branch main "$public_url" "$public"
+          [ "$(git -C "$public" rev-parse HEAD)" = "$public_parent" ]
+          workflow="$public/.github/workflows/canonical-b1-dual-executor-v1.yml"
+
+          python - "$workflow" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+          ev_start = text.index('      - name: Collect exact evidence and execute deterministic route')
+          term_start = text.index('      - name: Revalidate exact claim and persist terminal result', ev_start)
+          live_start = text.index('      - name: Publish bounded liveness', term_start)
+
+          evidence = text[ev_start:term_start]
+          open_old = '''        run: |\n          set -euo pipefail\n          private_url='''
+          open_new = '''        run: |\n          set -euo pipefail\n          set +e\n          (\n          set -euo pipefail\n          private_url='''
+          if evidence.count(open_old) != 1:
+              raise SystemExit('evidence block opener absent or non-unique')
+          evidence = evidence.replace(open_old, open_new, 1)
+          evidence = evidence.rstrip() + '''\n          )\n          evidence_rc=$?\n          set -e\n          if [ "$evidence_rc" -ne 0 ]; then\n            jq -n --arg task "$TASK_ID" --arg run "$ACTIVE_RUN_ID" --arg sha "$TARGET_CANDIDATE_SHA" '{\n              version:"1.0",\n              task_id:$task,\n              run_id:$run,\n              role:"governance_release_assurance",\n              outcome:"EXECUTION_UNAVAILABLE",\n              summary:"Canonical evidence or executor precondition was unavailable; no semantic verdict was produced.",\n              candidate_sha:$sha,\n              findings:["EXECUTION_UNAVAILABLE: canonical evidence/executor precondition failed before a durable semantic verdict."],\n              evidence:["canonical-b1 production workflow normalized the non-verdict failure for terminal completion"]\n            }' > "$RUNNER_TEMP/result.json"\n          fi\n          jq -e '.version == "1.0" and .task_id == env.TASK_ID and .run_id == env.ACTIVE_RUN_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE" or .outcome == "EXECUTION_UNAVAILABLE")' "$RUNNER_TEMP/result.json" >/dev/null\n\n'''
+
+          terminal = text[term_start:live_start]
+          guard = '            assert_active_profile "$state"\n\n'
+          if terminal.count(guard) != 1:
+              raise SystemExit('terminal profile guard absent or non-unique')
+          terminal = terminal.replace(
+              guard,
+              guard + '            outcome="$(jq -r \'.outcome\' "$RUNNER_TEMP/result.json")"\n            if [ "$outcome" != EXECUTION_UNAVAILABLE ]; then\n',
+              1,
+          )
+          completion_marker = '            set +e\n            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete'
+          if terminal.count(completion_marker) != 1:
+              raise SystemExit('terminal completion marker absent or non-unique')
+          terminal = terminal.replace(
+              completion_marker,
+              '            fi\n\n' + completion_marker,
+              1,
+          )
+
+          path.write_text(text[:ev_start] + evidence + terminal + text[live_start:], encoding='utf-8')
+          PY
+
+          git -C "$public" diff --check
+          [ "$(git -C "$public" diff --name-only)" = '.github/workflows/canonical-b1-dual-executor-v1.yml' ]
+          git -C "$public" config user.name 'control-canonical-b1[bot]'
+          git -C "$public" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
+          git -C "$public" add -- .github/workflows/canonical-b1-dual-executor-v1.yml
+          git -C "$public" commit --quiet -m 'fix: terminalize canonical B1 evidence unavailability'
+          [ "$(git -C "$public" rev-parse HEAD^)" = "$public_parent" ]
+          git -C "$public" push --quiet origin HEAD:refs/heads/main
+          echo "PUBLIC_MAIN_SHA=$(git -C "$public" rev-parse HEAD)"
+          echo 'CONTROL_B1_STALE_EVIDENCE_HOTFIX=COMMITTED'
