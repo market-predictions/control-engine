@@ -1,0 +1,77 @@
+name: Control B1 Pin Test Sync V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/control-b1-pin-test-sync-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-b1-pin-test-sync-v1
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create contents-write token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: control-engine
+          permission-contents: write
+
+      - name: Synchronize exact pinned SHA assertions
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          repo="$RUNNER_TEMP/control-engine"
+          parent='0ba8721d41e542e1ed79af4b12878e78bdd5520d'
+          old='01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60'
+          new='a55e2a0d791ca55450ec135415e4aa9a48be361d'
+          file='tests/test_canonical_b1_dual_executor_v1.py'
+          git clone --quiet --single-branch --branch main "https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-engine.git" "$repo"
+          [ "$(git -C "$repo" rev-parse HEAD)" = "$parent" ]
+          python - "$repo/$file" "$old" "$new" <<'PY'
+          from pathlib import Path
+          import sys
+          path=Path(sys.argv[1]); old=sys.argv[2]; new=sys.argv[3]
+          text=path.read_text(encoding='utf-8')
+          if text.count(old) != 2:
+              raise SystemExit('expected exactly two stale private B SHA assertions')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          git -C "$repo" diff --check
+          [ "$(git -C "$repo" diff --name-only)" = "$file" ]
+          git -C "$repo" config user.name 'control-canonical-b1[bot]'
+          git -C "$repo" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
+          git -C "$repo" add -- "$file"
+          git -C "$repo" commit --quiet -m 'test: align canonical B1 private code pin'
+          [ "$(git -C "$repo" rev-parse HEAD^)" = "$parent" ]
+          git -C "$repo" push --quiet origin HEAD:refs/heads/main
+          echo "PUBLIC_MAIN_SHA=$(git -C "$repo" rev-parse HEAD)"
+          echo 'CONTROL_B1_PIN_TEST_SYNC=COMMITTED'
