@@ -70,55 +70,49 @@ jobs:
 
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
-          old = '''    def classify_snapshot(reviews, review_comments, reactions, issue_comments):
-              return classify_trusted_review_snapshot(
-                  task_id=task["task_id"],
-                  handover_id=task["handover_id"],
-                  candidate_sha=candidate_sha,
-                  request_comment_id=comment_id,
-                  acceptance_criteria=task["acceptance_criteria"],
-                  trusted_actuator_login=actuator_login,
-                  reviews=reviews,
-                  review_comments=review_comments,
-                  trigger_reactions=reactions,
-                  issue_comments=issue_comments,
-              )
-          '''
-          new = '''    def classify_snapshot(reviews, review_comments, reactions, issue_comments):
-              normalized_review_comments = []
-              for item in review_comments:
-                  normalized = item
-                  body = item.get("body") if _record_login(item) in TRUSTED_CODEX_LOGINS else None
-                  if isinstance(body, str):
-                      first_line, separator, remainder = body.partition("\\n")
-                      badge_end = first_line.find("</sub></sub>  ")
-                      if (
-                          badge_end > 0
-                          and first_line.startswith("**<sub><sub>![P")
-                          and " Badge](https://img.shields.io/badge/P" in first_line[:badge_end]
-                      ):
-                          title = first_line[badge_end + len("</sub></sub>  "):]
-                          if title.startswith("CONTROL_B1_INDETERMINATE:"):
-                              normalized = dict(item)
-                              normalized["body"] = title + (separator + remainder if separator else "")
-                  normalized_review_comments.append(normalized)
+          start_marker = "    def classify_snapshot(reviews, review_comments, reactions, issue_comments):"
+          end_marker = "\n\n    deadline = time.monotonic() + timeout_seconds"
+          start = text.find(start_marker)
+          if start < 0 or text.find(start_marker, start + 1) >= 0:
+              raise SystemExit("classify_snapshot marker absent or non-unique")
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("classify_snapshot end marker absent")
 
-              return classify_trusted_review_snapshot(
-                  task_id=task["task_id"],
-                  handover_id=task["handover_id"],
-                  candidate_sha=candidate_sha,
-                  request_comment_id=comment_id,
-                  acceptance_criteria=task["acceptance_criteria"],
-                  trusted_actuator_login=actuator_login,
-                  reviews=reviews,
-                  review_comments=normalized_review_comments,
-                  trigger_reactions=reactions,
-                  issue_comments=issue_comments,
-              )
-          '''
-          if text.count(old) != 1:
-              raise SystemExit("expected exact classify_snapshot block not found exactly once")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          replacement = "\n".join([
+              "    def classify_snapshot(reviews, review_comments, reactions, issue_comments):",
+              "        normalized_review_comments = []",
+              "        for item in review_comments:",
+              "            normalized = item",
+              "            body = item.get(\"body\") if _record_login(item) in TRUSTED_CODEX_LOGINS else None",
+              "            if isinstance(body, str):",
+              "                first_line, separator, remainder = body.partition(\"\\n\")",
+              "                badge_end = first_line.find(\"</sub></sub>  \")",
+              "                if (",
+              "                    badge_end > 0",
+              "                    and first_line.startswith(\"**<sub><sub>![P\")",
+              "                    and \" Badge](https://img.shields.io/badge/P\" in first_line[:badge_end]",
+              "                ):",
+              "                    title = first_line[badge_end + len(\"</sub></sub>  \"):]",
+              "                    if title.startswith(\"CONTROL_B1_INDETERMINATE:\"):",
+              "                        normalized = dict(item)",
+              "                        normalized[\"body\"] = title + (separator + remainder if separator else \"\")",
+              "            normalized_review_comments.append(normalized)",
+              "",
+              "        return classify_trusted_review_snapshot(",
+              "            task_id=task[\"task_id\"],",
+              "            handover_id=task[\"handover_id\"],",
+              "            candidate_sha=candidate_sha,",
+              "            request_comment_id=comment_id,",
+              "            acceptance_criteria=task[\"acceptance_criteria\"],",
+              "            trusted_actuator_login=actuator_login,",
+              "            reviews=reviews,",
+              "            review_comments=normalized_review_comments,",
+              "            trigger_reactions=reactions,",
+              "            issue_comments=issue_comments,",
+              "        )",
+          ])
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
           PY
 
           git -C "$repo" diff --check
