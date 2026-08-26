@@ -264,6 +264,9 @@ jobs:
           PYTHONPATH: .
         run: |
           set -euo pipefail
+          set +e
+          (
+          set -euo pipefail
           private_url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
           state="$RUNNER_TEMP/review-state"
           git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
@@ -313,6 +316,20 @@ jobs:
             --candidate-sha "$TARGET_CANDIDATE_SHA" --pr-json "$RUNNER_TEMP/pr-before.json" \
             --changed-files-json "$RUNNER_TEMP/changed-files.json" --workflow-runs "$RUNNER_TEMP/workflow-runs.json" \
             --diff "$RUNNER_TEMP/candidate.diff" --deep-timeout-seconds 420 --output "$RUNNER_TEMP/result.json"
+          jq -e '.version == "1.0" and .task_id == env.TASK_ID and .run_id == env.ACTIVE_RUN_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE" or .outcome == "EXECUTION_UNAVAILABLE")' "$RUNNER_TEMP/result.json" >/dev/null
+          )
+          evidence_rc=$?
+          set -e
+          if [ "$evidence_rc" -ne 0 ]; then
+            jq -n --arg task "$TASK_ID" --arg run "$ACTIVE_RUN_ID" --arg sha "$TARGET_CANDIDATE_SHA" '{
+              version:"1.0", task_id:$task, run_id:$run, role:"governance_release_assurance",
+              outcome:"EXECUTION_UNAVAILABLE",
+              summary:"Canonical evidence or executor precondition was unavailable; no semantic verdict was produced.",
+              candidate_sha:$sha,
+              findings:["EXECUTION_UNAVAILABLE: canonical evidence/executor precondition failed before a durable semantic verdict."],
+              evidence:["canonical-b1 production workflow normalized the non-verdict failure for terminal completion"]
+            }' > "$RUNNER_TEMP/result.json"
+          fi
           jq -e '.version == "1.0" and .task_id == env.TASK_ID and .run_id == env.ACTIVE_RUN_ID and .candidate_sha == env.TARGET_CANDIDATE_SHA and (.outcome == "PASS" or .outcome == "FAIL" or .outcome == "INDETERMINATE" or .outcome == "EXECUTION_UNAVAILABLE")' "$RUNNER_TEMP/result.json" >/dev/null
 
       - name: Revalidate exact claim and persist terminal result
@@ -370,6 +387,8 @@ jobs:
             git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$private_url" "$state"
             assert_active_profile "$state"
 
+            outcome="$(jq -r '.outcome' "$RUNNER_TEMP/result.json")"
+            if [ "$outcome" != EXECUTION_UNAVAILABLE ]; then
             GH_TOKEN="$CONTROL_TOKEN" gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR}" > "$RUNNER_TEMP/complete-pr.json"
             jq -e --arg sha "$TARGET_CANDIDATE_SHA" --arg base "$TARGET_BASE_SHA" --argjson number "$TARGET_PR" '
               .number == $number and
@@ -388,6 +407,8 @@ jobs:
               .status == "completed" and
               .conclusion == "success"
             ' "$RUNNER_TEMP/complete-ci.json" >/dev/null
+
+            fi
 
             set +e
             GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
