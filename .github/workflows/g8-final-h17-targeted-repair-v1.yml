@@ -1,0 +1,137 @@
+name: Gate-8 Final H17 Targeted Repair V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/g8-final-h17-targeted-repair-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-199-g8-final-h17-targeted-repair-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_REPOSITORY: market-predictions/control-engine
+  TARGET_BRANCH: control/199-g8-b1-profile-activation-v1
+  EXPECTED_PARENT: 9310d79f35bac61235d796b7434fa3e6a9b9b274
+  TARGET_FILE: scripts/canonical_b1_dual_executor_v1.py
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated lifecycle branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived publish token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: control-engine
+          permission-contents: 'write'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Apply exactly one H17 blocker repair
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          repo="$RUNNER_TEMP/candidate"
+          git clone --quiet --single-branch --branch "$TARGET_BRANCH" "https://x-access-token:${CONTROL_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "$repo"
+          [ "$(git -C "$repo" rev-parse HEAD)" = "$EXPECTED_PARENT" ]
+
+          python - "$repo/$TARGET_FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          old = '''    def classify_snapshot(reviews, review_comments, reactions, issue_comments):
+              return classify_trusted_review_snapshot(
+                  task_id=task["task_id"],
+                  handover_id=task["handover_id"],
+                  candidate_sha=candidate_sha,
+                  request_comment_id=comment_id,
+                  acceptance_criteria=task["acceptance_criteria"],
+                  trusted_actuator_login=actuator_login,
+                  reviews=reviews,
+                  review_comments=review_comments,
+                  trigger_reactions=reactions,
+                  issue_comments=issue_comments,
+              )
+          '''
+          new = '''    def classify_snapshot(reviews, review_comments, reactions, issue_comments):
+              normalized_review_comments = []
+              for item in review_comments:
+                  normalized = item
+                  body = item.get("body") if _record_login(item) in TRUSTED_CODEX_LOGINS else None
+                  if isinstance(body, str):
+                      first_line, separator, remainder = body.partition("\\n")
+                      badge_end = first_line.find("</sub></sub>  ")
+                      if (
+                          badge_end > 0
+                          and first_line.startswith("**<sub><sub>![P")
+                          and " Badge](https://img.shields.io/badge/P" in first_line[:badge_end]
+                      ):
+                          title = first_line[badge_end + len("</sub></sub>  "):]
+                          if title.startswith("CONTROL_B1_INDETERMINATE:"):
+                              normalized = dict(item)
+                              normalized["body"] = title + (separator + remainder if separator else "")
+                  normalized_review_comments.append(normalized)
+
+              return classify_trusted_review_snapshot(
+                  task_id=task["task_id"],
+                  handover_id=task["handover_id"],
+                  candidate_sha=candidate_sha,
+                  request_comment_id=comment_id,
+                  acceptance_criteria=task["acceptance_criteria"],
+                  trusted_actuator_login=actuator_login,
+                  reviews=reviews,
+                  review_comments=normalized_review_comments,
+                  trigger_reactions=reactions,
+                  issue_comments=issue_comments,
+              )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected exact classify_snapshot block not found exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+          git -C "$repo" diff --check
+          [ "$(git -C "$repo" diff --name-only)" = "$TARGET_FILE" ]
+          python -m py_compile "$repo/$TARGET_FILE"
+          (cd "$repo" && python -m pytest tests/test_canonical_b1_dual_executor_v1.py -q)
+
+          git -C "$repo" config user.name "control-chatgpt-a1[bot]"
+          git -C "$repo" config user.email "control-chatgpt-a1[bot]@users.noreply.github.com"
+          git -C "$repo" add -- "$TARGET_FILE"
+          [ "$(git -C "$repo" diff --cached --name-only)" = "$TARGET_FILE" ]
+          git -C "$repo" commit -m "fix: normalize native Codex indeterminate marker"
+          [ "$(git -C "$repo" rev-parse HEAD^)" = "$EXPECTED_PARENT" ]
+          git -C "$repo" push --quiet origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "G8_FINAL_H17_REPAIR=COMMITTED"
+          echo "G8_FINAL_H17_REPAIR_HEAD=$(git -C "$repo" rev-parse HEAD)"
