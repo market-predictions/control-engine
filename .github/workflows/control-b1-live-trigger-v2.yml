@@ -1,0 +1,32 @@
+name: Control B1 Live Trigger V2
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/control-b1-live-trigger-v2.yml
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: control-b1-live-trigger-v2
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger existing production canonical B1
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -X POST \
+            'repos/market-predictions/control-engine/actions/workflows/canonical-b1-dual-executor-v1.yml/dispatches' \
+            -f ref=main
+          echo 'CONTROL_B1_LIVE_TRIGGER=DISPATCHED'
