@@ -1,0 +1,54 @@
+name: Control B1 Selected Task Probe V1
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/control-b1-selected-task-probe-v1.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+      - name: Create read token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: control-plane
+          permission-contents: read
+      - name: Print exact preferred B1 identity only
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          state="$RUNNER_TEMP/state"
+          code="$RUNNER_TEMP/code"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-plane.git"
+          git clone --quiet --single-branch --branch control-runtime-state "$url" "$state"
+          git clone --quiet --single-branch --branch runtime/public-b-v2-code-r3 "$url" "$code"
+          python control_engine/scheduled_worker_b.py select-b1 --code-dir "$code" --queue "$state/control/DISPATCH_QUEUE.json" --output "$RUNNER_TEMP/selection.json" >/dev/null
+          cat "$RUNNER_TEMP/selection.json"
+          task="$(jq -r '.task_id // empty' "$RUNNER_TEMP/selection.json")"
+          if [ -n "$task" ]; then
+            jq --arg task "$task" '.tasks[] | select(.task_id==$task) | {task_id,state,priority,created_at,attempt,max_attempts,candidate_pr,candidate_sha,repository,instruction,acceptance_criteria}' "$state/control/DISPATCH_QUEUE.json"
+          fi
