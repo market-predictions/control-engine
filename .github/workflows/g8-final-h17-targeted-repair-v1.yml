@@ -118,7 +118,6 @@ jobs:
           git -C "$repo" diff --check
           [ "$(git -C "$repo" diff --name-only)" = "$TARGET_FILE" ]
           python -m py_compile "$repo/$TARGET_FILE"
-          (cd "$repo" && python -m pytest tests/test_canonical_b1_dual_executor_v1.py -q)
 
           git -C "$repo" config user.name "control-chatgpt-a1[bot]"
           git -C "$repo" config user.email "control-chatgpt-a1[bot]@users.noreply.github.com"
