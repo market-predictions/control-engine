@@ -1,0 +1,76 @@
+name: Control B1 Missing CI Terminal Hotfix V2
+
+on:
+  push:
+    branches:
+      - control/199-g8-h13-b1-lifecycle-actuator-v1
+    paths:
+      - .github/workflows/control-b1-missing-ci-terminal-hotfix-v2.yml
+
+permissions:
+  contents: read
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+      - name: Create workflow-write token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: control-engine
+          permission-contents: write
+          permission-workflows: write
+      - name: Allow claim before missing-CI normalization
+        shell: bash
+        env:
+          CONTROL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROL_TOKEN"
+          repo="$RUNNER_TEMP/public"
+          parent='c56a336f2d477fe709f07777ad8bc952cbf9e7ad'
+          file='.github/workflows/canonical-b1-dual-executor-v1.yml'
+          git clone --quiet --single-branch --branch main "https://x-access-token:${CONTROL_TOKEN}@github.com/market-predictions/control-engine.git" "$repo"
+          [ "$(git -C "$repo" rev-parse HEAD)" = "$parent" ]
+          python - "$repo/$file" <<'PY'
+          from pathlib import Path
+          import sys
+          path=Path(sys.argv[1]); text=path.read_text(encoding='utf-8')
+          start=text.index('      - name: Reconcile, select and claim exact preferred B1')
+          end=text.index('      - name: Collect exact evidence and execute deterministic route', start)
+          block=text[start:end]
+          old="          if len(ids)!=1: raise SystemExit('exactly one designated CI run identity is required')\n          print(next(iter(ids)))"
+          new="          if len(ids) == 1:\n              print(next(iter(ids)))"
+          if block.count(old) != 1:
+              raise SystemExit('designated CI parser target mismatch')
+          block=block.replace(old,new,1)
+          assertion='          [[ "$designated_ci_run_id" =~ ^[0-9]+$ ]]\n\n'
+          if block.count(assertion) != 1:
+              raise SystemExit('pre-claim CI assertion target mismatch')
+          block=block.replace(assertion,'',1)
+          path.write_text(text[:start]+block+text[end:],encoding='utf-8')
+          PY
+          git -C "$repo" diff --check
+          [ "$(git -C "$repo" diff --name-only)" = "$file" ]
+          git -C "$repo" config user.name 'control-canonical-b1[bot]'
+          git -C "$repo" config user.email 'control-canonical-b1[bot]@users.noreply.github.com'
+          git -C "$repo" add -- "$file"
+          git -C "$repo" commit --quiet -m 'fix: terminalize B1 tasks without designated CI'
+          [ "$(git -C "$repo" rev-parse HEAD^)" = "$parent" ]
+          git -C "$repo" push --quiet origin HEAD:refs/heads/main
+          echo "PUBLIC_MAIN_SHA=$(git -C "$repo" rev-parse HEAD)"
