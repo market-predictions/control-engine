@@ -156,7 +156,7 @@ def test_active_profile_rejects_h9_omitted_contract_fields(section, field, value
 
 def test_workflow_full_profile_guard_precedes_reconcile_claim_and_terminal_mutations():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "CONTROL_PRIVATE_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60" in text
+    assert "CONTROL_PRIVATE_B_CODE_SHA: a55e2a0d791ca55450ec135415e4aa9a48be361d" in text
     assert '[ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]' in text
 
     claim = text.split("- name: Reconcile, select and claim exact preferred B1", 1)[1]
@@ -660,7 +660,7 @@ def test_trusted_review_comment_valid_linkage_remains_accepted():
 def test_workflow_uses_unified_b1_lease_and_exact_designated_ci_run():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r3" in text
-    assert "CONTROL_PRIVATE_B_CODE_SHA: 01b3fb7e5905e61a8a96c2665d2d8afd74b4dd60" in text
+    assert "CONTROL_PRIVATE_B_CODE_SHA: a55e2a0d791ca55450ec135415e4aa9a48be361d" in text
     assert "lease_seconds=5400" in text
     assert "lease_seconds=900" not in text
     assert "assurance_class=" not in text
