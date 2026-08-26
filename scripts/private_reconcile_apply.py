@@ -22,12 +22,30 @@ if str(ROOT) not in sys.path:
 from scripts import project_integration_executor as integration
 
 
+RECONCILE_CODE_REF = "control/171-intake-queue-reconciliation-v1"
+RECONCILE_CODE_SHA = "03f22d679a4bcea36870df83a6b7c5c35f1c2d35"
+
+
 def _run_stage(name: str, cmd: list[str]) -> None:
     result = subprocess.run(cmd, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         stderr = result.stderr.strip()[-3000:]
         stdout = result.stdout.strip()[-3000:]
         raise RuntimeError(f"stage={name}; rc={result.returncode}; stderr={stderr}; stdout={stdout}")
+
+
+def _fetch_reconcile_code(token: str, code_dir: Path) -> None:
+    """Fetch the immutable reconciliation snapshot without repinning other actuators."""
+    integration._init_repo(code_dir, f"https://github.com/{integration.CONTROL_REPOSITORY}.git")
+    integration._private_git(
+        token,
+        code_dir,
+        ["fetch", "--quiet", "--depth=1", "origin", f"refs/heads/{RECONCILE_CODE_REF}"],
+    )
+    integration._run(["git", "checkout", "--detach", "--quiet", "FETCH_HEAD"], cwd=code_dir)
+    actual = integration._run(["git", "rev-parse", "HEAD"], cwd=code_dir).stdout.strip()
+    if actual != RECONCILE_CODE_SHA:
+        raise RuntimeError("private reconciliation code SHA mismatch")
 
 
 def main() -> int:
@@ -42,8 +60,9 @@ def main() -> int:
             code_dir = root / "code"
             state_dir = root / "state"
             report = root / "intake-report.json"
+            supersession_report = root / "supersession-report.json"
 
-            integration._fetch_code(token, code_dir)
+            _fetch_reconcile_code(token, code_dir)
             integration._init_repo(state_dir, f"https://github.com/{integration.CONTROL_REPOSITORY}.git")
             integration._run(["git", "config", "user.name", "control-runtime-reconciler[bot]"], cwd=state_dir)
             integration._run(["git", "config", "user.email", "control-runtime-reconciler[bot]@users.noreply.github.com"], cwd=state_dir)
@@ -62,6 +81,20 @@ def main() -> int:
                         str(state_dir / "control" / "DISPATCH_QUEUE.json"),
                         "--runs",
                         str(state_dir / "control" / "DISPATCH_RUNS.json"),
+                    ],
+                )
+                _run_stage(
+                    "superseded_intake_reconcile",
+                    [
+                        sys.executable,
+                        str(code_dir / "tools" / "control_superseded_intake_reconcile_v1.py"),
+                        "--queue",
+                        str(state_dir / "control" / "DISPATCH_QUEUE.json"),
+                        "--intake-dir",
+                        str(state_dir / "control" / "project-intake"),
+                        "--write",
+                        "--report",
+                        str(supersession_report),
                     ],
                 )
                 _run_stage(
@@ -113,12 +146,21 @@ def main() -> int:
                     allowed=allowed,
                 ):
                     payload = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
+                    supersession = (
+                        json.loads(supersession_report.read_text(encoding="utf-8"))
+                        if supersession_report.exists()
+                        else {}
+                    )
                     created = payload.get("created", payload.get("created_task_ids", []))
                     updated = payload.get("updated", payload.get("updated_task_ids", []))
+                    superseded = supersession.get("superseded", [])
+                    deferred_active = supersession.get("deferred_active", [])
                     print("CONTROL_RUNTIME_RECONCILER=SUCCESS")
                     print(f"CONTROL_RUNTIME_RECONCILER_ATTEMPT={attempt}")
                     print(f"CONTROL_RUNTIME_RECONCILER_CREATED={json.dumps(created, sort_keys=True)}")
                     print(f"CONTROL_RUNTIME_RECONCILER_UPDATED={json.dumps(updated, sort_keys=True)}")
+                    print(f"CONTROL_RUNTIME_RECONCILER_SUPERSEDED={json.dumps(superseded, sort_keys=True)}")
+                    print(f"CONTROL_RUNTIME_RECONCILER_DEFERRED_ACTIVE={json.dumps(deferred_active, sort_keys=True)}")
                     return 0
 
             print("CONTROL_RUNTIME_RECONCILER=CAS_CONFLICT")
