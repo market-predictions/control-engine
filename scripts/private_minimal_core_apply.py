@@ -73,6 +73,19 @@ def _reconcile_files(state_dir: Path, now: datetime) -> dict[str, list[str]]:
     return report
 
 
+def _assert_no_legacy_conflict(queue: dict, role: str, repository: str) -> None:
+    """Fail closed until any pre-cutover owner of this role/repository is gone."""
+    for task in queue.get("tasks", []):
+        if task.get("lifecycle_model") == core.PROTOCOL_ID:
+            continue
+        if not task.get("active_run_id"):
+            continue
+        if task.get("active_role") == role:
+            raise RuntimeError("legacy role claim must be reconciled before Minimal Core claim")
+        if task.get("repository") == repository:
+            raise RuntimeError("legacy repository claim must be reconciled before Minimal Core claim")
+
+
 def _init_state(state_dir: Path) -> None:
     integration._init_repo(state_dir, f"https://github.com/{integration.CONTROL_REPOSITORY}.git")
     integration._run(["git", "config", "user.name", "control-minimal-core[bot]"], cwd=state_dir)
@@ -149,6 +162,10 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
                 captured["idle"] = "true"
                 return None
             task_id = selected["task_id"]
+        matches = [item for item in queue.get("tasks", []) if item.get("task_id") == task_id]
+        if len(matches) != 1:
+            raise RuntimeError("Minimal Core task identity is not unique")
+        _assert_no_legacy_conflict(queue, role, matches[0].get("repository", ""))
         queue, runs, claimed = core.claim(
             queue,
             runs,
