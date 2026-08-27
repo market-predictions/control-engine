@@ -87,12 +87,17 @@ def test_minimal_core_cutover_requires_explicit_valid_legacy_b1_retirement(tmp_p
 def test_invalid_retired_profile_still_fails_closed(tmp_path):
     profile = tmp_path / bridge.LEGACY_B1_PROFILE_REL
     profile.parent.mkdir(parents=True)
-    invalid = _profile(bridge.LEGACY_B1_RETIRED_STATUS)
-    invalid["principal_manual_relay_count"] = 1
-    profile.write_text(json.dumps(invalid), encoding="utf-8")
     queue = {"tasks": [{"lifecycle_model": core.PROTOCOL_ID, "task_id": "CORE"}]}
-    with pytest.raises(RuntimeError, match="valid and RETIRED"):
-        bridge._assert_cutover_safe(tmp_path, queue)
+
+    for invalid_relay in (1, False, 0.0, "0", None):
+        invalid = _profile(bridge.LEGACY_B1_RETIRED_STATUS)
+        invalid["principal_manual_relay_count"] = invalid_relay
+        profile.write_text(json.dumps(invalid), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="valid and RETIRED"):
+            bridge._assert_cutover_safe(tmp_path, queue)
+
+    assert bridge._exact_integer_zero(0) is True
+    assert bridge._exact_integer_zero(False) is False
 
 
 def test_legacy_b1_workflow_uses_existing_profile_as_kill_switch():
