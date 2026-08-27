@@ -26,6 +26,7 @@ QUEUE_REL = "control/DISPATCH_QUEUE.json"
 RUNS_REL = "control/DISPATCH_RUNS.json"
 RESULT_DIR = Path("control/worker-results")
 LEGACY_B1_PROFILE_REL = "control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json"
+LEGACY_B1_RETIRED_STATUS = "RETIRED"
 AUTO_TASK_ID = "AUTO"
 LEASE_SECONDS = 5400
 
@@ -46,12 +47,20 @@ def _result_ref(task_id: str, run_id: str) -> str:
     return str(RESULT_DIR / f"{task_id}--{run_id}.json")
 
 
-def _legacy_b1_is_active(state_dir: Path) -> bool:
+def _assert_legacy_b1_retired(state_dir: Path) -> None:
     path = state_dir / LEGACY_B1_PROFILE_REL
     if not path.is_file():
-        return False
+        raise RuntimeError("legacy B1 profile is required for Minimal Core cutover")
     profile = _load(path)
-    return profile.get("status") == "ACTIVE"
+    if (
+        profile.get("protocol_id") != "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"
+        or profile.get("version") != "1.0"
+        or profile.get("status") != LEGACY_B1_RETIRED_STATUS
+        or profile.get("principal_manual_relay_count") != 0
+        or profile.get("lifecycle_authority", {}).get("role") != core.ROLE_B
+        or profile.get("lifecycle_authority", {}).get("worker_instance") != core.INSTANCE_B1
+    ):
+        raise RuntimeError("legacy B1 profile must be valid and RETIRED before Minimal Core cutover")
 
 
 def _assert_cutover_safe(state_dir: Path, queue: dict) -> None:
@@ -59,8 +68,8 @@ def _assert_cutover_safe(state_dir: Path, queue: dict) -> None:
         task.get("lifecycle_model") == core.PROTOCOL_ID
         for task in queue.get("tasks", [])
     )
-    if has_minimal_core and _legacy_b1_is_active(state_dir):
-        raise RuntimeError("legacy B1 profile must be non-ACTIVE before Minimal Core cutover")
+    if has_minimal_core:
+        _assert_legacy_b1_retired(state_dir)
 
 
 def _persisted_results(
