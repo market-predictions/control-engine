@@ -64,6 +64,10 @@ def _valid_sha(value: object) -> bool:
     )
 
 
+def _exact_integer_zero(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == 0
+
+
 def _task(queue: Mapping[str, Any], task_id: str) -> dict[str, Any]:
     matches = [task for task in queue.get("tasks", []) if task.get("task_id") == task_id]
     if len(matches) != 1:
@@ -79,10 +83,10 @@ def _run(runs: Mapping[str, Any], run_id: str) -> dict[str, Any]:
 
 
 def _assert_principal_zero(queue: Mapping[str, Any], task: Mapping[str, Any] | None = None) -> None:
-    if queue.get("principal_manual_relay_count") != 0:
-        raise MinimalCoreError("queue principal_manual_relay_count must remain zero")
-    if task is not None and task.get("principal_manual_relay_count", 0) != 0:
-        raise MinimalCoreError("task principal_manual_relay_count must remain zero")
+    if not _exact_integer_zero(queue.get("principal_manual_relay_count")):
+        raise MinimalCoreError("queue principal_manual_relay_count must remain integer zero")
+    if task is not None and not _exact_integer_zero(task.get("principal_manual_relay_count")):
+        raise MinimalCoreError("task principal_manual_relay_count must remain integer zero")
 
 
 def _assert_task_shape(task: Mapping[str, Any]) -> None:
@@ -375,7 +379,6 @@ def finalize_result(
     result: Mapping[str, Any],
     result_ref: str,
     now: datetime,
-    allow_expired_claim: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], str | None]:
     current_queue = deepcopy(queue)
     current_runs = deepcopy(runs)
@@ -430,7 +433,7 @@ def finalize_result(
     run_id = claim_data["run_id"]
     if result_run_id != run_id:
         raise MinimalCoreError("result task/run identity mismatch")
-    if not allow_expired_claim and _parse_ts(claim_data["expires_at"]) <= _utc(now):
+    if _parse_ts(claim_data["expires_at"]) <= _utc(now):
         raise MinimalCoreError("claim expired before result finalization")
 
     stamp = _ts(now)
@@ -486,7 +489,7 @@ def reconcile(
     persisted_results: Mapping[tuple[str, str], tuple[Mapping[str, Any] | None, str]] | None = None,
     now: datetime,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, list[str]]]:
-    """Finalize valid current-run results first; invalid output is execution failure."""
+    """Expire lost authority first; only current claims may finalize persisted results."""
     current_queue = deepcopy(queue)
     current_runs = deepcopy(runs)
     validate(current_queue, current_runs)
@@ -497,6 +500,18 @@ def reconcile(
         if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") != STATUS_EXECUTING:
             continue
         run_id = task["claim"]["run_id"]
+        if _parse_ts(task["claim"]["expires_at"]) <= _utc(now):
+            current_queue, current_runs = release_execution_failure(
+                current_queue,
+                current_runs,
+                task_id=task["task_id"],
+                run_id=run_id,
+                code="LEASE_EXPIRED",
+                now=now,
+            )
+            report["expired_claims"].append(task["task_id"])
+            continue
+
         entry = persisted_results.get((task["task_id"], run_id))
         if entry is None:
             continue
@@ -511,7 +526,6 @@ def reconcile(
                 result=result,
                 result_ref=result_ref,
                 now=now,
-                allow_expired_claim=True,
             )
         except MinimalCoreError:
             current_queue, current_runs = release_execution_failure(
@@ -524,22 +538,6 @@ def reconcile(
             )
             continue
         report["finalized_results"].append(task["task_id"])
-
-    for task in list(current_queue["tasks"]):
-        if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") != STATUS_EXECUTING:
-            continue
-        if _parse_ts(task["claim"]["expires_at"]) > _utc(now):
-            continue
-        run_id = task["claim"]["run_id"]
-        current_queue, current_runs = release_execution_failure(
-            current_queue,
-            current_runs,
-            task_id=task["task_id"],
-            run_id=run_id,
-            code="LEASE_EXPIRED",
-            now=now,
-        )
-        report["expired_claims"].append(task["task_id"])
 
     validate(current_queue, current_runs)
     return current_queue, current_runs, report
