@@ -51,17 +51,48 @@ def test_cutover_ignores_inactive_legacy_history():
     bridge._assert_no_legacy_conflict(queue, core.ROLE_B, "target/repo")
 
 
-def test_minimal_core_cutover_requires_legacy_b1_profile_non_active(tmp_path):
+def _profile(status):
+    return {
+        "protocol_id": "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1",
+        "version": "1.0",
+        "status": status,
+        "lifecycle_authority": {
+            "role": core.ROLE_B,
+            "worker_instance": core.INSTANCE_B1,
+        },
+        "principal_manual_relay_count": 0,
+    }
+
+
+def test_minimal_core_cutover_requires_explicit_valid_legacy_b1_retirement(tmp_path):
     profile = tmp_path / bridge.LEGACY_B1_PROFILE_REL
-    profile.parent.mkdir(parents=True)
     queue = {"tasks": [{"lifecycle_model": core.PROTOCOL_ID, "task_id": "CORE"}]}
 
-    profile.write_text(json.dumps({"status": "ACTIVE"}), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="must be non-ACTIVE"):
+    with pytest.raises(RuntimeError, match="profile is required"):
         bridge._assert_cutover_safe(tmp_path, queue)
 
-    profile.write_text(json.dumps({"status": "CANDIDATE_GATE8"}), encoding="utf-8")
+    profile.parent.mkdir(parents=True)
+    profile.write_text(json.dumps(_profile("ACTIVE")), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="valid and RETIRED"):
+        bridge._assert_cutover_safe(tmp_path, queue)
+
+    profile.write_text(json.dumps(_profile("CANDIDATE_GATE8")), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="valid and RETIRED"):
+        bridge._assert_cutover_safe(tmp_path, queue)
+
+    profile.write_text(json.dumps(_profile(bridge.LEGACY_B1_RETIRED_STATUS)), encoding="utf-8")
     bridge._assert_cutover_safe(tmp_path, queue)
+
+
+def test_invalid_retired_profile_still_fails_closed(tmp_path):
+    profile = tmp_path / bridge.LEGACY_B1_PROFILE_REL
+    profile.parent.mkdir(parents=True)
+    invalid = _profile(bridge.LEGACY_B1_RETIRED_STATUS)
+    invalid["principal_manual_relay_count"] = 1
+    profile.write_text(json.dumps(invalid), encoding="utf-8")
+    queue = {"tasks": [{"lifecycle_model": core.PROTOCOL_ID, "task_id": "CORE"}]}
+    with pytest.raises(RuntimeError, match="valid and RETIRED"):
+        bridge._assert_cutover_safe(tmp_path, queue)
 
 
 def test_legacy_b1_workflow_uses_existing_profile_as_kill_switch():
