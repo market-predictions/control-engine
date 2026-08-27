@@ -1,24 +1,15 @@
-name: Control Minimal Core lifecycle bridge
+name: Control Minimal Core lifecycle actuator
 
 # CONTROL #206
 # Deterministic lifecycle plumbing only. This workflow never performs semantic
 # implementation, assurance, repair, integration, merge or release work.
-# Schedulers only wake workers; a canonical Minimal Core claim proves start.
+# The existing ChatGPT scheduled role workers are the worker wake surface;
+# this GitHub workflow is intentionally not a scheduler. Claims prove start.
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'
   workflow_dispatch:
   issue_comment:
     types: [created]
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/scheduled-worker-a-v2.yml'
-      - 'control_engine/minimal_core.py'
-      - 'scripts/private_minimal_core_apply.py'
-      - 'tests/test_minimal_core.py'
 
 permissions:
   contents: read
@@ -122,8 +113,8 @@ jobs:
               ;;
           esac
 
-      - name: Publish non-semantic liveness
-        if: always() && github.event_name != 'issue_comment'
+      - name: Publish non-semantic actuator liveness
+        if: always() && github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,5 +141,7 @@ jobs:
           echo 'GITHUB_ACTIONS_SEMANTIC_IMPLEMENTATION=false'
           echo 'GITHUB_ACTIONS_SEMANTIC_ASSURANCE=false'
           echo 'CONTROL_GITHUB_ROLE=DETERMINISTIC_LIFECYCLE_ONLY'
+          echo 'GITHUB_ACTIONS_WORKER_SCHEDULER=false'
+          echo 'CHATGPT_ROLE_WORKERS_WAKE=true'
           echo 'SECOND_QUEUE=false'
           echo 'TASK_SPECIFIC_RECOVERY=false'
