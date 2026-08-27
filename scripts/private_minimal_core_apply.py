@@ -47,6 +47,10 @@ def _result_ref(task_id: str, run_id: str) -> str:
     return str(RESULT_DIR / f"{task_id}--{run_id}.json")
 
 
+def _exact_integer_zero(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == 0
+
+
 def _assert_legacy_b1_retired(state_dir: Path) -> None:
     path = state_dir / LEGACY_B1_PROFILE_REL
     if not path.is_file():
@@ -56,7 +60,7 @@ def _assert_legacy_b1_retired(state_dir: Path) -> None:
         profile.get("protocol_id") != "CONTROL_ASSURANCE_EXECUTION_PROFILE_V1"
         or profile.get("version") != "1.0"
         or profile.get("status") != LEGACY_B1_RETIRED_STATUS
-        or profile.get("principal_manual_relay_count") != 0
+        or not _exact_integer_zero(profile.get("principal_manual_relay_count"))
         or profile.get("lifecycle_authority", {}).get("role") != core.ROLE_B
         or profile.get("lifecycle_authority", {}).get("worker_instance") != core.INSTANCE_B1
     ):
