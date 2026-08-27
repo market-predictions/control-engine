@@ -62,7 +62,7 @@ The operation determines the worker role:
 | `PROJECT_INTEGRATION` | `implementation_operations` / A1 |
 | `ASSURANCE` | `governance_release_assurance` / B1 |
 
-A task stores its predefined `successor_by_outcome`. The lifecycle kernel copies at most one matching template after a valid terminal result. This makes successor creation deterministic rather than a planner/reconciler side effect.
+A task stores its predefined `successor_by_outcome`. The lifecycle kernel copies at most one matching template after a valid terminal result. Every successor template must already contain a non-empty `task_id`, so an invalid future identity cannot survive validation and strand its predecessor after semantic work.
 
 Authority routing is fail-closed:
 
@@ -70,7 +70,8 @@ Authority routing is fail-closed:
 - `IMPLEMENTATION` / `REPAIR` `BLOCKED` creates no successor authority;
 - `ASSURANCE` `PASS` may create only `PROJECT_INTEGRATION`;
 - `ASSURANCE` `FAIL` may create only `REPAIR`;
-- `ASSURANCE` `INDETERMINATE` creates no successor authority.
+- `ASSURANCE` `INDETERMINATE` creates no successor authority;
+- `PROJECT_INTEGRATION` is terminal for its task purpose and may not define any successor authority.
 
 ## Semantic versus execution outcomes
 
@@ -127,12 +128,14 @@ Minimal Core is production-proven only when all are true:
 - the recurring A1 ChatGPT role-worker invocation autonomously selects and claims an eligible A task;
 - A1 `COMPLETED` creates exactly one predefined assurance successor when a successor is required and leaves no ghost claim;
 - A1 cannot create integration authority directly from implementation or repair;
+- every successor identity is valid before its predecessor can be claimed;
 - the recurring B1 ChatGPT role-worker independently claims that assurance with a current lease;
 - an expired claim cannot terminalize a semantic result or create successor authority;
 - infrastructure failure or invalid executor output requeues the same task without new semantic lineage;
 - B1 `PASS` creates exactly one predefined integration successor when configured;
 - B1 `FAIL` creates exactly one predefined repair successor when configured;
 - B1 `INDETERMINATE` creates no integration authority;
+- a project-integration task cannot create a further successor;
 - exact result replay is idempotent;
 - the next scheduled role-worker invocation selects the next eligible task without principal relay;
 - the GitHub lifecycle actuator has no worker cron and cannot create an ownerless claim;
