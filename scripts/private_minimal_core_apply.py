@@ -25,6 +25,7 @@ from scripts import project_integration_executor as integration
 QUEUE_REL = "control/DISPATCH_QUEUE.json"
 RUNS_REL = "control/DISPATCH_RUNS.json"
 RESULT_DIR = Path("control/worker-results")
+LEGACY_B1_PROFILE_REL = "control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json"
 AUTO_TASK_ID = "AUTO"
 LEASE_SECONDS = 5400
 
@@ -45,8 +46,28 @@ def _result_ref(task_id: str, run_id: str) -> str:
     return str(RESULT_DIR / f"{task_id}--{run_id}.json")
 
 
-def _persisted_results(state_dir: Path, queue: dict) -> dict[tuple[str, str], tuple[dict, str]]:
-    found: dict[tuple[str, str], tuple[dict, str]] = {}
+def _legacy_b1_is_active(state_dir: Path) -> bool:
+    path = state_dir / LEGACY_B1_PROFILE_REL
+    if not path.is_file():
+        return False
+    profile = _load(path)
+    return profile.get("status") == "ACTIVE"
+
+
+def _assert_cutover_safe(state_dir: Path, queue: dict) -> None:
+    has_minimal_core = any(
+        task.get("lifecycle_model") == core.PROTOCOL_ID
+        for task in queue.get("tasks", [])
+    )
+    if has_minimal_core and _legacy_b1_is_active(state_dir):
+        raise RuntimeError("legacy B1 profile must be non-ACTIVE before Minimal Core cutover")
+
+
+def _persisted_results(
+    state_dir: Path,
+    queue: dict,
+) -> dict[tuple[str, str], tuple[dict | None, str]]:
+    found: dict[tuple[str, str], tuple[dict | None, str]] = {}
     for task in queue.get("tasks", []):
         if task.get("lifecycle_model") != core.PROTOCOL_ID or task.get("status") != core.STATUS_EXECUTING:
             continue
@@ -56,8 +77,13 @@ def _persisted_results(state_dir: Path, queue: dict) -> dict[tuple[str, str], tu
         run_id = claim["run_id"]
         ref = _result_ref(task["task_id"], run_id)
         path = state_dir / ref
-        if path.is_file():
-            found[(task["task_id"], run_id)] = (_load(path), ref)
+        if not path.is_file():
+            continue
+        try:
+            result = _load(path)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            result = None
+        found[(task["task_id"], run_id)] = (result, ref)
     return found
 
 
@@ -66,6 +92,7 @@ def _reconcile_files(state_dir: Path, now: datetime) -> dict[str, list[str]]:
     runs_path = state_dir / RUNS_REL
     queue = _load(queue_path)
     runs = _load(runs_path)
+    _assert_cutover_safe(state_dir, queue)
     queue, runs, report = core.reconcile(
         queue,
         runs,
@@ -153,6 +180,7 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
         runs_path = state_dir / RUNS_REL
         queue = _load(queue_path)
         runs = _load(runs_path)
+        _assert_cutover_safe(state_dir, queue)
         task_id = requested_task_id
         if task_id == AUTO_TASK_ID:
             selected = core.select_task(queue, role)
@@ -215,6 +243,7 @@ def command_record(token: str, task_id: str) -> int:
         runs_path = state_dir / RUNS_REL
         queue = _load(queue_path)
         runs = _load(runs_path)
+        _assert_cutover_safe(state_dir, queue)
         matches = [item for item in queue.get("tasks", []) if item.get("task_id") == task_id]
         if len(matches) != 1 or matches[0].get("lifecycle_model") != core.PROTOCOL_ID:
             raise RuntimeError("Minimal Core task identity is not unique")
@@ -234,7 +263,25 @@ def command_record(token: str, task_id: str) -> int:
         result_path = state_dir / result_ref
         if not result_path.is_file():
             raise RuntimeError("Minimal Core result is missing")
-        result = _load(result_path)
+        try:
+            result = _load(result_path)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            result = None
+        if not isinstance(result, dict):
+            if task.get("status") != core.STATUS_EXECUTING:
+                raise RuntimeError("Minimal Core terminal result is unreadable")
+            queue, runs = core.release_execution_failure(
+                queue,
+                runs,
+                task_id=task_id,
+                run_id=task["claim"]["run_id"],
+                code="INVALID_PERSISTED_RESULT",
+                now=_now(),
+            )
+            _write(queue_path, queue)
+            _write(runs_path, runs)
+            return {"outcome": "INVALID_PERSISTED_RESULT", "successor_id": None}
+
         queue, runs, successor_id = core.finalize_result(
             queue,
             runs,
@@ -256,6 +303,12 @@ def command_record(token: str, task_id: str) -> int:
         message=f"runtime: finalize Minimal Core {task_id}",
     )
     projection = core.explain_task(readback_queue, task_id)
+    if projection["status"] != core.STATUS_TERMINAL:
+        print("CONTROL_MINIMAL_CORE_RECORD=REQUEUED")
+        print(f"CONTROL_MINIMAL_CORE_TASK_ID={task_id}")
+        print(f"CONTROL_MINIMAL_CORE_EXECUTION_ERROR={projection['last_execution_error']}")
+        print(f"CONTROL_MINIMAL_CORE_CAS_ATTEMPT={attempt}")
+        return 0
     print("CONTROL_MINIMAL_CORE_RECORD=TERMINAL")
     print(f"CONTROL_MINIMAL_CORE_TASK_ID={task_id}")
     print(f"CONTROL_MINIMAL_CORE_OUTCOME={captured['outcome']}")
