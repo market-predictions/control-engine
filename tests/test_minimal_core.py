@@ -81,6 +81,17 @@ def repair_successor(task_id="CONTROL-204-REPAIR-1"):
     }
 
 
+def assurance_successor(task_id="CONTROL-204-ASSURE", candidate_sha=SHA):
+    return {
+        "task_id": task_id,
+        "operation": "ASSURANCE",
+        "role": core.ROLE_B,
+        "repository": "market-predictions/control-engine",
+        "candidate_sha": candidate_sha,
+        "successor_by_outcome": {},
+    }
+
+
 def test_pass_terminalizes_assurance_and_materializes_one_integration_successor():
     successor = {"PASS": integration_successor()}
     q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors=successor))
@@ -160,6 +171,34 @@ def test_persisted_result_wins_over_expired_lease():
     assert r2["runs"][0]["outcome"] == "INDETERMINATE"
 
 
+def test_invalid_current_run_result_is_execution_failure_not_semantic_verdict():
+    task_id = "CONTROL-204-ASSURE"
+    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
+    q1, r1, _ = core.claim(
+        q0,
+        runs(),
+        task_id=task_id,
+        worker_instance=core.INSTANCE_B1,
+        backend="test",
+        now=NOW,
+        lease_seconds=60,
+        run_id="run-invalid",
+    )
+    ref = "control/worker-results/CONTROL-204-ASSURE--run-invalid.json"
+    q2, r2, report = core.reconcile(
+        q1,
+        r1,
+        persisted_results={(task_id, "run-invalid"): (None, ref)},
+        now=NOW + timedelta(seconds=10),
+    )
+    assert report == {"finalized_results": [], "expired_claims": []}
+    current = core.explain_task(q2, task_id)
+    assert current["status"] == core.STATUS_QUEUED
+    assert current["outcome"] is None
+    assert current["last_execution_error"] == "INVALID_PERSISTED_RESULT"
+    assert r2["runs"][0]["outcome"] == "INVALID_PERSISTED_RESULT"
+
+
 def test_expired_claim_without_result_requeues_same_task():
     q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B))
     q1, r1, _ = core.claim(
@@ -219,6 +258,48 @@ def test_assurance_task_requires_concrete_exact_candidate_sha():
 def test_assurance_successor_routing_is_fail_closed(successors, message):
     invalid = task("ASSURE", "ASSURANCE", core.ROLE_B, successors=successors)
     with pytest.raises(core.MinimalCoreError, match=message):
+        core.validate(queue(invalid))
+
+
+@pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
+def test_a1_completed_work_cannot_route_directly_to_integration(operation):
+    invalid = task(
+        "A1-WORK",
+        operation,
+        core.ROLE_A,
+        successors={"COMPLETED": integration_successor()},
+    )
+    with pytest.raises(core.MinimalCoreError, match="must route through assurance"):
+        core.validate(queue(invalid))
+
+
+@pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
+def test_a1_completed_work_may_route_only_to_exact_assurance(operation):
+    valid = task(
+        "A1-WORK",
+        operation,
+        core.ROLE_A,
+        successors={"COMPLETED": assurance_successor()},
+    )
+    core.validate(queue(valid))
+    invalid = task(
+        "A1-BAD-SHA",
+        operation,
+        core.ROLE_A,
+        successors={"COMPLETED": assurance_successor(candidate_sha=None)},
+    )
+    with pytest.raises(core.MinimalCoreError, match="requires exact candidate SHA"):
+        core.validate(queue(invalid))
+
+
+def test_blocked_a1_work_cannot_create_successor_authority():
+    invalid = task(
+        "A1-BLOCKED",
+        "IMPLEMENTATION",
+        core.ROLE_A,
+        successors={"BLOCKED": assurance_successor()},
+    )
+    with pytest.raises(core.MinimalCoreError, match="blocked A1 work"):
         core.validate(queue(invalid))
 
 
