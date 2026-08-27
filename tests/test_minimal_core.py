@@ -146,28 +146,59 @@ def test_execution_failure_requeues_same_task_without_successor():
     assert r2["runs"][0]["outcome"] == "EXECUTOR_UNAVAILABLE"
 
 
-def test_persisted_result_wins_over_expired_lease():
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B))
+def test_expired_lease_wins_over_persisted_result():
+    task_id = "CONTROL-204-ASSURE"
+    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
     q1, r1, _ = core.claim(
         q0,
         runs(),
-        task_id="CONTROL-204-ASSURE",
+        task_id=task_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
         now=NOW,
         lease_seconds=10,
         run_id="run-late",
     )
-    result = b_result("CONTROL-204-ASSURE", "run-late", "INDETERMINATE")
+    result = b_result(task_id, "run-late", "PASS")
     ref = "control/worker-results/CONTROL-204-ASSURE--run-late.json"
     q2, r2, report = core.reconcile(
         q1,
         r1,
-        persisted_results={("CONTROL-204-ASSURE", "run-late"): (result, ref)},
+        persisted_results={(task_id, "run-late"): (result, ref)},
         now=NOW + timedelta(seconds=20),
     )
-    assert report == {"finalized_results": ["CONTROL-204-ASSURE"], "expired_claims": []}
-    assert core.explain_task(q2, "CONTROL-204-ASSURE")["outcome"] == "INDETERMINATE"
+    assert report == {"finalized_results": [], "expired_claims": [task_id]}
+    current = core.explain_task(q2, task_id)
+    assert current["status"] == core.STATUS_QUEUED
+    assert current["outcome"] is None
+    assert current["result_ref"] is None
+    assert current["last_execution_error"] == "LEASE_EXPIRED"
+    assert r2["runs"][0]["outcome"] == "LEASE_EXPIRED"
+
+
+def test_current_lease_persisted_result_finalizes():
+    task_id = "CONTROL-204-ASSURE"
+    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
+    q1, r1, _ = core.claim(
+        q0,
+        runs(),
+        task_id=task_id,
+        worker_instance=core.INSTANCE_B1,
+        backend="test",
+        now=NOW,
+        lease_seconds=60,
+        run_id="run-current",
+    )
+    result = b_result(task_id, "run-current", "INDETERMINATE")
+    ref = "control/worker-results/CONTROL-204-ASSURE--run-current.json"
+    q2, r2, report = core.reconcile(
+        q1,
+        r1,
+        persisted_results={(task_id, "run-current"): (result, ref)},
+        now=NOW + timedelta(seconds=20),
+    )
+    assert report == {"finalized_results": [task_id], "expired_claims": []}
+    assert core.explain_task(q2, task_id)["outcome"] == "INDETERMINATE"
     assert r2["runs"][0]["outcome"] == "INDETERMINATE"
 
 
@@ -332,11 +363,23 @@ def test_operation_role_is_immutable_and_principal_relay_stays_zero():
     invalid = task("X", "ASSURANCE", core.ROLE_A)
     with pytest.raises(core.MinimalCoreError, match="role does not match immutable operation"):
         core.validate(queue(invalid))
-    valid = task("X", "ASSURANCE", core.ROLE_B)
-    q = queue(valid)
-    q["principal_manual_relay_count"] = 1
-    with pytest.raises(core.MinimalCoreError, match="must remain zero"):
-        core.validate(q)
+
+    for invalid_relay in (1, False, 0.0, "0", None):
+        valid = task("X", "ASSURANCE", core.ROLE_B)
+        q = queue(valid)
+        q["principal_manual_relay_count"] = invalid_relay
+        with pytest.raises(core.MinimalCoreError, match="integer zero"):
+            core.validate(q)
+
+        valid = task("X", "ASSURANCE", core.ROLE_B)
+        valid["principal_manual_relay_count"] = invalid_relay
+        with pytest.raises(core.MinimalCoreError, match="integer zero"):
+            core.validate(queue(valid))
+
+    missing = task("X", "ASSURANCE", core.ROLE_B)
+    missing.pop("principal_manual_relay_count")
+    with pytest.raises(core.MinimalCoreError, match="integer zero"):
+        core.validate(queue(missing))
 
 
 def test_duplicate_successor_identity_fails_closed():
