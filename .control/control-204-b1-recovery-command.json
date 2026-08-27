@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "action": "claim",
+  "task_id": "CONTROL-204-PR78-ASSURE-H4",
+  "candidate_sha": "9aecab290d92a43e5a176aef741380f630b8275a",
+  "nonce": "claim-20260827T172500Z"
+}
