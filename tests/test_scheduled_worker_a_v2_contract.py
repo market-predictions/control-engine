@@ -11,20 +11,22 @@ BOUNDARY = ROOT / "docs" / "PUBLIC_PRIVATE_BOUNDARY_V1.md"
 ACTUATOR = ROOT / "docs" / "PRIVATE_RUNTIME_ACTUATOR_V1.md"
 
 
-def test_workflow_is_deterministic_minimal_lifecycle_not_semantic_worker() -> None:
+def test_workflow_is_deterministic_actuator_not_worker_scheduler() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "name: Control Minimal Core lifecycle bridge" in text
-    assert "schedule:" in text
-    assert "cron: '*/10 * * * *'" in text
+    assert "name: Control Minimal Core lifecycle actuator" in text
+    assert "schedule:" not in text
+    assert "cron:" not in text
+    assert "push:" not in text
     assert "workflow_dispatch:" in text
     assert "issue_comment:" in text
     assert "pull_request:" not in text
-    assert "branches:\n      - main" in text
     assert "ref: main" in text
     assert "permissions:\n  contents: read\n  statuses: write" in text
     assert "persist-credentials: false" in text
     assert "actions/upload-artifact" not in text
     assert "actions/cache" not in text
+    assert "GITHUB_ACTIONS_WORKER_SCHEDULER=false" in text
+    assert "CHATGPT_ROLE_WORKERS_WAKE=true" in text
 
 
 def test_workflow_has_private_state_credentials_but_no_semantic_provider_credentials() -> None:
@@ -62,7 +64,7 @@ def test_single_bridge_handles_reconcile_claim_and_record_without_intake_project
     assert "principal_manual_relay_count" in kernel
 
 
-def test_manual_wakes_are_exact_principal_authored_and_only_a1_b1_exist() -> None:
+def test_trusted_actuator_commands_are_exact_and_only_a1_b1_exist() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "github.event.comment.user.login == 'market-predictions'" in text
     assert "CONTROL_CORE_CLAIM_V1 A1" in text
