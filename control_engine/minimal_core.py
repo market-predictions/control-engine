@@ -56,6 +56,14 @@ def _parse_ts(value: str) -> datetime:
     return _utc(parsed)
 
 
+def _valid_sha(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
 def _task(queue: Mapping[str, Any], task_id: str) -> dict[str, Any]:
     matches = [task for task in queue.get("tasks", []) if task.get("task_id") == task_id]
     if len(matches) != 1:
@@ -92,6 +100,8 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
         raise MinimalCoreError("invalid task status")
     if not isinstance(task.get("repository"), str) or not task["repository"]:
         raise MinimalCoreError("repository is required")
+    if operation == "ASSURANCE" and not _valid_sha(task.get("candidate_sha")):
+        raise MinimalCoreError("assurance task requires exact candidate SHA")
     if not isinstance(task.get("priority", 0), int):
         raise MinimalCoreError("priority must be an integer")
     if not isinstance(task.get("attempt_count", 0), int) or task.get("attempt_count", 0) < 0:
@@ -109,6 +119,7 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
             raise MinimalCoreError("terminal task requires result_ref")
     elif task.get("outcome") is not None or task.get("result_ref") is not None:
         raise MinimalCoreError("non-terminal task may not retain semantic result state")
+
     successors = task.get("successor_by_outcome", {})
     if not isinstance(successors, dict):
         raise MinimalCoreError("successor_by_outcome must be an object")
@@ -117,6 +128,21 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
             raise MinimalCoreError("invalid successor template")
         if successor.get("task_id") == task["task_id"]:
             raise MinimalCoreError("task cannot succeed itself")
+
+    if operation == "ASSURANCE":
+        expected_operation = {"PASS": "PROJECT_INTEGRATION", "FAIL": "REPAIR"}
+        if "INDETERMINATE" in successors:
+            raise MinimalCoreError("INDETERMINATE assurance may not create a successor")
+        for outcome, successor in successors.items():
+            expected = expected_operation.get(outcome)
+            if expected is None:
+                raise MinimalCoreError("invalid assurance successor outcome")
+            if successor.get("operation") != expected or successor.get("role") != ROLE_A:
+                raise MinimalCoreError("assurance successor routes to invalid authority")
+            if successor.get("repository") != task["repository"]:
+                raise MinimalCoreError("assurance successor repository mismatch")
+            if successor.get("candidate_sha") != task["candidate_sha"]:
+                raise MinimalCoreError("assurance successor candidate mismatch")
 
 
 def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) -> None:
@@ -212,9 +238,19 @@ def claim(
         preferred = select_task(current_queue, role)
         if preferred is None or preferred["task_id"] != task_id:
             raise MinimalCoreError("task is not the preferred eligible task")
-    if any(item.get("lifecycle_model") == PROTOCOL_ID and item.get("status") == STATUS_EXECUTING and item.get("role") == role for item in current_queue["tasks"]):
+    if any(
+        item.get("lifecycle_model") == PROTOCOL_ID
+        and item.get("status") == STATUS_EXECUTING
+        and item.get("role") == role
+        for item in current_queue["tasks"]
+    ):
         raise MinimalCoreError("role capacity is already occupied")
-    if any(item.get("lifecycle_model") == PROTOCOL_ID and item.get("status") == STATUS_EXECUTING and item.get("repository") == task["repository"] for item in current_queue["tasks"]):
+    if any(
+        item.get("lifecycle_model") == PROTOCOL_ID
+        and item.get("status") == STATUS_EXECUTING
+        and item.get("repository") == task["repository"]
+        for item in current_queue["tasks"]
+    ):
         raise MinimalCoreError("repository is already claimed")
 
     started = _utc(now)
@@ -253,7 +289,14 @@ def claim(
     return current_queue, current_runs, deepcopy(task)
 
 
-def assert_current_claim(queue: Mapping[str, Any], *, task_id: str, worker_instance: str, run_id: str, now: datetime) -> dict[str, Any]:
+def assert_current_claim(
+    queue: Mapping[str, Any],
+    *,
+    task_id: str,
+    worker_instance: str,
+    run_id: str,
+    now: datetime,
+) -> dict[str, Any]:
     validate(queue)
     task = _task(queue, task_id)
     role = WORKER_ROLE.get(worker_instance)
@@ -276,7 +319,13 @@ def _close_run(runs: dict[str, Any], run_id: str, outcome: str, finished_at: str
     run["finished_at"] = finished_at
 
 
-def _materialize_successor(queue: dict[str, Any], task: Mapping[str, Any], *, outcome: str, now: datetime) -> str | None:
+def _materialize_successor(
+    queue: dict[str, Any],
+    task: Mapping[str, Any],
+    *,
+    outcome: str,
+    now: datetime,
+) -> str | None:
     template = task.get("successor_by_outcome", {}).get(outcome)
     if template is None:
         return None
@@ -321,25 +370,56 @@ def finalize_result(
     validate(current_queue, current_runs)
     task = _task(current_queue, task_id)
     _assert_principal_zero(current_queue, task)
-    if task.get("status") != STATUS_EXECUTING:
-        raise MinimalCoreError("result target is not executing")
-    claim_data = task["claim"]
-    run_id = claim_data["run_id"]
-    if not allow_expired_claim and _parse_ts(claim_data["expires_at"]) <= _utc(now):
-        raise MinimalCoreError("claim expired before result finalization")
-    if result.get("version") != VERSION or result.get("task_id") != task_id or result.get("run_id") != run_id:
-        raise MinimalCoreError("result task/run identity mismatch")
+
+    if not isinstance(result_ref, str) or not result_ref:
+        raise MinimalCoreError("result_ref is required")
+    if result.get("version") != VERSION or result.get("task_id") != task_id:
+        raise MinimalCoreError("result task identity mismatch")
+    result_run_id = result.get("run_id")
+    if not isinstance(result_run_id, str) or not result_run_id:
+        raise MinimalCoreError("result run identity is invalid")
     if result.get("role") != task["role"]:
         raise MinimalCoreError("result role mismatch")
     outcome = result.get("outcome")
     if outcome not in OUTCOMES_BY_OPERATION[task["operation"]]:
         raise MinimalCoreError("result outcome is invalid for operation")
-    if task["role"] == ROLE_B and result.get("candidate_sha") != task.get("candidate_sha"):
-        raise MinimalCoreError("B1 result candidate mismatch")
-    if task["role"] == ROLE_A and task.get("candidate_sha") is not None and result.get("candidate_sha") not in {None, task.get("candidate_sha")}:
+    if task["role"] == ROLE_B:
+        if not _valid_sha(result.get("candidate_sha")) or result.get("candidate_sha") != task["candidate_sha"]:
+            raise MinimalCoreError("B1 result candidate mismatch")
+    elif task.get("candidate_sha") is not None and result.get("candidate_sha") not in {None, task.get("candidate_sha")}:
         raise MinimalCoreError("A1 result candidate mismatch")
-    if not isinstance(result_ref, str) or not result_ref:
-        raise MinimalCoreError("result_ref is required")
+
+    if task.get("status") == STATUS_TERMINAL:
+        if task.get("outcome") != outcome or task.get("result_ref") != result_ref:
+            raise MinimalCoreError("terminal result replay mismatch")
+        run = _run(current_runs, result_run_id)
+        if (
+            run.get("task_id") != task_id
+            or run.get("role") != task["role"]
+            or run.get("outcome") != outcome
+            or not run.get("finished_at")
+        ):
+            raise MinimalCoreError("terminal run replay mismatch")
+        template = task.get("successor_by_outcome", {}).get(outcome)
+        if template is None:
+            successor_id = None
+        else:
+            successor_id = template.get("task_id")
+            if not isinstance(successor_id, str) or not successor_id:
+                raise MinimalCoreError("terminal successor replay identity invalid")
+            successor = _task(current_queue, successor_id)
+            if successor.get("predecessor_task_id") != task_id:
+                raise MinimalCoreError("terminal successor replay mismatch")
+        return current_queue, current_runs, successor_id
+
+    if task.get("status") != STATUS_EXECUTING:
+        raise MinimalCoreError("result target is not executing")
+    claim_data = task["claim"]
+    run_id = claim_data["run_id"]
+    if result_run_id != run_id:
+        raise MinimalCoreError("result task/run identity mismatch")
+    if not allow_expired_claim and _parse_ts(claim_data["expires_at"]) <= _utc(now):
+        raise MinimalCoreError("claim expired before result finalization")
 
     stamp = _ts(now)
     task.update({
@@ -391,10 +471,10 @@ def reconcile(
     queue: Mapping[str, Any],
     runs: Mapping[str, Any],
     *,
-    persisted_results: Mapping[str, tuple[Mapping[str, Any], str]] | None = None,
+    persisted_results: Mapping[tuple[str, str], tuple[Mapping[str, Any], str]] | None = None,
     now: datetime,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, list[str]]]:
-    """Finalize durable results first, then release expired claims."""
+    """Finalize exact current-run durable results first, then release expired claims."""
     current_queue = deepcopy(queue)
     current_runs = deepcopy(runs)
     validate(current_queue, current_runs)
@@ -404,7 +484,8 @@ def reconcile(
     for task in list(current_queue["tasks"]):
         if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") != STATUS_EXECUTING:
             continue
-        entry = persisted_results.get(task["task_id"])
+        run_id = task["claim"]["run_id"]
+        entry = persisted_results.get((task["task_id"], run_id))
         if entry is None:
             continue
         result, result_ref = entry
