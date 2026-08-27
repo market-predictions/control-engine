@@ -41,19 +41,23 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _result_ref(task_id: str) -> str:
-    return str(RESULT_DIR / f"{task_id}.json")
+def _result_ref(task_id: str, run_id: str) -> str:
+    return str(RESULT_DIR / f"{task_id}--{run_id}.json")
 
 
-def _persisted_results(state_dir: Path, queue: dict) -> dict[str, tuple[dict, str]]:
-    found: dict[str, tuple[dict, str]] = {}
+def _persisted_results(state_dir: Path, queue: dict) -> dict[tuple[str, str], tuple[dict, str]]:
+    found: dict[tuple[str, str], tuple[dict, str]] = {}
     for task in queue.get("tasks", []):
         if task.get("lifecycle_model") != core.PROTOCOL_ID or task.get("status") != core.STATUS_EXECUTING:
             continue
-        ref = _result_ref(task["task_id"])
+        claim = task.get("claim")
+        if not isinstance(claim, dict) or not isinstance(claim.get("run_id"), str):
+            continue
+        run_id = claim["run_id"]
+        ref = _result_ref(task["task_id"], run_id)
         path = state_dir / ref
         if path.is_file():
-            found[task["task_id"]] = (_load(path), ref)
+            found[(task["task_id"], run_id)] = (_load(path), ref)
     return found
 
 
@@ -111,11 +115,7 @@ def _persist(token: str, state_dir: Path, observed: tuple[str, str], message: st
 
 
 def _with_cas(token: str, mutate, *, message: str):
-    """Apply one queue/runs mutation and return an authoritative readback snapshot.
-
-    The readback is loaded before the temporary checkout is destroyed so callers
-    never depend on a path outside the TemporaryDirectory lifetime.
-    """
+    """Apply one queue/runs mutation and return the winning attempt's readback."""
     with tempfile.TemporaryDirectory(prefix="control-minimal-core-") as temp:
         state_dir = Path(temp) / "state"
         _init_state(state_dir)
@@ -147,8 +147,6 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
     if role is None:
         raise RuntimeError("unsupported worker instance")
 
-    captured: dict[str, str] = {}
-
     def mutate(state_dir: Path):
         _reconcile_files(state_dir, _now())
         queue_path = state_dir / QUEUE_REL
@@ -159,8 +157,7 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
         if task_id == AUTO_TASK_ID:
             selected = core.select_task(queue, role)
             if selected is None:
-                captured["idle"] = "true"
-                return None
+                return {"idle": True}
             task_id = selected["task_id"]
         matches = [item for item in queue.get("tasks", []) if item.get("task_id") == task_id]
         if len(matches) != 1:
@@ -177,17 +174,21 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
         )
         _write(queue_path, queue)
         _write(runs_path, runs)
-        captured.update({
+        return {
+            "idle": False,
             "task_id": task_id,
             "run_id": claimed["claim"]["run_id"],
             "candidate_sha": claimed.get("candidate_sha") or "",
             "repository": claimed["repository"],
             "expires_at": claimed["claim"]["expires_at"],
-        })
-        return None
+        }
 
-    _, readback_queue, attempt = _with_cas(token, mutate, message=f"runtime: claim Minimal Core {worker_instance}")
-    if captured.get("idle") == "true":
+    captured, readback_queue, attempt = _with_cas(
+        token,
+        mutate,
+        message=f"runtime: claim Minimal Core {worker_instance}",
+    )
+    if captured["idle"]:
         print("CONTROL_MINIMAL_CORE_CLAIM=NO_ELIGIBLE_WORK")
         return 0
 
@@ -209,17 +210,30 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
 
 
 def command_record(token: str, task_id: str) -> int:
-    captured: dict[str, str | None] = {}
-
     def mutate(state_dir: Path):
         queue_path = state_dir / QUEUE_REL
         runs_path = state_dir / RUNS_REL
-        result_ref = _result_ref(task_id)
+        queue = _load(queue_path)
+        runs = _load(runs_path)
+        matches = [item for item in queue.get("tasks", []) if item.get("task_id") == task_id]
+        if len(matches) != 1 or matches[0].get("lifecycle_model") != core.PROTOCOL_ID:
+            raise RuntimeError("Minimal Core task identity is not unique")
+        task = matches[0]
+        if task.get("status") == core.STATUS_EXECUTING:
+            claim = task.get("claim")
+            if not isinstance(claim, dict) or not isinstance(claim.get("run_id"), str):
+                raise RuntimeError("Minimal Core active run is missing")
+            result_ref = _result_ref(task_id, claim["run_id"])
+        elif task.get("status") == core.STATUS_TERMINAL:
+            result_ref = task.get("result_ref")
+            if not isinstance(result_ref, str) or not result_ref:
+                raise RuntimeError("Minimal Core terminal result ref is missing")
+        else:
+            raise RuntimeError("Minimal Core result target is not executing or terminal")
+
         result_path = state_dir / result_ref
         if not result_path.is_file():
             raise RuntimeError("Minimal Core result is missing")
-        queue = _load(queue_path)
-        runs = _load(runs_path)
         result = _load(result_path)
         queue, runs, successor_id = core.finalize_result(
             queue,
@@ -231,11 +245,16 @@ def command_record(token: str, task_id: str) -> int:
         )
         _write(queue_path, queue)
         _write(runs_path, runs)
-        captured["outcome"] = result.get("outcome")
-        captured["successor_id"] = successor_id
-        return None
+        return {
+            "outcome": result.get("outcome"),
+            "successor_id": successor_id,
+        }
 
-    _, readback_queue, attempt = _with_cas(token, mutate, message=f"runtime: finalize Minimal Core {task_id}")
+    captured, readback_queue, attempt = _with_cas(
+        token,
+        mutate,
+        message=f"runtime: finalize Minimal Core {task_id}",
+    )
     projection = core.explain_task(readback_queue, task_id)
     print("CONTROL_MINIMAL_CORE_RECORD=TERMINAL")
     print(f"CONTROL_MINIMAL_CORE_TASK_ID={task_id}")
