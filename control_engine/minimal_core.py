@@ -144,6 +144,18 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
             if successor.get("candidate_sha") != task["candidate_sha"]:
                 raise MinimalCoreError("assurance successor candidate mismatch")
 
+    if operation in {"IMPLEMENTATION", "REPAIR"}:
+        if "BLOCKED" in successors:
+            raise MinimalCoreError("blocked A1 work may not create a successor")
+        completed = successors.get("COMPLETED")
+        if completed is not None:
+            if completed.get("operation") != "ASSURANCE" or completed.get("role") != ROLE_B:
+                raise MinimalCoreError("A1 completion must route through assurance")
+            if completed.get("repository") != task["repository"]:
+                raise MinimalCoreError("A1 assurance successor repository mismatch")
+            if not _valid_sha(completed.get("candidate_sha")):
+                raise MinimalCoreError("A1 assurance successor requires exact candidate SHA")
+
 
 def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) -> None:
     if queue.get("version") != VERSION or not isinstance(queue.get("tasks"), list):
@@ -471,10 +483,10 @@ def reconcile(
     queue: Mapping[str, Any],
     runs: Mapping[str, Any],
     *,
-    persisted_results: Mapping[tuple[str, str], tuple[Mapping[str, Any], str]] | None = None,
+    persisted_results: Mapping[tuple[str, str], tuple[Mapping[str, Any] | None, str]] | None = None,
     now: datetime,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, list[str]]]:
-    """Finalize exact current-run durable results first, then release expired claims."""
+    """Finalize valid current-run results first; invalid output is execution failure."""
     current_queue = deepcopy(queue)
     current_runs = deepcopy(runs)
     validate(current_queue, current_runs)
@@ -489,15 +501,28 @@ def reconcile(
         if entry is None:
             continue
         result, result_ref = entry
-        current_queue, current_runs, _ = finalize_result(
-            current_queue,
-            current_runs,
-            task_id=task["task_id"],
-            result=result,
-            result_ref=result_ref,
-            now=now,
-            allow_expired_claim=True,
-        )
+        try:
+            if not isinstance(result, Mapping):
+                raise MinimalCoreError("persisted result must be an object")
+            current_queue, current_runs, _ = finalize_result(
+                current_queue,
+                current_runs,
+                task_id=task["task_id"],
+                result=result,
+                result_ref=result_ref,
+                now=now,
+                allow_expired_claim=True,
+            )
+        except MinimalCoreError:
+            current_queue, current_runs = release_execution_failure(
+                current_queue,
+                current_runs,
+                task_id=task["task_id"],
+                run_id=run_id,
+                code="INVALID_PERSISTED_RESULT",
+                now=now,
+            )
+            continue
         report["finalized_results"].append(task["task_id"])
 
     for task in list(current_queue["tasks"]):
