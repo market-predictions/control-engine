@@ -31,20 +31,21 @@ def test_builtin_token_is_read_only_and_private_writes_use_ephemeral_app_token()
     assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ secrets.CONTROL_GITHUB_WRITE_TOKEN }}" not in text
 
 
-def test_minimal_core_wakes_are_trusted_and_bounded() -> None:
+def test_minimal_core_actuator_is_trusted_bounded_and_not_a_scheduler() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "schedule:" in text
-    assert "cron: '*/10 * * * *'" in text
+    assert "schedule:" not in text
+    assert "cron:" not in text
+    assert "push:" not in text
     assert "workflow_dispatch:" in text
     assert "issue_comment:" in text
-    assert "push:" in text
-    assert "branches:\n      - main" in text
     assert "github.event.comment.user.login == 'market-predictions'" in text
     assert "CONTROL_CORE_RECONCILE_V1" in text
     assert "CONTROL_CORE_CLAIM_V1 " in text
     assert "CONTROL_CORE_RECORD_V1 " in text
     assert "ref: main" in text
     assert "pull_request:" not in text
+    assert "GITHUB_ACTIONS_WORKER_SCHEDULER=false" in text
+    assert "CHATGPT_ROLE_WORKERS_WAKE=true" in text
 
 
 def test_public_workflow_contains_no_semantic_compute_or_provider_credentials() -> None:
@@ -82,8 +83,9 @@ def test_minimal_core_bridge_is_single_state_only_cas_surface() -> None:
         assert "@codex" not in text
 
 
-def test_public_liveness_status_is_non_semantic_and_bounded() -> None:
+def test_public_liveness_status_is_manual_actuator_only_and_non_semantic() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
+    assert "github.event_name == 'workflow_dispatch'" in text
     assert 'context="control/minimal-core"' in text
     assert "CONTROL_MINIMAL_CORE_OK" in text
     assert "CONTROL_MINIMAL_CORE_FAILED" in text
