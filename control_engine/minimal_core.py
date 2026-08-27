@@ -393,7 +393,7 @@ def finalize_result(
     if result.get("role") != task["role"]:
         raise MinimalCoreError("result role mismatch")
     outcome = result.get("outcome")
-    if outcome not in OUTCOMES_BY_OPERATION[task["operation"]]:
+    if not isinstance(outcome, str) or outcome not in OUTCOMES_BY_OPERATION[task["operation"]]:
         raise MinimalCoreError("result outcome is invalid for operation")
     if task["role"] == ROLE_B:
         if not _valid_sha(result.get("candidate_sha")) or result.get("candidate_sha") != task["candidate_sha"]:
