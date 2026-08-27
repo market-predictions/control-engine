@@ -305,22 +305,31 @@ def test_a1_completed_work_cannot_route_directly_to_integration(operation):
 
 
 @pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
-def test_a1_completed_work_may_route_only_to_exact_assurance(operation):
-    valid = task(
+def test_a1_completed_work_routes_to_result_bound_assurance(operation):
+    prebound = task(
         "A1-WORK",
         operation,
         core.ROLE_A,
         successors={"COMPLETED": assurance_successor()},
     )
-    core.validate(queue(valid))
-    invalid = task(
-        "A1-BAD-SHA",
+    core.validate(queue(prebound))
+
+    unbound = task(
+        "A1-UNBOUND",
         operation,
         core.ROLE_A,
         successors={"COMPLETED": assurance_successor(candidate_sha=None)},
     )
-    with pytest.raises(core.MinimalCoreError, match="requires exact candidate SHA"):
-        core.validate(queue(invalid))
+    core.validate(queue(unbound))
+
+    malformed = task(
+        "A1-BAD-SHA",
+        operation,
+        core.ROLE_A,
+        successors={"COMPLETED": assurance_successor(candidate_sha="not-a-sha")},
+    )
+    with pytest.raises(core.MinimalCoreError, match="candidate template is invalid"):
+        core.validate(queue(malformed))
 
 
 def test_blocked_a1_work_cannot_create_successor_authority():
