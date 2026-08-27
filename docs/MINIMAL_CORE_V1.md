@@ -92,14 +92,15 @@ The migration is bounded and deliberately not a long-running dual control plane:
 
 1. implement and independently assure the Minimal Core kernel and bridge;
 2. merge the exact independently assured candidate;
-3. set the existing legacy assurance execution profile to an existing non-`ACTIVE` state and reread it before any Minimal Core task is materialized;
-4. verify the existing legacy `canonical-b1` scheduler now idles through its existing profile gate;
-5. stop creating new local H/R recovery lineages;
-6. materialize current work as Minimal Core tasks while preserving exact repository/PR/SHA/contracts;
-7. prove the real chain `#204 -> #202 -> GAP-10` without manual lifecycle repair;
-8. keep old active recovery machinery retired while retaining its history.
+3. change the existing legacy assurance execution profile from `ACTIVE` to the explicit terminal cutover status `RETIRED`;
+4. reread and validate that exact profile (`protocol_id`, version, B1 lifecycle authority, `principal_manual_relay_count=0`, and `status=RETIRED`) before any Minimal Core task is materialized;
+5. verify the existing legacy `canonical-b1` scheduler now idles through its existing profile gate;
+6. stop creating new local H/R recovery lineages;
+7. materialize current work as Minimal Core tasks while preserving exact repository/PR/SHA/contracts;
+8. prove the real chain `#204 -> #202 -> GAP-10` without manual lifecycle repair;
+9. keep old active recovery machinery retired while retaining its history.
 
-The Minimal Core bridge itself refuses to reconcile, claim, or record Minimal Core lifecycle state while Minimal Core tasks exist and the legacy B1 profile is still `ACTIVE`. This makes the cutover ordering fail-closed without adding a second lock, queue, scheduler or migration service.
+The Minimal Core bridge refuses to reconcile, claim, or record Minimal Core lifecycle state unless the legacy assurance profile exists and validates exactly as `RETIRED`. Missing, malformed, `ACTIVE`, candidate, or otherwise unrecognized profile state fails closed. This makes the cutover ordering explicit without adding a second lock, queue, scheduler or migration service.
 
 No second queue, scheduler family, provider marketplace, B2/B3, TTL/GC subsystem, or workflow-per-task recovery is permitted.
 
