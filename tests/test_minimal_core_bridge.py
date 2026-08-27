@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,25 @@ def test_cutover_ignores_inactive_legacy_history():
     bridge._assert_no_legacy_conflict(queue, core.ROLE_B, "target/repo")
 
 
+def test_minimal_core_cutover_requires_legacy_b1_profile_non_active(tmp_path):
+    profile = tmp_path / bridge.LEGACY_B1_PROFILE_REL
+    profile.parent.mkdir(parents=True)
+    queue = {"tasks": [{"lifecycle_model": core.PROTOCOL_ID, "task_id": "CORE"}]}
+
+    profile.write_text(json.dumps({"status": "ACTIVE"}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="must be non-ACTIVE"):
+        bridge._assert_cutover_safe(tmp_path, queue)
+
+    profile.write_text(json.dumps({"status": "CANDIDATE_GATE8"}), encoding="utf-8")
+    bridge._assert_cutover_safe(tmp_path, queue)
+
+
+def test_legacy_b1_workflow_uses_existing_profile_as_kill_switch():
+    workflow = Path(".github/workflows/canonical-b1-dual-executor-v1.yml").read_text(encoding="utf-8")
+    assert 'if [ "$status" != ACTIVE ]; then' in workflow
+    assert "CANONICAL_B1=IDLE_PROFILE_" in workflow
+
+
 def test_persisted_result_discovery_is_scoped_to_active_task_and_run(tmp_path):
     task_id = "CONTROL-204-ASSURE"
     queue = {
@@ -74,6 +94,27 @@ def test_persisted_result_discovery_is_scoped_to_active_task_and_run(tmp_path):
     found = bridge._persisted_results(tmp_path, queue)
     assert list(found) == [(task_id, "run-new")]
     assert found[(task_id, "run-new")][1] == current_ref
+
+
+def test_malformed_current_run_result_is_discovered_as_invalid_not_raised(tmp_path):
+    task_id = "CONTROL-204-ASSURE"
+    run_id = "run-bad-json"
+    queue = {
+        "tasks": [
+            {
+                "lifecycle_model": core.PROTOCOL_ID,
+                "task_id": task_id,
+                "status": core.STATUS_EXECUTING,
+                "claim": {"run_id": run_id},
+            }
+        ]
+    }
+    ref = bridge._result_ref(task_id, run_id)
+    path = tmp_path / ref
+    path.parent.mkdir(parents=True)
+    path.write_text("{not-json", encoding="utf-8")
+    found = bridge._persisted_results(tmp_path, queue)
+    assert found[(task_id, run_id)] == (None, ref)
 
 
 def test_cas_returns_only_value_from_winning_attempt(monkeypatch):
