@@ -40,10 +40,10 @@ If a scheduled ChatGPT invocation is missed or no eligible task exists, no claim
 4. **One result mechanism.** One immutable result belongs to one task and one run.
 5. **One terminalization.** Result finalization clears ownership and creates at most one predefined successor in the same queue mutation.
 6. **Execution failure is not semantic state.** Infrastructure or invalid executor output requeues the same task with `last_execution_error`; it does not create H2/H3/H4-style lineage.
-7. **Persisted result wins over expired lease only when valid for the exact active task/run.** Invalid current-run output is an execution failure, never a semantic verdict.
+7. **Time expires authority.** A persisted result may terminalize only while its exact task/run claim is still current. Once the lease expires, the same task is requeued as `LEASE_EXPIRED`; a result discovered after expiry cannot create semantic authority.
 8. **Independent assurance remains mandatory.** A1 cannot assure. B1 outcomes are only `PASS`, `FAIL`, or `INDETERMINATE`.
 9. **Exact candidate binding remains mandatory.** An assurance task and B1 result require the same concrete 40-character candidate SHA.
-10. `principal_manual_relay_count` remains the integer `0`.
+10. `principal_manual_relay_count` must exist on the canonical queue and every Minimal Core task and must be exactly the integer `0`.
 
 ## Minimal task state
 
@@ -85,10 +85,10 @@ Infrastructure conditions such as `EXECUTOR_UNAVAILABLE`, `NETWORK_ERROR`, `TIME
 
 Every role-worker invocation performs the same lifecycle ordering through the existing actuator:
 
-1. discover persisted results for currently executing Minimal Core tasks by exact task + active run;
-2. finalize a valid exact task/run result idempotently;
-3. requeue invalid current-run result output as execution failure;
-4. release remaining expired claims as `LEASE_EXPIRED`;
+1. release expired claims as `LEASE_EXPIRED`; after this point that run has no semantic authority;
+2. for claims that are still current, discover persisted results by exact task + active run;
+3. finalize a valid exact task/run result idempotently;
+4. requeue invalid current-run result output as execution failure;
 5. select the preferred eligible task for the worker's role;
 6. claim only after role-capacity and repository-exclusivity checks;
 7. authoritative reread proves `START_PROVEN` before semantic work.
@@ -128,6 +128,7 @@ Minimal Core is production-proven only when all are true:
 - A1 `COMPLETED` creates exactly one predefined assurance successor when a successor is required and leaves no ghost claim;
 - A1 cannot create integration authority directly from implementation or repair;
 - the recurring B1 ChatGPT role-worker independently claims that assurance with a current lease;
+- an expired claim cannot terminalize a semantic result or create successor authority;
 - infrastructure failure or invalid executor output requeues the same task without new semantic lineage;
 - B1 `PASS` creates exactly one predefined integration successor when configured;
 - B1 `FAIL` creates exactly one predefined repair successor when configured;
