@@ -14,7 +14,7 @@ queued task
   -> bounded exact-role claim
   -> worker execution
   -> immutable task+run result
-  -> atomic terminalization + at most one predefined successor
+  -> atomic terminalization + at most one direct successor
 ```
 
 A scheduler only wakes a worker. A current canonical claim is the only proof that work started.
@@ -23,7 +23,7 @@ A scheduler only wakes a worker. A current canonical claim is the only proof tha
 
 Control uses the existing ChatGPT scheduled role-worker surface as its single worker scheduler family: one recurring A1 role worker and one recurring B1 role worker. The scheduler itself owns no Control state and has no governance authority.
 
-During a scheduled invocation the role worker first invokes the deterministic Minimal Core lifecycle actuator for its own role. The actuator reconciles durable results/expired ownership, selects the preferred eligible task, persists exactly one bounded claim, and returns authoritative readback. Semantic work starts only after that exact claim is `START_PROVEN`.
+During a scheduled invocation the role worker first invokes the deterministic Minimal Core lifecycle actuator for its own role. The actuator reconciles expired ownership/current durable results, selects the preferred eligible task, persists exactly one bounded claim, and returns authoritative readback. Semantic work starts only after that exact claim is `START_PROVEN`.
 
 The public GitHub workflow `.github/workflows/scheduled-worker-a-v2.yml` is deliberately **not** a scheduler and contains no cron. It is only the existing trusted deterministic actuator for reconcile/claim/record commands. This avoids both failure modes:
 
@@ -38,11 +38,11 @@ If a scheduled ChatGPT invocation is missed or no eligible task exists, no claim
 2. **One task, one purpose.** `operation` and `role` are immutable for the lifetime of a task.
 3. **One claim mechanism.** A1/B1 use the same lifecycle kernel with role capacity 1 and repository exclusivity.
 4. **One result mechanism.** One immutable result belongs to one task and one run.
-5. **One terminalization.** Result finalization clears ownership and creates at most one predefined successor in the same queue mutation.
+5. **One-step successor authority.** A task contains only its direct `successor_by_outcome`. No task carries a nested future lifecycle tree. When a direct successor is materialized, the kernel deterministically creates that new task's own direct successor contract.
 6. **Execution failure is not semantic state.** Infrastructure or invalid executor output requeues the same task with `last_execution_error`; it does not create H2/H3/H4-style lineage.
 7. **Time expires authority.** A persisted result may terminalize only while its exact task/run claim is still current. Once the lease expires, the same task is requeued as `LEASE_EXPIRED`; a result discovered after expiry cannot create semantic authority.
 8. **Independent assurance remains mandatory.** A1 cannot assure. B1 outcomes are only `PASS`, `FAIL`, or `INDETERMINATE`.
-9. **Exact candidate binding remains mandatory.** An assurance task and B1 result require the same concrete 40-character candidate SHA.
+9. **Exact candidate binding remains mandatory.** An ASSURANCE task and B1 result require the same concrete 40-character candidate SHA. For IMPLEMENTATION/REPAIR `COMPLETED`, the exact resulting SHA is supplied by the validated A1 result and becomes the candidate of the freshly materialized ASSURANCE successor.
 10. `principal_manual_relay_count` must exist on the canonical queue and every Minimal Core task and must be exactly the integer `0`.
 
 ## Minimal task state
@@ -62,14 +62,16 @@ The operation determines the worker role:
 | `PROJECT_INTEGRATION` | `implementation_operations` / A1 |
 | `ASSURANCE` | `governance_release_assurance` / B1 |
 
-A task stores its predefined `successor_by_outcome`. The lifecycle kernel copies at most one matching template after a valid terminal result. Every successor template must already contain a non-empty `task_id`, so an invalid future identity cannot survive validation and strand its predecessor after semantic work.
+A task stores only its immediate `successor_by_outcome`. Every immediate successor template must already contain a non-empty `task_id`, operation, role and repository before its predecessor is claimable. The template is not a recursively nested execution plan.
+
+For A1 IMPLEMENTATION/REPAIR `COMPLETED`, the future ASSURANCE identity/role/repository is predefined, but its candidate SHA is **result-bound**: the exact resulting SHA comes from the valid A1 `COMPLETED` result. After materialization, the kernel gives that ASSURANCE task a fresh one-step PASS/FAIL contract bound to the new SHA. This allows repeated `FAIL -> REPAIR -> ASSURANCE` cycles without prebuilding an H2/H3/H4-style successor tree.
 
 Authority routing is fail-closed:
 
-- `IMPLEMENTATION` / `REPAIR` `COMPLETED` may create only an exact-candidate `ASSURANCE` successor;
+- `IMPLEMENTATION` / `REPAIR` `COMPLETED` may create only an `ASSURANCE` successor whose exact candidate is the A1 result candidate;
 - `IMPLEMENTATION` / `REPAIR` `BLOCKED` creates no successor authority;
-- `ASSURANCE` `PASS` may create only `PROJECT_INTEGRATION`;
-- `ASSURANCE` `FAIL` may create only `REPAIR`;
+- `ASSURANCE` `PASS` may create only `PROJECT_INTEGRATION` for the same exact candidate;
+- `ASSURANCE` `FAIL` may create only `REPAIR` for the same exact candidate;
 - `ASSURANCE` `INDETERMINATE` creates no successor authority;
 - `PROJECT_INTEGRATION` is terminal for its task purpose and may not define any successor authority.
 
@@ -90,9 +92,10 @@ Every role-worker invocation performs the same lifecycle ordering through the ex
 2. for claims that are still current, discover persisted results by exact task + active run;
 3. finalize a valid exact task/run result idempotently;
 4. requeue invalid current-run result output as execution failure;
-5. select the preferred eligible task for the worker's role;
-6. claim only after role-capacity and repository-exclusivity checks;
-7. authoritative reread proves `START_PROVEN` before semantic work.
+5. materialize at most one direct semantic successor and give it its own one-step contract;
+6. select the preferred eligible task for the worker's role;
+7. claim only after role-capacity and repository-exclusivity checks;
+8. authoritative reread proves `START_PROVEN` before semantic work.
 
 There is no separate terminal-completion authority in the Minimal Core path. Replaying an already-applied exact result returns the authoritative terminal state and never creates a duplicate successor.
 
@@ -117,23 +120,24 @@ The migration is bounded and deliberately not a long-running dual control plane:
 9. prove the real chain `#204 -> #202 -> GAP-10` without manual lifecycle repair;
 10. keep old active recovery machinery retired while retaining its history.
 
-The Minimal Core actuator refuses to reconcile, claim, or record Minimal Core lifecycle state unless the legacy assurance profile exists and validates exactly as `RETIRED`. Missing, malformed, `ACTIVE`, candidate, or otherwise unrecognized profile state fails closed. Boolean `false`, floating-point `0.0`, string `"0"`, and null are not accepted as the relay count. This makes cutover ordering explicit without adding a second lock, queue, scheduler or migration service.
+The Minimal Core actuator refuses to reconcile, claim, or record Minimal Core lifecycle state unless the legacy assurance profile exists and validates exactly as `RETIRED`. Missing, malformed, `ACTIVE`, candidate, or otherwise unrecognized profile state fails closed. Boolean `false`, floating-point `0.0`, string `"0"`, and null are not accepted as the relay count. This makes the cutover ordering explicit without adding a second lock, queue, scheduler or migration service.
 
-No second queue, scheduler family, provider marketplace, B2/B3, TTL/GC subsystem, or workflow-per-task recovery is permitted.
+No second queue, nested lifecycle plan, scheduler family, provider marketplace, B2/B3, TTL/GC subsystem, or workflow-per-task recovery is permitted.
 
 ## Acceptance proof
 
 Minimal Core is production-proven only when all are true:
 
 - the recurring A1 ChatGPT role-worker invocation autonomously selects and claims an eligible A task;
-- A1 `COMPLETED` creates exactly one predefined assurance successor when a successor is required and leaves no ghost claim;
+- A1 `COMPLETED` creates exactly one direct ASSURANCE successor when required and binds it to the exact resulting candidate from the A1 result;
+- a repaired candidate can be assured, fail, be repaired again to a new SHA, and receive another fresh exact-candidate ASSURANCE task without a pre-nested successor tree;
 - A1 cannot create integration authority directly from implementation or repair;
-- every successor identity is valid before its predecessor can be claimed;
+- every direct successor identity is valid before its predecessor can be claimed;
 - the recurring B1 ChatGPT role-worker independently claims that assurance with a current lease;
 - an expired claim cannot terminalize a semantic result or create successor authority;
 - infrastructure failure or invalid executor output requeues the same task without new semantic lineage;
-- B1 `PASS` creates exactly one predefined integration successor when configured;
-- B1 `FAIL` creates exactly one predefined repair successor when configured;
+- B1 `PASS` creates exactly one direct integration successor;
+- B1 `FAIL` creates exactly one direct repair successor;
 - B1 `INDETERMINATE` creates no integration authority;
 - a project-integration task cannot create a further successor;
 - exact result replay is idempotent;
