@@ -130,8 +130,14 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
     for outcome, successor in successors.items():
         if outcome not in OUTCOMES_BY_OPERATION[operation] or not isinstance(successor, dict):
             raise MinimalCoreError("invalid successor template")
-        if successor.get("task_id") == task["task_id"]:
+        successor_id = successor.get("task_id")
+        if not isinstance(successor_id, str) or not successor_id:
+            raise MinimalCoreError("successor task_id is required")
+        if successor_id == task["task_id"]:
             raise MinimalCoreError("task cannot succeed itself")
+
+    if operation == "PROJECT_INTEGRATION" and successors:
+        raise MinimalCoreError("project integration may not create successor authority")
 
     if operation == "ASSURANCE":
         expected_operation = {"PASS": "PROJECT_INTEGRATION", "FAIL": "REPAIR"}
