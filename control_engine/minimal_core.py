@@ -163,8 +163,49 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
                 raise MinimalCoreError("A1 completion must route through assurance")
             if completed.get("repository") != task["repository"]:
                 raise MinimalCoreError("A1 assurance successor repository mismatch")
-            if not _valid_sha(completed.get("candidate_sha")):
-                raise MinimalCoreError("A1 assurance successor requires exact candidate SHA")
+            template_candidate = completed.get("candidate_sha")
+            if template_candidate is not None and not _valid_sha(template_candidate):
+                raise MinimalCoreError("A1 assurance successor candidate template is invalid")
+
+
+def _derived_task_id(task_id: str, suffix: str) -> str:
+    return f"{task_id}--{suffix}"
+
+
+def _default_successors(task: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Create one-step successor authority; never prebuild a nested lifecycle tree."""
+    operation = task["operation"]
+    task_id = task["task_id"]
+    repository = task["repository"]
+    if operation in {"IMPLEMENTATION", "REPAIR"}:
+        return {
+            "COMPLETED": {
+                "task_id": _derived_task_id(task_id, "ASSURE"),
+                "operation": "ASSURANCE",
+                "role": ROLE_B,
+                "repository": repository,
+                "candidate_sha": None,
+            }
+        }
+    if operation == "ASSURANCE":
+        candidate_sha = task["candidate_sha"]
+        return {
+            "PASS": {
+                "task_id": _derived_task_id(task_id, "INTEGRATE"),
+                "operation": "PROJECT_INTEGRATION",
+                "role": ROLE_A,
+                "repository": repository,
+                "candidate_sha": candidate_sha,
+            },
+            "FAIL": {
+                "task_id": _derived_task_id(task_id, "REPAIR"),
+                "operation": "REPAIR",
+                "role": ROLE_A,
+                "repository": repository,
+                "candidate_sha": candidate_sha,
+            },
+        }
+    return {}
 
 
 def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) -> None:
@@ -347,6 +388,7 @@ def _materialize_successor(
     *,
     outcome: str,
     now: datetime,
+    result_candidate_sha: str | None = None,
 ) -> str | None:
     template = task.get("successor_by_outcome", {}).get(outcome)
     if template is None:
@@ -357,6 +399,10 @@ def _materialize_successor(
         raise MinimalCoreError("successor task_id is required")
     if any(item.get("task_id") == successor_id for item in queue["tasks"]):
         raise MinimalCoreError(f"successor task already exists: {successor_id}")
+    if task["operation"] in {"IMPLEMENTATION", "REPAIR"} and outcome == "COMPLETED":
+        if not _valid_sha(result_candidate_sha):
+            raise MinimalCoreError("A1 completed result requires exact resulting candidate SHA")
+        successor["candidate_sha"] = result_candidate_sha
     successor.update({
         "lifecycle_model": PROTOCOL_ID,
         "status": STATUS_QUEUED,
@@ -371,7 +417,7 @@ def _materialize_successor(
     })
     successor.setdefault("priority", task.get("priority", 0))
     successor.setdefault("created_at", _ts(now))
-    successor.setdefault("successor_by_outcome", {})
+    successor["successor_by_outcome"] = _default_successors(successor)
     _assert_task_shape(successor)
     queue["tasks"].append(successor)
     return successor_id
@@ -404,10 +450,19 @@ def finalize_result(
     outcome = result.get("outcome")
     if not isinstance(outcome, str) or outcome not in OUTCOMES_BY_OPERATION[task["operation"]]:
         raise MinimalCoreError("result outcome is invalid for operation")
+    result_candidate_sha = result.get("candidate_sha")
+    a1_result_binds_successor = (
+        task["operation"] in {"IMPLEMENTATION", "REPAIR"}
+        and outcome == "COMPLETED"
+        and task.get("successor_by_outcome", {}).get("COMPLETED") is not None
+    )
     if task["role"] == ROLE_B:
-        if not _valid_sha(result.get("candidate_sha")) or result.get("candidate_sha") != task["candidate_sha"]:
+        if not _valid_sha(result_candidate_sha) or result_candidate_sha != task["candidate_sha"]:
             raise MinimalCoreError("B1 result candidate mismatch")
-    elif task.get("candidate_sha") is not None and result.get("candidate_sha") not in {None, task.get("candidate_sha")}:
+    elif a1_result_binds_successor:
+        if not _valid_sha(result_candidate_sha):
+            raise MinimalCoreError("A1 completed result requires exact resulting candidate SHA")
+    elif task.get("candidate_sha") is not None and result_candidate_sha not in {None, task.get("candidate_sha")}:
         raise MinimalCoreError("A1 result candidate mismatch")
 
     if task.get("status") == STATUS_TERMINAL:
@@ -431,6 +486,8 @@ def finalize_result(
             successor = _task(current_queue, successor_id)
             if successor.get("predecessor_task_id") != task_id:
                 raise MinimalCoreError("terminal successor replay mismatch")
+            if a1_result_binds_successor and successor.get("candidate_sha") != result_candidate_sha:
+                raise MinimalCoreError("terminal A1 successor candidate replay mismatch")
         return current_queue, current_runs, successor_id
 
     if task.get("status") != STATUS_EXECUTING:
@@ -451,7 +508,13 @@ def finalize_result(
         "last_execution_error": None,
         "updated_at": stamp,
     })
-    successor_id = _materialize_successor(current_queue, task, outcome=outcome, now=now)
+    successor_id = _materialize_successor(
+        current_queue,
+        task,
+        outcome=outcome,
+        now=now,
+        result_candidate_sha=result_candidate_sha if isinstance(result_candidate_sha, str) else None,
+    )
     _close_run(current_runs, run_id, outcome, stamp)
     validate(current_queue, current_runs)
     return current_queue, current_runs, successor_id
