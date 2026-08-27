@@ -98,6 +98,11 @@ def _persist(token: str, state_dir: Path, observed: tuple[str, str], message: st
 
 
 def _with_cas(token: str, mutate, *, message: str):
+    """Apply one queue/runs mutation and return an authoritative readback snapshot.
+
+    The readback is loaded before the temporary checkout is destroyed so callers
+    never depend on a path outside the TemporaryDirectory lifetime.
+    """
     with tempfile.TemporaryDirectory(prefix="control-minimal-core-") as temp:
         state_dir = Path(temp) / "state"
         _init_state(state_dir)
@@ -107,7 +112,8 @@ def _with_cas(token: str, mutate, *, message: str):
             value = mutate(state_dir)
             if _persist(token, state_dir, observed, message):
                 integration._reset_state(token, state_dir)
-                return value, state_dir, attempt
+                readback_queue = _load(state_dir / QUEUE_REL)
+                return value, readback_queue, attempt
         raise RuntimeError("CONTROL_MINIMAL_CORE_CAS_CONFLICT")
 
 
@@ -163,14 +169,13 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
         })
         return None
 
-    _, state_dir, attempt = _with_cas(token, mutate, message=f"runtime: claim Minimal Core {worker_instance}")
+    _, readback_queue, attempt = _with_cas(token, mutate, message=f"runtime: claim Minimal Core {worker_instance}")
     if captured.get("idle") == "true":
         print("CONTROL_MINIMAL_CORE_CLAIM=NO_ELIGIBLE_WORK")
         return 0
 
-    queue = _load(state_dir / QUEUE_REL)
     core.assert_current_claim(
-        queue,
+        readback_queue,
         task_id=captured["task_id"],
         worker_instance=worker_instance,
         run_id=captured["run_id"],
@@ -213,8 +218,8 @@ def command_record(token: str, task_id: str) -> int:
         captured["successor_id"] = successor_id
         return None
 
-    _, state_dir, attempt = _with_cas(token, mutate, message=f"runtime: finalize Minimal Core {task_id}")
-    projection = core.explain_task(_load(state_dir / QUEUE_REL), task_id)
+    _, readback_queue, attempt = _with_cas(token, mutate, message=f"runtime: finalize Minimal Core {task_id}")
+    projection = core.explain_task(readback_queue, task_id)
     print("CONTROL_MINIMAL_CORE_RECORD=TERMINAL")
     print(f"CONTROL_MINIMAL_CORE_TASK_ID={task_id}")
     print(f"CONTROL_MINIMAL_CORE_OUTCOME={captured['outcome']}")
