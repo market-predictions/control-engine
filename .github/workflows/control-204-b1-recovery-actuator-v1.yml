@@ -1,0 +1,282 @@
+name: Control 204 B1 Recovery Actuator V1
+
+# Temporary deterministic recovery actuator for CONTROL #204 only.
+# It performs no semantic inference and never modifies PR #78 or main.
+# Semantic review remains native Codex GitHub review; this workflow only
+# claims/finalizes the existing canonical B1 lifecycle using pinned code.
+
+on:
+  push:
+    branches:
+      - control/204-b1-recovery-actuator-v1
+    paths:
+      - .control/control-204-b1-recovery-command.json
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-204-b1-recovery-actuator-v1
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+  CONTROL_RUNTIME_REF: control-runtime-state
+  CONTROL_PRIVATE_B_CODE_REF: runtime/public-b-v2-code-r3
+  CONTROL_PRIVATE_B_CODE_SHA: a55e2a0d791ca55450ec135415e4aa9a48be361d
+  CONTROL_TASK_ID: CONTROL-204-PR78-ASSURE-H4
+  CONTROL_HANDOVER_ID: CONTROL-204-PR78-H4
+  CONTROL_CANDIDATE_SHA: 9aecab290d92a43e5a176aef741380f630b8275a
+  CONTROL_TARGET_REPOSITORY: market-predictions/control-engine
+  CONTROL_TARGET_PR: '78'
+  CONTROL_TRUSTED_ACTUATOR_LOGIN: market-predictions
+
+jobs:
+  actuator:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/control/204-b1-recovery-actuator-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated actuator branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate bounded command
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=.control/control-204-b1-recovery-command.json
+          jq -e '
+            .version == "1.0" and
+            (.action == "claim" or .action == "complete") and
+            .task_id == env.CONTROL_TASK_ID and
+            .candidate_sha == env.CONTROL_CANDIDATE_SHA and
+            (.nonce | type == "string") and (.nonce | length > 0)
+          ' "$file" >/dev/null
+          action="$(jq -r '.action' "$file")"
+          printf 'action=%s\n' "$action" >> "$GITHUB_OUTPUT"
+          if [ "$action" = complete ]; then
+            jq -e '
+              (.active_run_id | type == "string") and (.active_run_id | test("^run-[0-9a-f-]+$")) and
+              (.request_comment_id | type == "number") and .request_comment_id > 0
+            ' "$file" >/dev/null
+          fi
+
+      - name: Preflight GitHub App identity and installation
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create short-lived Control token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: 'write'
+          permission-issues: 'read'
+          permission-pull-requests: 'read'
+
+      - name: Bind token and setup Python
+        shell: bash
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          [ -n "$TOKEN" ]
+          echo "::add-mask::$TOKEN"
+          printf 'CONTROL_TOKEN=%s\n' "$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Fetch pinned private B lifecycle code
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          b_code="$RUNNER_TEMP/control-b-code"
+          git clone --quiet --single-branch --branch "$CONTROL_PRIVATE_B_CODE_REF" "$url" "$b_code"
+          [ "$(git -C "$b_code" rev-parse HEAD)" = "$CONTROL_PRIVATE_B_CODE_SHA" ]
+          printf 'CONTROL_B_CODE_DIR=%s\n' "$b_code" >> "$GITHUB_ENV"
+
+      - name: Claim exact preferred H4 B1 task
+        if: steps.command.outputs.action == 'claim'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          state="$RUNNER_TEMP/control-state-claim"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+
+          selection="$RUNNER_TEMP/selection.json"
+          python control_engine/scheduled_worker_b.py select-b1 \
+            --code-dir "$CONTROL_B_CODE_DIR" \
+            --queue "$state/control/DISPATCH_QUEUE.json" \
+            --output "$selection" >/dev/null
+          python - "$selection" <<'PY'
+          import json, os, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          if value.get('selected') is not True:
+              raise SystemExit('no B1 task is currently selectable')
+          if value.get('task_id') != os.environ['CONTROL_TASK_ID']:
+              raise SystemExit('CONTROL #204 H4 is not deterministic preferred B1 task')
+          if value.get('candidate_sha') != os.environ['CONTROL_CANDIDATE_SHA']:
+              raise SystemExit('CONTROL #204 H4 candidate binding mismatch')
+          PY
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+            python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" claim \
+              --runtime-root "$state" \
+              --runtime-ref "$CONTROL_RUNTIME_REF" \
+              --task-id "$CONTROL_TASK_ID" \
+              --worker-instance B1 \
+              --backend github-actions/control-204-b1-recovery-actuator-v1 \
+              --lease-seconds 5400 \
+              > "$RUNNER_TEMP/claim.json"
+          echo 'CONTROL_204_B1_RECOVERY=CLAIM_PERSISTED'
+
+      - name: Classify exact trusted Codex review
+        if: steps.command.outputs.action == 'complete'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          command=.control/control-204-b1-recovery-command.json
+          active_run_id="$(jq -r '.active_run_id' "$command")"
+          request_comment_id="$(jq -r '.request_comment_id' "$command")"
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          state="$RUNNER_TEMP/control-state-complete-read"
+          git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+
+          GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" python - "$state/control/DISPATCH_QUEUE.json" "$active_run_id" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          from tools.control_parallel_execution_v1 import assert_claim_current
+          from tools.control_queue_v1 import ROLE_B
+          queue=json.load(open(sys.argv[1], encoding='utf-8'))
+          run_id=sys.argv[2]
+          task_id=os.environ['CONTROL_TASK_ID']
+          candidate=os.environ['CONTROL_CANDIDATE_SHA']
+          rows=[t for t in queue['tasks'] if t.get('task_id')==task_id]
+          if len(rows)!=1 or rows[0].get('candidate_sha')!=candidate or rows[0].get('handover_id')!=os.environ['CONTROL_HANDOVER_ID']:
+              raise SystemExit('CONTROL #204 H4 lifecycle identity mismatch')
+          assert_claim_current(queue, task_id=task_id, role=ROLE_B, worker_instance='B1', run_id=run_id, now=datetime.now(timezone.utc))
+          PY
+
+          gh api --paginate "repos/${CONTROL_TARGET_REPOSITORY}/issues/${CONTROL_TARGET_PR}/comments?per_page=100" | jq -s 'add' > "$RUNNER_TEMP/issue-comments.json"
+          gh api --paginate "repos/${CONTROL_TARGET_REPOSITORY}/pulls/${CONTROL_TARGET_PR}/reviews?per_page=100" | jq -s 'add' > "$RUNNER_TEMP/reviews.json"
+          gh api --paginate "repos/${CONTROL_TARGET_REPOSITORY}/pulls/${CONTROL_TARGET_PR}/comments?per_page=100" | jq -s 'add' > "$RUNNER_TEMP/review-comments.json"
+          gh api --paginate "repos/${CONTROL_TARGET_REPOSITORY}/issues/comments/${request_comment_id}/reactions?per_page=100" | jq -s 'add' > "$RUNNER_TEMP/reactions.json"
+          gh api "repos/${CONTROL_TARGET_REPOSITORY}/pulls/${CONTROL_TARGET_PR}" > "$RUNNER_TEMP/pr.json"
+          jq -e --arg sha "$CONTROL_CANDIDATE_SHA" '.state == "open" and .merged == false and .head.sha == $sha' "$RUNNER_TEMP/pr.json" >/dev/null
+
+          python - "$state/control/DISPATCH_QUEUE.json" "$active_run_id" "$request_comment_id" "$RUNNER_TEMP/result.json" <<'PY'
+          import json, os, sys
+          from control_engine.codex_b1_strict import classify_trusted_review_snapshot
+          queue=json.load(open(sys.argv[1], encoding='utf-8'))
+          active_run_id=sys.argv[2]
+          request_comment_id=int(sys.argv[3])
+          result_path=sys.argv[4]
+          task_id=os.environ['CONTROL_TASK_ID']
+          handover_id=os.environ['CONTROL_HANDOVER_ID']
+          candidate=os.environ['CONTROL_CANDIDATE_SHA']
+          task=[t for t in queue['tasks'] if t.get('task_id')==task_id][0]
+          decision=classify_trusted_review_snapshot(
+              task_id=task_id,
+              handover_id=handover_id,
+              candidate_sha=candidate,
+              request_comment_id=request_comment_id,
+              acceptance_criteria=task['acceptance_criteria'],
+              trusted_actuator_login=os.environ['CONTROL_TRUSTED_ACTUATOR_LOGIN'],
+              reviews=json.load(open(os.environ['RUNNER_TEMP']+'/reviews.json', encoding='utf-8')),
+              review_comments=json.load(open(os.environ['RUNNER_TEMP']+'/review-comments.json', encoding='utf-8')),
+              trigger_reactions=json.load(open(os.environ['RUNNER_TEMP']+'/reactions.json', encoding='utf-8')),
+              issue_comments=json.load(open(os.environ['RUNNER_TEMP']+'/issue-comments.json', encoding='utf-8')),
+          )
+          if not decision.complete or decision.verdict not in {'PASS','FAIL','INDETERMINATE'}:
+              raise SystemExit(f'Codex review is not terminal: {decision.status}: {decision.summary}')
+          result={
+              'version':'1.0',
+              'task_id':task_id,
+              'run_id':active_run_id,
+              'role':'governance_release_assurance',
+              'outcome':decision.verdict,
+              'summary':decision.summary,
+              'candidate_sha':candidate,
+              'findings':list(decision.findings),
+              'evidence':[
+                  f'Canonical DEEP request comment {request_comment_id} exactly matches the trusted CONTROL_B1_CODEX_DEEP_REQUEST_V1 envelope.',
+                  f'Native Codex terminal review was deterministically classified {decision.verdict} for exact candidate {candidate}.',
+                  f'Reviewed commit binding: {decision.reviewed_commit or candidate}.',
+              ],
+          }
+          open(result_path,'w',encoding='utf-8').write(json.dumps(result,indent=2)+'\n')
+          PY
+          printf 'ACTIVE_RUN_ID=%s\n' "$active_run_id" >> "$GITHUB_ENV"
+          printf 'REVIEWER_RESULT=%s\n' "$RUNNER_TEMP/result.json" >> "$GITHUB_ENV"
+
+      - name: Complete same exact H4 claim through connected runtime
+        if: steps.command.outputs.action == 'complete'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_PLANE_REPOSITORY}.git"
+          success=false
+          for attempt in 1 2 3; do
+            state="$RUNNER_TEMP/control-state-complete-${attempt}"
+            rm -rf "$state"
+            git clone --quiet --single-branch --branch "$CONTROL_RUNTIME_REF" "$url" "$state"
+            set +e
+            GH_TOKEN="$CONTROL_TOKEN" PYTHONPATH="$CONTROL_B_CODE_DIR" \
+              python "$CONTROL_B_CODE_DIR/tools/control_connected_worker_runtime_v1.py" complete \
+                --runtime-root "$state" \
+                --runtime-ref "$CONTROL_RUNTIME_REF" \
+                --github-repository "$CONTROL_PLANE_REPOSITORY" \
+                --task-id "$CONTROL_TASK_ID" \
+                --worker-instance B1 \
+                --active-run-id "$ACTIVE_RUN_ID" \
+                --result "$REVIEWER_RESULT" \
+                > "$RUNNER_TEMP/complete-${attempt}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then
+              success=true
+              break
+            fi
+            if grep -q 'CONTROL_RUNTIME_CAS_CONFLICT' "$RUNNER_TEMP/complete-${attempt}.log"; then
+              continue
+            fi
+            cat "$RUNNER_TEMP/complete-${attempt}.log"
+            exit 2
+          done
+          [ "$success" = true ]
+          echo 'CONTROL_204_B1_RECOVERY=COMPLETE_PERSISTED'
+
+      - name: Publish bounded recovery liveness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION: ${{ steps.command.outputs.action }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          action="${ACTION:-unknown}"
+          job_status="${JOB_STATUS:-failure}"
+          state=failure
+          [ "$job_status" = success ] && state=success
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="control/204-b1-recovery-actuator" \
+            -f description="CONTROL_204_${action}_${job_status}" >/dev/null
