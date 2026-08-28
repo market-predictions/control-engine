@@ -7,7 +7,7 @@ NOW = datetime(2026, 8, 27, 22, 10, tzinfo=timezone.utc)
 SHA = "a" * 40
 TASK_ID = "ASSURE"
 RUN_ID = "run-invalid-outcome"
-RESULT_REF = f"control/worker-results/{TASK_ID}/{RUN_ID}.json"
+RESULT_REF = f"control/worker-results/{TASK_ID}--{RUN_ID}.json"
 
 
 def test_unhashable_persisted_outcome_requeues_as_execution_failure():
@@ -34,32 +34,13 @@ def test_unhashable_persisted_outcome_requeues_as_execution_failure():
                     "expires_at": "2026-08-27T23:00:00Z",
                 },
                 "result_ref": None,
+                "terminal_run_id": None,
                 "attempt_count": 1,
                 "last_execution_error": None,
                 "successor_by_outcome": {},
                 "principal_manual_relay_count": 0,
                 "created_at": "2026-08-27T21:00:00Z",
                 "updated_at": "2026-08-27T22:00:00Z",
-            }
-        ],
-    }
-    runs = {
-        "version": "1.0",
-        "runs": [
-            {
-                "run_id": RUN_ID,
-                "task_id": TASK_ID,
-                "role": core.ROLE_B,
-                "worker_instance": core.INSTANCE_B1,
-                "backend": "test",
-                "repository": "market-predictions/control-engine",
-                "candidate_sha_or_branch": SHA,
-                "attempt": 1,
-                "started_at": "2026-08-27T22:00:00Z",
-                "heartbeat_at": "2026-08-27T22:00:00Z",
-                "lease_expires_at": "2026-08-27T23:00:00Z",
-                "outcome": "EXECUTING",
-                "finished_at": None,
             }
         ],
     }
@@ -72,9 +53,8 @@ def test_unhashable_persisted_outcome_requeues_as_execution_failure():
         "candidate_sha": SHA,
     }
 
-    queue2, runs2, report = core.reconcile(
+    queue2, report = core.reconcile(
         queue,
-        runs,
         persisted_results={(TASK_ID, RUN_ID): (malformed, RESULT_REF)},
         now=NOW,
     )
@@ -83,5 +63,4 @@ def test_unhashable_persisted_outcome_requeues_as_execution_failure():
     assert task["status"] == core.STATUS_QUEUED
     assert task["last_execution_error"] == "INVALID_PERSISTED_RESULT"
     assert task["outcome"] is None
-    assert runs2["runs"][0]["outcome"] == "INVALID_PERSISTED_RESULT"
     assert report == {"finalized_results": [], "expired_claims": []}
