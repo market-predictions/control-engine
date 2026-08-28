@@ -11,6 +11,24 @@ RESULT_REF = f"control/worker-results/{TASK_ID}--{RUN_ID}.json"
 
 
 def _executing_task(task_id, operation, role, run_id, candidate_sha):
+    successors = {}
+    if operation == "ASSURANCE":
+        successors = {
+            "PASS": {
+                "task_id": f"{task_id}--INTEGRATE",
+                "operation": "PROJECT_INTEGRATION",
+                "role": core.ROLE_A,
+                "repository": "market-predictions/control-engine",
+                "candidate_sha": candidate_sha,
+            },
+            "FAIL": {
+                "task_id": f"{task_id}--REPAIR",
+                "operation": "REPAIR",
+                "role": core.ROLE_A,
+                "repository": "market-predictions/control-engine",
+                "candidate_sha": candidate_sha,
+            },
+        }
     return {
         "lifecycle_model": core.PROTOCOL_ID,
         "task_id": task_id,
@@ -33,7 +51,7 @@ def _executing_task(task_id, operation, role, run_id, candidate_sha):
         "terminal_run_id": None,
         "attempt_count": 1,
         "last_execution_error": None,
-        "successor_by_outcome": {},
+        "successor_by_outcome": successors,
         "principal_manual_relay_count": 0,
         "created_at": "2026-08-27T21:00:00Z",
         "updated_at": "2026-08-27T22:00:00Z",
