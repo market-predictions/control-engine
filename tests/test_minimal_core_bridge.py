@@ -153,6 +153,77 @@ def test_malformed_current_run_result_is_discovered_as_invalid_not_raised(tmp_pa
     assert found[(task_id, run_id)] == (None, ref)
 
 
+def test_record_schema_invalid_object_requeues_current_claim(tmp_path, monkeypatch):
+    task_id = "ASSURE-RECORD"
+    run_id = "run-record-invalid"
+    queue_path = tmp_path / bridge.QUEUE_REL
+    queue_path.parent.mkdir(parents=True)
+    queue = {
+        "version": "1.0",
+        "principal_manual_relay_count": 0,
+        "tasks": [
+            {
+                "lifecycle_model": core.PROTOCOL_ID,
+                "task_id": task_id,
+                "operation": "ASSURANCE",
+                "role": core.ROLE_B,
+                "repository": "market-predictions/control-engine",
+                "priority": 0,
+                "candidate_sha": "a" * 40,
+                "status": core.STATUS_EXECUTING,
+                "outcome": None,
+                "claim": {
+                    "run_id": run_id,
+                    "role": core.ROLE_B,
+                    "worker_instance": core.INSTANCE_B1,
+                    "backend": "test",
+                    "started_at": "2026-08-28T06:00:00Z",
+                    "expires_at": "2099-08-28T07:00:00Z",
+                },
+                "result_ref": None,
+                "terminal_run_id": None,
+                "attempt_count": 1,
+                "last_execution_error": None,
+                "successor_by_outcome": {},
+                "principal_manual_relay_count": 0,
+                "created_at": "2026-08-28T05:00:00Z",
+                "updated_at": "2026-08-28T06:00:00Z",
+            }
+        ],
+    }
+    queue_path.write_text(json.dumps(queue), encoding="utf-8")
+    profile = tmp_path / bridge.LEGACY_B1_PROFILE_REL
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text(json.dumps(_profile(bridge.LEGACY_B1_RETIRED_STATUS)), encoding="utf-8")
+    result_path = tmp_path / bridge._result_ref(task_id, run_id)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "task_id": task_id,
+                "run_id": run_id,
+                "role": core.ROLE_B,
+                "outcome": "NOT_A_VERDICT",
+                "candidate_sha": "a" * 40,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_with_cas(token, mutate, *, message):
+        value = mutate(tmp_path)
+        return value, json.loads(queue_path.read_text(encoding="utf-8")), 1
+
+    monkeypatch.setattr(bridge, "_with_cas", fake_with_cas)
+    assert bridge.command_record("token", task_id) == 0
+    updated = json.loads(queue_path.read_text(encoding="utf-8"))
+    current = updated["tasks"][0]
+    assert current["status"] == core.STATUS_QUEUED
+    assert current["claim"] is None
+    assert current["last_execution_error"] == "INVALID_PERSISTED_RESULT"
+
+
 def test_cas_returns_only_value_from_winning_attempt(monkeypatch):
     attempts = {"mutate": 0, "persist": 0}
 
