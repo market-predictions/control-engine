@@ -459,8 +459,9 @@ def finalize_result(
     elif a1_result_binds_successor:
         if not _valid_sha(result_candidate_sha):
             raise MinimalCoreError("A1 completed result requires exact resulting candidate SHA")
-    elif task.get("candidate_sha") is not None and result_candidate_sha not in {None, task.get("candidate_sha")}:
-        raise MinimalCoreError("A1 result candidate mismatch")
+    elif task.get("candidate_sha") is not None:
+        if result_candidate_sha is not None and result_candidate_sha != task.get("candidate_sha"):
+            raise MinimalCoreError("A1 result candidate mismatch")
 
     if task.get("status") == STATUS_TERMINAL:
         if (
