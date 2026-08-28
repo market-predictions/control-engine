@@ -38,11 +38,10 @@ def test_lifecycle_workflow_runs_preflight_before_ephemeral_token_and_state_muta
     text = WORKFLOW.read_text(encoding="utf-8")
     preflight = text.index("Preflight GitHub App identity and installation")
     token = text.index("Create short-lived private-state token")
-    reconcile = text.index("Reconcile canonical private runtime state")
-    claim = text.index("Persist exact preferred canonical A1 claim")
-    assert preflight < token < reconcile < claim
+    apply_command = text.index("Apply exact Minimal Core lifecycle command")
+    assert preflight < token < apply_command
     assert "steps.app-token.outputs.token" in text
     assert "'scripts/github_app_preflight.sh'" not in text  # push wake is bounded to actuator changes
-    assert "bash -n scripts/github_app_preflight.sh" in text
+    assert "python -m py_compile" in text
     assert "CONTROL_CLOUDFLARE_API_TOKEN" not in text
     assert "CONTROL_CLOUDFLARE_ACCOUNT_ID" not in text
