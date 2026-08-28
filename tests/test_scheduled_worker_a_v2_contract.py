@@ -52,6 +52,7 @@ def test_single_bridge_handles_reconcile_claim_and_record_without_intake_project
     kernel = KERNEL.read_text(encoding="utf-8")
     assert "python scripts/private_minimal_core_apply.py reconcile" in workflow
     assert "python scripts/private_minimal_core_apply.py claim --worker-instance A1" in workflow
+    assert "python scripts/private_minimal_core_apply.py claim --worker-instance A2" in workflow
     assert "python scripts/private_minimal_core_apply.py claim --worker-instance B1" in workflow
     assert "python scripts/private_minimal_core_apply.py record --task-id" in workflow
     assert "control_project_intake_reconcile_v1.py" not in workflow
@@ -64,12 +65,12 @@ def test_single_bridge_handles_reconcile_claim_and_record_without_intake_project
     assert "principal_manual_relay_count" in kernel
 
 
-def test_trusted_actuator_commands_are_exact_and_only_a1_b1_exist() -> None:
+def test_trusted_actuator_commands_are_exact_and_only_a1_a2_b1_exist() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "github.event.comment.user.login == 'market-predictions'" in text
     assert "CONTROL_CORE_CLAIM_V1 A1" in text
+    assert "CONTROL_CORE_CLAIM_V1 A2" in text
     assert "CONTROL_CORE_CLAIM_V1 B1" in text
-    assert "A2" not in text
     assert "A3" not in text
     assert "B2" not in text
     assert "B3" not in text
