@@ -16,10 +16,6 @@ def _queue(task):
     return {"version": "1.0", "principal_manual_relay_count": 0, "tasks": [task]}
 
 
-def _runs():
-    return {"version": "1.0", "runs": []}
-
-
 def _repair_task():
     return {
         "lifecycle_model": core.PROTOCOL_ID,
@@ -33,6 +29,7 @@ def _repair_task():
         "outcome": None,
         "claim": None,
         "result_ref": None,
+        "terminal_run_id": None,
         "attempt_count": 0,
         "last_execution_error": None,
         "successor_by_outcome": {
@@ -73,18 +70,16 @@ def _b_fail(task_id, run_id, candidate_sha):
 
 
 def test_repair_result_binds_fresh_assurance_candidate_and_regenerates_one_step_contract():
-    q1, r1, _ = core.claim(
+    q1, _ = core.claim(
         _queue(_repair_task()),
-        _runs(),
         task_id="CONTROL-204-REPAIR",
         worker_instance=core.INSTANCE_A1,
         backend="test",
         now=NOW,
         run_id="run-repair-1",
     )
-    q2, r2, successor_id = core.finalize_result(
+    q2, successor_id = core.finalize_result(
         q1,
-        r1,
         task_id="CONTROL-204-REPAIR",
         result=_a_result("CONTROL-204-REPAIR", "run-repair-1", NEW_SHA),
         result_ref="control/worker-results/CONTROL-204-REPAIR--run-repair-1.json",
@@ -97,18 +92,16 @@ def test_repair_result_binds_fresh_assurance_candidate_and_regenerates_one_step_
     assert assure["successor_by_outcome"]["FAIL"]["candidate_sha"] == NEW_SHA
     assert "successor_by_outcome" not in assure["successor_by_outcome"]["FAIL"]
 
-    q3, r3, _ = core.claim(
+    q3, _ = core.claim(
         q2,
-        r2,
         task_id=successor_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
         now=NOW + timedelta(minutes=2),
         run_id="run-assure-1",
     )
-    q4, r4, repair2_id = core.finalize_result(
+    q4, repair2_id = core.finalize_result(
         q3,
-        r3,
         task_id=successor_id,
         result=_b_fail(successor_id, "run-assure-1", NEW_SHA),
         result_ref=f"control/worker-results/{successor_id}--run-assure-1.json",
@@ -119,18 +112,16 @@ def test_repair_result_binds_fresh_assurance_candidate_and_regenerates_one_step_
     assert repair2["candidate_sha"] == NEW_SHA
     assert repair2["successor_by_outcome"]["COMPLETED"]["candidate_sha"] is None
 
-    q5, r5, _ = core.claim(
+    q5, _ = core.claim(
         q4,
-        r4,
         task_id=repair2_id,
         worker_instance=core.INSTANCE_A1,
         backend="test",
         now=NOW + timedelta(minutes=4),
         run_id="run-repair-2",
     )
-    q6, _, assure2_id = core.finalize_result(
+    q6, assure2_id = core.finalize_result(
         q5,
-        r5,
         task_id=repair2_id,
         result=_a_result(repair2_id, "run-repair-2", NEWER_SHA),
         result_ref=f"control/worker-results/{repair2_id}--run-repair-2.json",
@@ -143,9 +134,8 @@ def test_repair_result_binds_fresh_assurance_candidate_and_regenerates_one_step_
 
 
 def test_completed_repair_with_successor_requires_exact_result_candidate():
-    q1, r1, _ = core.claim(
+    q1, _ = core.claim(
         _queue(_repair_task()),
-        _runs(),
         task_id="CONTROL-204-REPAIR",
         worker_instance=core.INSTANCE_A1,
         backend="test",
@@ -155,7 +145,6 @@ def test_completed_repair_with_successor_requires_exact_result_candidate():
     with pytest.raises(core.MinimalCoreError, match="requires exact resulting candidate SHA"):
         core.finalize_result(
             q1,
-            r1,
             task_id="CONTROL-204-REPAIR",
             result=_a_result("CONTROL-204-REPAIR", "run-missing-sha", None),
             result_ref="control/worker-results/CONTROL-204-REPAIR--run-missing-sha.json",
