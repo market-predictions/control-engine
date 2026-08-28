@@ -1,6 +1,6 @@
 name: Control Minimal Core lifecycle actuator
 
-# CONTROL #206
+# CONTROL #206 / #207
 # Deterministic lifecycle plumbing only. This workflow never performs semantic
 # implementation, assurance, repair, integration, merge or release work.
 # The existing ChatGPT scheduled role workers are the worker wake surface;
@@ -89,6 +89,9 @@ jobs:
             "CONTROL_CORE_CLAIM_V1 A1"|"CONTROL_CORE_CLAIM_V1 A1 AUTO")
               python scripts/private_minimal_core_apply.py claim --worker-instance A1 --task-id AUTO
               ;;
+            "CONTROL_CORE_CLAIM_V1 A2"|"CONTROL_CORE_CLAIM_V1 A2 AUTO")
+              python scripts/private_minimal_core_apply.py claim --worker-instance A2 --task-id AUTO
+              ;;
             "CONTROL_CORE_CLAIM_V1 B1"|"CONTROL_CORE_CLAIM_V1 B1 AUTO")
               python scripts/private_minimal_core_apply.py claim --worker-instance B1 --task-id AUTO
               ;;
@@ -96,6 +99,11 @@ jobs:
               task_id="${COMMENT_BODY#CONTROL_CORE_CLAIM_V1 A1 }"
               [[ "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]]
               python scripts/private_minimal_core_apply.py claim --worker-instance A1 --task-id "$task_id"
+              ;;
+            CONTROL_CORE_CLAIM_V1\ A2\ *)
+              task_id="${COMMENT_BODY#CONTROL_CORE_CLAIM_V1 A2 }"
+              [[ "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]]
+              python scripts/private_minimal_core_apply.py claim --worker-instance A2 --task-id "$task_id"
               ;;
             CONTROL_CORE_CLAIM_V1\ B1\ *)
               task_id="${COMMENT_BODY#CONTROL_CORE_CLAIM_V1 B1 }"

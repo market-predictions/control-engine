@@ -11,6 +11,7 @@ VERSION = "1.0"
 ROLE_A = "implementation_operations"
 ROLE_B = "governance_release_assurance"
 INSTANCE_A1 = "A1"
+INSTANCE_A2 = "A2"
 INSTANCE_B1 = "B1"
 
 STATUS_QUEUED = "QUEUED"
@@ -31,7 +32,7 @@ OUTCOMES_BY_OPERATION = {
     "ASSURANCE": {"PASS", "FAIL", "INDETERMINATE"},
 }
 
-WORKER_ROLE = {INSTANCE_A1: ROLE_A, INSTANCE_B1: ROLE_B}
+WORKER_ROLE = {INSTANCE_A1: ROLE_A, INSTANCE_A2: ROLE_A, INSTANCE_B1: ROLE_B}
 
 
 class MinimalCoreError(ValueError):
@@ -271,7 +272,7 @@ def validate(queue: Mapping[str, Any]) -> None:
         raise MinimalCoreError("queue must contain version=1.0 and tasks array")
     _assert_principal_zero(queue)
     ids: set[str] = set()
-    active_roles: set[str] = set()
+    active_worker_instances: set[str] = set()
     active_repositories: set[str] = set()
     active_run_ids: set[str] = set()
     terminal_run_ids: set[str] = set()
@@ -299,19 +300,20 @@ def validate(queue: Mapping[str, Any]) -> None:
         role = task["role"]
         repository = task["repository"]
         claim = task["claim"]
+        worker_instance = claim.get("worker_instance")
         run_id = claim.get("run_id")
-        if role in active_roles:
-            raise MinimalCoreError(f"role capacity exceeded: {role}")
+        if worker_instance in active_worker_instances:
+            raise MinimalCoreError(f"worker capacity exceeded: {worker_instance}")
         if repository in active_repositories:
             raise MinimalCoreError(f"repository exclusivity exceeded: {repository}")
         if not isinstance(run_id, str) or not run_id or run_id in active_run_ids or run_id in terminal_run_ids:
             raise MinimalCoreError("invalid or duplicate active run id")
-        if claim.get("role") != role or WORKER_ROLE.get(claim.get("worker_instance")) != role:
+        if claim.get("role") != role or WORKER_ROLE.get(worker_instance) != role:
             raise MinimalCoreError("claim role/worker mismatch")
         started = _parse_ts(claim.get("started_at"))
         if _parse_ts(claim.get("expires_at")) <= started:
             raise MinimalCoreError("claim expiry must be after start")
-        active_roles.add(role)
+        active_worker_instances.add(worker_instance)
         active_repositories.add(repository)
         active_run_ids.add(run_id)
 
@@ -333,7 +335,17 @@ def select_task(queue: Mapping[str, Any], role: str) -> dict[str, Any] | None:
     validate(queue)
     if role not in {ROLE_A, ROLE_B}:
         raise MinimalCoreError("unsupported role")
-    candidates = [task for task in queue["tasks"] if _eligible(task, role)]
+    active_repositories = {
+        task["repository"]
+        for task in queue["tasks"]
+        if task.get("lifecycle_model") == PROTOCOL_ID
+        and task.get("status") == STATUS_EXECUTING
+    }
+    candidates = [
+        task
+        for task in queue["tasks"]
+        if _eligible(task, role) and task["repository"] not in active_repositories
+    ]
     if not candidates:
         return None
     candidates.sort(key=lambda task: (task.get("priority", 0), task.get("created_at", ""), task["task_id"]))
@@ -358,6 +370,13 @@ def claim(
     role = WORKER_ROLE.get(worker_instance)
     if role is None:
         raise MinimalCoreError("unsupported worker instance")
+    if any(
+        item.get("lifecycle_model") == PROTOCOL_ID
+        and item.get("status") == STATUS_EXECUTING
+        and (item.get("claim") or {}).get("worker_instance") == worker_instance
+        for item in current_queue["tasks"]
+    ):
+        raise MinimalCoreError(f"worker capacity exceeded: {worker_instance}")
     task = _task(current_queue, task_id)
     _assert_principal_zero(current_queue, task)
     if not _eligible(task, role):

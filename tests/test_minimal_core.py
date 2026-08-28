@@ -414,7 +414,7 @@ def test_blocked_a1_work_cannot_create_successor_authority():
         core.validate(queue(invalid))
 
 
-def test_role_capacity_is_fail_closed_from_queue_alone():
+def test_worker_capacity_is_fail_closed_from_queue_alone():
     q1, _ = core.claim(
         queue(
             task("A", "PROJECT_INTEGRATION", core.ROLE_A, repository="repo-a"),
@@ -426,7 +426,7 @@ def test_role_capacity_is_fail_closed_from_queue_alone():
         now=NOW,
         run_id="run-a",
     )
-    with pytest.raises(core.MinimalCoreError, match="role capacity"):
+    with pytest.raises(core.MinimalCoreError, match="worker capacity"):
         core.claim(
             q1,
             task_id="B",

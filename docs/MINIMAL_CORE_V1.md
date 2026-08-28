@@ -41,7 +41,7 @@ not queue + runs + intake + handover + completion + retry lineage.
 
 ## Worker wake topology
 
-Control reuses the existing recurring ChatGPT A1 and B1 role workers as the single semantic worker-scheduler family. Scheduler state has no governance authority.
+Control uses the recurring ChatGPT A1, A2 and B1 workers as one semantic worker-scheduler family. A1 and A2 are two worker instances of the same `implementation_operations` role; B1 remains the sole `governance_release_assurance` worker. Scheduler state has no governance authority.
 
 A role-worker invocation calls the deterministic Minimal Core actuator for its own role. The actuator reconciles expired/current results, selects the preferred eligible task, persists exactly one bounded claim in the queue, then rereads that queue. Semantic work starts only after the exact claim is `START_PROVEN`.
 
@@ -51,13 +51,13 @@ A role-worker invocation calls the deterministic Minimal Core actuator for its o
 
 1. One canonical queue is active authority.
 2. One task has one immutable operation and role.
-3. A1/B1 share one bounded claim mechanism with role capacity 1 and repository exclusivity.
+3. A1, A2 and B1 share one bounded claim mechanism. Each worker instance may hold at most one active claim, and repository exclusivity applies across all active Minimal Core work.
 4. Current ownership exists only in the task claim.
 5. One immutable result belongs to one exact task/run.
 6. Terminalization clears the claim, stores `terminal_run_id`, and creates at most one direct successor in the same queue mutation.
 7. Infrastructure failure is not semantic state; it requeues the same task.
 8. Time expires authority. An expired run cannot terminalize PASS/FAIL/INDETERMINATE or create successor authority.
-9. A1 cannot assure; B1 cannot implement, repair, integrate, merge or release.
+9. A1/A2 cannot assure; B1 cannot implement, repair, integrate, merge or release.
 10. Candidate-bound operations and B1 results use an exact 40-character candidate SHA.
 11. `principal_manual_relay_count` must exist and be exact integer `0`.
 12. A direct successor ID must be free before the predecessor can be claimed.
@@ -75,14 +75,14 @@ Operation-to-role mapping:
 
 | operation | role |
 | --- | --- |
-| `IMPLEMENTATION` | A1 / `implementation_operations` |
-| `REPAIR` | A1 / `implementation_operations` |
-| `PROJECT_INTEGRATION` | A1 / `implementation_operations` |
+| `IMPLEMENTATION` | A1/A2 / `implementation_operations` |
+| `REPAIR` | A1/A2 / `implementation_operations` |
+| `PROJECT_INTEGRATION` | A1/A2 / `implementation_operations` |
 | `ASSURANCE` | B1 / `governance_release_assurance` |
 
 Semantic outcomes:
 
-- A1: `COMPLETED | BLOCKED`
+- A1/A2: `COMPLETED | BLOCKED`
 - B1 assurance: `PASS | FAIL | INDETERMINATE`
 
 Infrastructure diagnostics such as `EXECUTOR_UNAVAILABLE`, `TIMEOUT`, `NETWORK_ERROR`, `LEASE_EXPIRED` and `INVALID_PERSISTED_RESULT` are never semantic outcomes.
@@ -100,7 +100,7 @@ Fail-closed transitions:
 - ASSURANCE `INDETERMINATE` -> none
 - PROJECT_INTEGRATION -> none
 
-For IMPLEMENTATION/REPAIR completion, the validated A1 result supplies the exact resulting candidate SHA. The fresh ASSURANCE successor is bound to that SHA. When a successor is materialized, the kernel deterministically gives it only its own immediate transition contract.
+For IMPLEMENTATION/REPAIR completion, the validated A1/A2 result supplies the exact resulting candidate SHA. The fresh ASSURANCE successor is bound to that SHA. When a successor is materialized, the kernel deterministically gives it only its own immediate transition contract.
 
 This supports repeated:
 
@@ -120,7 +120,7 @@ Each role-worker wake performs:
 4. finalize a valid exact result idempotently, or requeue invalid current-run output as `INVALID_PERSISTED_RESULT`;
 5. select the preferred eligible task for the role;
 6. reject a claim if its direct successor ID is already occupied;
-7. claim with role-capacity/repository-exclusivity checks;
+7. claim with worker-instance-capacity/repository-exclusivity checks;
 8. authoritative queue reread proves `START_PROVEN`.
 
 A result discovered after lease expiry cannot recover semantic authority. Retrying work is safer than allowing an expired owner to create a verdict.
@@ -137,7 +137,7 @@ Cutover is bounded:
 2. change the existing legacy assurance profile from `ACTIVE` to explicit `RETIRED`;
 3. reread and validate that exact retirement state before any Minimal Core mutation;
 4. verify the legacy B1 scheduler idles via its existing non-ACTIVE gate;
-5. enable exactly the existing recurring ChatGPT A1 and B1 role-worker tasks;
+5. enable exactly the recurring ChatGPT A1, A2 and B1 worker tasks;
 6. materialize current required work as Minimal Core tasks;
 7. prove the live `#204 -> #202 if still needed -> GAP-10` chain without manual lifecycle repair.
 
@@ -147,9 +147,9 @@ The actuator fails closed unless the legacy profile exists and validates exactly
 
 Minimal Core is production-proven only when the live chain demonstrates:
 
-- autonomous A1 and B1 wake/claim through the existing role workers;
+- autonomous A1/A2 and B1 wake/claim through the recurring workers;
 - START_PROVEN from authoritative queue reread;
-- A1 completion creates exactly one exact-candidate assurance successor;
+- A1/A2 completion creates exactly one exact-candidate assurance successor;
 - B1 PASS/FAIL/INDETERMINATE routes exactly as specified;
 - a repair can create a new SHA and re-enter assurance repeatedly;
 - expiry or invalid output requeues the same task without semantic lineage;
