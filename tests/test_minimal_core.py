@@ -19,6 +19,36 @@ def task(
     priority=0,
     successors=None,
 ):
+    if successors is None:
+        if operation == "ASSURANCE":
+            successors = {
+                "PASS": {
+                    "task_id": f"{task_id}--INTEGRATE",
+                    "operation": "PROJECT_INTEGRATION",
+                    "role": core.ROLE_A,
+                    "repository": repository,
+                    "candidate_sha": candidate_sha,
+                },
+                "FAIL": {
+                    "task_id": f"{task_id}--REPAIR",
+                    "operation": "REPAIR",
+                    "role": core.ROLE_A,
+                    "repository": repository,
+                    "candidate_sha": candidate_sha,
+                },
+            }
+        elif operation in {"IMPLEMENTATION", "REPAIR"}:
+            successors = {
+                "COMPLETED": {
+                    "task_id": f"{task_id}--ASSURE",
+                    "operation": "ASSURANCE",
+                    "role": core.ROLE_B,
+                    "repository": repository,
+                    "candidate_sha": None,
+                }
+            }
+        else:
+            successors = {}
     return {
         "lifecycle_model": core.PROTOCOL_ID,
         "task_id": task_id,
@@ -34,7 +64,7 @@ def task(
         "terminal_run_id": None,
         "attempt_count": 0,
         "last_execution_error": None,
-        "successor_by_outcome": successors or {},
+        "successor_by_outcome": successors,
         "principal_manual_relay_count": 0,
         "created_at": "2026-08-27T19:00:00Z",
         "updated_at": "2026-08-27T19:00:00Z",
@@ -91,7 +121,14 @@ def assurance_successor(task_id="CONTROL-204-ASSURE", candidate_sha=SHA):
 
 def test_pass_terminalizes_assurance_and_materializes_one_integration_successor():
     q1, _ = core.claim(
-        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
+        queue(
+            task(
+                "CONTROL-204-ASSURE",
+                "ASSURANCE",
+                core.ROLE_B,
+                successors={"PASS": integration_successor(), "FAIL": repair_successor()},
+            )
+        ),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -290,12 +327,31 @@ def test_candidate_bound_operations_require_concrete_exact_sha(operation):
         core.validate(queue(invalid))
 
 
+def test_assurance_requires_both_routed_successor_reservations():
+    for successors in ({}, {"PASS": integration_successor()}, {"FAIL": repair_successor()}):
+        with pytest.raises(core.MinimalCoreError, match="must reserve PASS and FAIL"):
+            core.validate(queue(task("ASSURE-ROUTES", "ASSURANCE", core.ROLE_B, successors=successors)))
+
+
 @pytest.mark.parametrize(
     ("successors", "message"),
     [
-        ({"INDETERMINATE": integration_successor()}, "INDETERMINATE assurance"),
-        ({"PASS": repair_successor()}, "invalid authority"),
-        ({"FAIL": integration_successor()}, "invalid authority"),
+        (
+            {
+                "PASS": integration_successor(),
+                "FAIL": repair_successor(),
+                "INDETERMINATE": integration_successor("BAD-INDETERMINATE"),
+            },
+            "must reserve PASS and FAIL",
+        ),
+        (
+            {"PASS": repair_successor(), "FAIL": repair_successor("VALID-FAIL")},
+            "invalid authority",
+        ),
+        (
+            {"PASS": integration_successor(), "FAIL": integration_successor("BAD-FAIL")},
+            "invalid authority",
+        ),
     ],
 )
 def test_assurance_successor_routing_is_fail_closed(successors, message):
@@ -403,7 +459,10 @@ def test_duplicate_successor_identity_fails_before_claim():
         "ASSURE",
         "ASSURANCE",
         core.ROLE_B,
-        successors={"PASS": integration_successor("EXISTING")},
+        successors={
+            "PASS": integration_successor("EXISTING"),
+            "FAIL": repair_successor("ASSURE-FAIL"),
+        },
     )
     existing = task("EXISTING", "PROJECT_INTEGRATION", core.ROLE_A)
     with pytest.raises(core.MinimalCoreError, match="successor task already exists"):
@@ -431,7 +490,14 @@ def test_duplicate_successor_reservation_fails_before_claim():
                 "role": core.ROLE_A,
                 "repository": "repo-a",
                 "candidate_sha": SHA,
-            }
+            },
+            "FAIL": {
+                "task_id": "ASSURE-A-FAIL",
+                "operation": "REPAIR",
+                "role": core.ROLE_A,
+                "repository": "repo-a",
+                "candidate_sha": SHA,
+            },
         },
     )
     second = task(
@@ -447,7 +513,14 @@ def test_duplicate_successor_reservation_fails_before_claim():
                 "role": core.ROLE_A,
                 "repository": "repo-b",
                 "candidate_sha": SHA,
-            }
+            },
+            "FAIL": {
+                "task_id": "ASSURE-B-FAIL",
+                "operation": "REPAIR",
+                "role": core.ROLE_A,
+                "repository": "repo-b",
+                "candidate_sha": SHA,
+            },
         },
     )
     with pytest.raises(core.MinimalCoreError, match="reserved by another task"):
@@ -463,7 +536,14 @@ def test_duplicate_successor_reservation_fails_before_claim():
 
 def test_exact_terminal_result_replay_is_idempotent_without_run_projection():
     q1, _ = core.claim(
-        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
+        queue(
+            task(
+                "CONTROL-204-ASSURE",
+                "ASSURANCE",
+                core.ROLE_B,
+                successors={"PASS": integration_successor(), "FAIL": repair_successor()},
+            )
+        ),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -493,7 +573,14 @@ def test_exact_terminal_result_replay_is_idempotent_without_run_projection():
 
 def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
     q1, _ = core.claim(
-        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
+        queue(
+            task(
+                "CONTROL-204-ASSURE",
+                "ASSURANCE",
+                core.ROLE_B,
+                successors={"PASS": integration_successor(), "FAIL": repair_successor()},
+            )
+        ),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
