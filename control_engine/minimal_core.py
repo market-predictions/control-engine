@@ -127,6 +127,7 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
     successors = task.get("successor_by_outcome", {})
     if not isinstance(successors, dict):
         raise MinimalCoreError("successor_by_outcome must be an object")
+    successor_ids: set[str] = set()
     for outcome, successor in successors.items():
         if outcome not in OUTCOMES_BY_OPERATION[operation] or not isinstance(successor, dict):
             raise MinimalCoreError("invalid successor template")
@@ -135,6 +136,9 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
             raise MinimalCoreError("successor task_id is required")
         if successor_id == task["task_id"]:
             raise MinimalCoreError("task cannot succeed itself")
+        if successor_id in successor_ids:
+            raise MinimalCoreError("direct successor task_id may be reserved only once per task")
+        successor_ids.add(successor_id)
 
     if operation == "PROJECT_INTEGRATION" and successors:
         raise MinimalCoreError("project integration may not create successor authority")
@@ -169,10 +173,22 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
 
 
 def _assert_direct_successor_ids_available(queue: Mapping[str, Any], task: Mapping[str, Any]) -> None:
+    task_id = task["task_id"]
     for successor in task.get("successor_by_outcome", {}).values():
         successor_id = successor["task_id"]
         if any(item.get("task_id") == successor_id for item in queue.get("tasks", [])):
             raise MinimalCoreError(f"successor task already exists: {successor_id}")
+        for other in queue.get("tasks", []):
+            if other.get("task_id") == task_id or other.get("status") == STATUS_TERMINAL:
+                continue
+            other_successors = other.get("successor_by_outcome")
+            if not isinstance(other_successors, Mapping):
+                continue
+            if any(
+                isinstance(other_successor, Mapping) and other_successor.get("task_id") == successor_id
+                for other_successor in other_successors.values()
+            ):
+                raise MinimalCoreError(f"successor task_id is reserved by another task: {successor_id}")
 
 
 def _derived_task_id(task_id: str, suffix: str) -> str:
