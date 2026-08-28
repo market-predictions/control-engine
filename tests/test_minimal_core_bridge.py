@@ -69,6 +69,8 @@ def _write_record_fixture(tmp_path, *, expires_at, outcome):
     run_id = "run-record"
     queue_path = tmp_path / bridge.QUEUE_REL
     queue_path.parent.mkdir(parents=True)
+    candidate_sha = "a" * 40
+    repository = "market-predictions/control-engine"
     queue = {
         "version": "1.0",
         "principal_manual_relay_count": 0,
@@ -78,9 +80,9 @@ def _write_record_fixture(tmp_path, *, expires_at, outcome):
                 "task_id": task_id,
                 "operation": "ASSURANCE",
                 "role": core.ROLE_B,
-                "repository": "market-predictions/control-engine",
+                "repository": repository,
                 "priority": 0,
-                "candidate_sha": "a" * 40,
+                "candidate_sha": candidate_sha,
                 "status": core.STATUS_EXECUTING,
                 "outcome": None,
                 "claim": {
@@ -95,7 +97,22 @@ def _write_record_fixture(tmp_path, *, expires_at, outcome):
                 "terminal_run_id": None,
                 "attempt_count": 1,
                 "last_execution_error": None,
-                "successor_by_outcome": {},
+                "successor_by_outcome": {
+                    "PASS": {
+                        "task_id": f"{task_id}--INTEGRATE",
+                        "operation": "PROJECT_INTEGRATION",
+                        "role": core.ROLE_A,
+                        "repository": repository,
+                        "candidate_sha": candidate_sha,
+                    },
+                    "FAIL": {
+                        "task_id": f"{task_id}--REPAIR",
+                        "operation": "REPAIR",
+                        "role": core.ROLE_A,
+                        "repository": repository,
+                        "candidate_sha": candidate_sha,
+                    },
+                },
                 "principal_manual_relay_count": 0,
                 "created_at": "2026-08-28T05:00:00Z",
                 "updated_at": "2026-08-28T06:00:00Z",
@@ -116,7 +133,7 @@ def _write_record_fixture(tmp_path, *, expires_at, outcome):
                 "run_id": run_id,
                 "role": core.ROLE_B,
                 "outcome": outcome,
-                "candidate_sha": "a" * 40,
+                "candidate_sha": candidate_sha,
             }
         ),
         encoding="utf-8",
