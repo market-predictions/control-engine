@@ -339,7 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("reconcile")
 
     claim = sub.add_parser("claim")
-    claim.add_argument("--worker-instance", choices=[core.INSTANCE_A1, core.INSTANCE_B1], required=True)
+    claim.add_argument("--worker-instance", choices=[core.INSTANCE_A1, core.INSTANCE_A2, core.INSTANCE_B1], required=True)
     claim.add_argument("--task-id", default=AUTO_TASK_ID)
 
     record = sub.add_parser("record")
