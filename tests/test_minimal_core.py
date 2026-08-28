@@ -31,6 +31,7 @@ def task(
         "outcome": None,
         "claim": None,
         "result_ref": None,
+        "terminal_run_id": None,
         "attempt_count": 0,
         "last_execution_error": None,
         "successor_by_outcome": successors or {},
@@ -42,10 +43,6 @@ def task(
 
 def queue(*tasks):
     return {"version": "1.0", "principal_manual_relay_count": 0, "tasks": list(tasks)}
-
-
-def runs():
-    return {"version": "1.0", "runs": []}
 
 
 def b_result(task_id, run_id, outcome, candidate_sha=SHA):
@@ -93,46 +90,39 @@ def assurance_successor(task_id="CONTROL-204-ASSURE", candidate_sha=SHA):
 
 
 def test_pass_terminalizes_assurance_and_materializes_one_integration_successor():
-    successor = {"PASS": integration_successor()}
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors=successor))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
         now=NOW,
         run_id="run-204",
     )
-    q2, r2, successor_id = core.finalize_result(
+    q2, successor_id = core.finalize_result(
         q1,
-        r1,
         task_id="CONTROL-204-ASSURE",
         result=b_result("CONTROL-204-ASSURE", "run-204", "PASS"),
         result_ref="control/worker-results/CONTROL-204-ASSURE--run-204.json",
         now=NOW + timedelta(minutes=1),
     )
     assert successor_id == "CONTROL-204-INTEGRATE"
-    assert core.explain_task(q2, "CONTROL-204-ASSURE")["status"] == core.STATUS_TERMINAL
-    assert core.explain_task(q2, "CONTROL-204-INTEGRATE")["status"] == core.STATUS_QUEUED
-    assert core.explain_task(q2, "CONTROL-204-INTEGRATE")["operation"] == "PROJECT_INTEGRATION"
-    assert [run["outcome"] for run in r2["runs"]] == ["PASS"]
+    terminal = core.explain_task(q2, "CONTROL-204-ASSURE")
+    assert terminal["status"] == core.STATUS_TERMINAL
+    assert terminal["run_id"] == "run-204"
+    assert core.explain_task(q2, successor_id)["operation"] == "PROJECT_INTEGRATION"
 
 
 def test_execution_failure_requeues_same_task_without_successor():
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B)),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
         now=NOW,
         run_id="run-fail",
     )
-    q2, r2 = core.release_execution_failure(
+    q2 = core.release_execution_failure(
         q1,
-        r1,
         task_id="CONTROL-204-ASSURE",
         run_id="run-fail",
         code="EXECUTOR_UNAVAILABLE",
@@ -141,17 +131,15 @@ def test_execution_failure_requeues_same_task_without_successor():
     current = core.explain_task(q2, "CONTROL-204-ASSURE")
     assert current["status"] == core.STATUS_QUEUED
     assert current["outcome"] is None
+    assert current["run_id"] is None
     assert current["last_execution_error"] == "EXECUTOR_UNAVAILABLE"
     assert len(q2["tasks"]) == 1
-    assert r2["runs"][0]["outcome"] == "EXECUTOR_UNAVAILABLE"
 
 
 def test_expired_lease_wins_over_persisted_result():
     task_id = "CONTROL-204-ASSURE"
-    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task(task_id, "ASSURANCE", core.ROLE_B)),
         task_id=task_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -159,12 +147,9 @@ def test_expired_lease_wins_over_persisted_result():
         lease_seconds=10,
         run_id="run-late",
     )
-    result = b_result(task_id, "run-late", "PASS")
-    ref = "control/worker-results/CONTROL-204-ASSURE--run-late.json"
-    q2, r2, report = core.reconcile(
+    q2, report = core.reconcile(
         q1,
-        r1,
-        persisted_results={(task_id, "run-late"): (result, ref)},
+        persisted_results={(task_id, "run-late"): (b_result(task_id, "run-late", "PASS"), "result.json")},
         now=NOW + timedelta(seconds=20),
     )
     assert report == {"finalized_results": [], "expired_claims": [task_id]}
@@ -173,15 +158,12 @@ def test_expired_lease_wins_over_persisted_result():
     assert current["outcome"] is None
     assert current["result_ref"] is None
     assert current["last_execution_error"] == "LEASE_EXPIRED"
-    assert r2["runs"][0]["outcome"] == "LEASE_EXPIRED"
 
 
 def test_current_lease_persisted_result_finalizes():
     task_id = "CONTROL-204-ASSURE"
-    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task(task_id, "ASSURANCE", core.ROLE_B)),
         task_id=task_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -189,25 +171,26 @@ def test_current_lease_persisted_result_finalizes():
         lease_seconds=60,
         run_id="run-current",
     )
-    result = b_result(task_id, "run-current", "INDETERMINATE")
-    ref = "control/worker-results/CONTROL-204-ASSURE--run-current.json"
-    q2, r2, report = core.reconcile(
+    q2, report = core.reconcile(
         q1,
-        r1,
-        persisted_results={(task_id, "run-current"): (result, ref)},
+        persisted_results={
+            (task_id, "run-current"): (
+                b_result(task_id, "run-current", "INDETERMINATE"),
+                "control/worker-results/CONTROL-204-ASSURE--run-current.json",
+            )
+        },
         now=NOW + timedelta(seconds=20),
     )
     assert report == {"finalized_results": [task_id], "expired_claims": []}
-    assert core.explain_task(q2, task_id)["outcome"] == "INDETERMINATE"
-    assert r2["runs"][0]["outcome"] == "INDETERMINATE"
+    terminal = core.explain_task(q2, task_id)
+    assert terminal["outcome"] == "INDETERMINATE"
+    assert terminal["run_id"] == "run-current"
 
 
 def test_invalid_current_run_result_is_execution_failure_not_semantic_verdict():
     task_id = "CONTROL-204-ASSURE"
-    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task(task_id, "ASSURANCE", core.ROLE_B)),
         task_id=task_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -215,11 +198,9 @@ def test_invalid_current_run_result_is_execution_failure_not_semantic_verdict():
         lease_seconds=60,
         run_id="run-invalid",
     )
-    ref = "control/worker-results/CONTROL-204-ASSURE--run-invalid.json"
-    q2, r2, report = core.reconcile(
+    q2, report = core.reconcile(
         q1,
-        r1,
-        persisted_results={(task_id, "run-invalid"): (None, ref)},
+        persisted_results={(task_id, "run-invalid"): (None, "invalid.json")},
         now=NOW + timedelta(seconds=10),
     )
     assert report == {"finalized_results": [], "expired_claims": []}
@@ -227,14 +208,11 @@ def test_invalid_current_run_result_is_execution_failure_not_semantic_verdict():
     assert current["status"] == core.STATUS_QUEUED
     assert current["outcome"] is None
     assert current["last_execution_error"] == "INVALID_PERSISTED_RESULT"
-    assert r2["runs"][0]["outcome"] == "INVALID_PERSISTED_RESULT"
 
 
 def test_expired_claim_without_result_requeues_same_task():
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B)),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -242,19 +220,14 @@ def test_expired_claim_without_result_requeues_same_task():
         lease_seconds=10,
         run_id="run-expire",
     )
-    q2, r2, report = core.reconcile(q1, r1, now=NOW + timedelta(seconds=20))
+    q2, report = core.reconcile(q1, now=NOW + timedelta(seconds=20))
     assert report == {"finalized_results": [], "expired_claims": ["CONTROL-204-ASSURE"]}
-    current = core.explain_task(q2, "CONTROL-204-ASSURE")
-    assert current["status"] == core.STATUS_QUEUED
-    assert current["last_execution_error"] == "LEASE_EXPIRED"
-    assert r2["runs"][0]["outcome"] == "LEASE_EXPIRED"
+    assert core.explain_task(q2, "CONTROL-204-ASSURE")["last_execution_error"] == "LEASE_EXPIRED"
 
 
 def test_exact_candidate_binding_is_mandatory_for_b1():
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B)),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -264,7 +237,6 @@ def test_exact_candidate_binding_is_mandatory_for_b1():
     with pytest.raises(core.MinimalCoreError, match="candidate mismatch"):
         core.finalize_result(
             q1,
-            r1,
             task_id="CONTROL-204-ASSURE",
             result=b_result("CONTROL-204-ASSURE", "run-bind", "PASS", candidate_sha="b" * 40),
             result_ref="control/worker-results/CONTROL-204-ASSURE--run-bind.json",
@@ -272,8 +244,9 @@ def test_exact_candidate_binding_is_mandatory_for_b1():
         )
 
 
-def test_assurance_task_requires_concrete_exact_candidate_sha():
-    invalid = task("ASSURE", "ASSURANCE", core.ROLE_B, candidate_sha=None)
+@pytest.mark.parametrize("operation", ["ASSURANCE", "REPAIR", "PROJECT_INTEGRATION"])
+def test_candidate_bound_operations_require_concrete_exact_sha(operation):
+    invalid = task("BOUND", operation, core.OPERATION_ROLE[operation], candidate_sha=None)
     with pytest.raises(core.MinimalCoreError, match="requires exact candidate SHA"):
         core.validate(queue(invalid))
 
@@ -287,41 +260,37 @@ def test_assurance_task_requires_concrete_exact_candidate_sha():
     ],
 )
 def test_assurance_successor_routing_is_fail_closed(successors, message):
-    invalid = task("ASSURE", "ASSURANCE", core.ROLE_B, successors=successors)
     with pytest.raises(core.MinimalCoreError, match=message):
-        core.validate(queue(invalid))
+        core.validate(queue(task("ASSURE", "ASSURANCE", core.ROLE_B, successors=successors)))
 
 
 @pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
 def test_a1_completed_work_cannot_route_directly_to_integration(operation):
-    invalid = task(
-        "A1-WORK",
-        operation,
-        core.ROLE_A,
-        successors={"COMPLETED": integration_successor()},
-    )
     with pytest.raises(core.MinimalCoreError, match="must route through assurance"):
-        core.validate(queue(invalid))
+        core.validate(
+            queue(
+                task(
+                    "A1-WORK",
+                    operation,
+                    core.ROLE_A,
+                    successors={"COMPLETED": integration_successor()},
+                )
+            )
+        )
 
 
 @pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
 def test_a1_completed_work_routes_to_result_bound_assurance(operation):
-    prebound = task(
-        "A1-WORK",
-        operation,
-        core.ROLE_A,
-        successors={"COMPLETED": assurance_successor()},
+    core.validate(
+        queue(
+            task(
+                "A1-UNBOUND",
+                operation,
+                core.ROLE_A,
+                successors={"COMPLETED": assurance_successor(candidate_sha=None)},
+            )
+        )
     )
-    core.validate(queue(prebound))
-
-    unbound = task(
-        "A1-UNBOUND",
-        operation,
-        core.ROLE_A,
-        successors={"COMPLETED": assurance_successor(candidate_sha=None)},
-    )
-    core.validate(queue(unbound))
-
     malformed = task(
         "A1-BAD-SHA",
         operation,
@@ -343,12 +312,12 @@ def test_blocked_a1_work_cannot_create_successor_authority():
         core.validate(queue(invalid))
 
 
-def test_role_capacity_is_fail_closed():
-    a = task("A", "IMPLEMENTATION", core.ROLE_A, repository="repo-a")
-    b = task("B", "IMPLEMENTATION", core.ROLE_A, repository="repo-b", priority=1)
-    q1, r1, _ = core.claim(
-        queue(a, b),
-        runs(),
+def test_role_capacity_is_fail_closed_from_queue_alone():
+    q1, _ = core.claim(
+        queue(
+            task("A", "IMPLEMENTATION", core.ROLE_A, repository="repo-a", candidate_sha=None),
+            task("B", "IMPLEMENTATION", core.ROLE_A, repository="repo-b", candidate_sha=None, priority=1),
+        ),
         task_id="A",
         worker_instance=core.INSTANCE_A1,
         backend="test",
@@ -358,7 +327,6 @@ def test_role_capacity_is_fail_closed():
     with pytest.raises(core.MinimalCoreError, match="role capacity"):
         core.claim(
             q1,
-            r1,
             task_id="B",
             worker_instance=core.INSTANCE_A1,
             backend="test",
@@ -368,52 +336,33 @@ def test_role_capacity_is_fail_closed():
         )
 
 
-def test_active_claim_must_match_exact_run_record():
-    q1, r1, _ = core.claim(
-        queue(task("ASSURE", "ASSURANCE", core.ROLE_B)),
-        runs(),
-        task_id="ASSURE",
-        worker_instance=core.INSTANCE_B1,
-        backend="test",
-        now=NOW,
-        run_id="run-bound",
-    )
-    r1["runs"][0]["task_id"] = "OTHER-TASK"
-    with pytest.raises(core.MinimalCoreError, match="active claim/run binding mismatch"):
-        core.validate(q1, r1)
-
-
 def test_operation_role_is_immutable_and_principal_relay_stays_zero():
-    invalid = task("X", "ASSURANCE", core.ROLE_A)
     with pytest.raises(core.MinimalCoreError, match="role does not match immutable operation"):
-        core.validate(queue(invalid))
+        core.validate(queue(task("X", "ASSURANCE", core.ROLE_A)))
 
     for invalid_relay in (1, False, 0.0, "0", None):
-        valid = task("X", "ASSURANCE", core.ROLE_B)
-        q = queue(valid)
+        q = queue(task("X", "ASSURANCE", core.ROLE_B))
         q["principal_manual_relay_count"] = invalid_relay
         with pytest.raises(core.MinimalCoreError, match="integer zero"):
             core.validate(q)
 
-        valid = task("X", "ASSURANCE", core.ROLE_B)
-        valid["principal_manual_relay_count"] = invalid_relay
+        item = task("X", "ASSURANCE", core.ROLE_B)
+        item["principal_manual_relay_count"] = invalid_relay
         with pytest.raises(core.MinimalCoreError, match="integer zero"):
-            core.validate(queue(valid))
-
-    missing = task("X", "ASSURANCE", core.ROLE_B)
-    missing.pop("principal_manual_relay_count")
-    with pytest.raises(core.MinimalCoreError, match="integer zero"):
-        core.validate(queue(missing))
+            core.validate(queue(item))
 
 
 def test_duplicate_successor_identity_fails_before_claim():
-    successor = {"PASS": integration_successor("EXISTING")}
-    assure = task("ASSURE", "ASSURANCE", core.ROLE_B, successors=successor)
+    assure = task(
+        "ASSURE",
+        "ASSURANCE",
+        core.ROLE_B,
+        successors={"PASS": integration_successor("EXISTING")},
+    )
     existing = task("EXISTING", "PROJECT_INTEGRATION", core.ROLE_A)
     with pytest.raises(core.MinimalCoreError, match="successor task already exists"):
         core.claim(
             queue(assure, existing),
-            runs(),
             task_id="ASSURE",
             worker_instance=core.INSTANCE_B1,
             backend="test",
@@ -422,12 +371,9 @@ def test_duplicate_successor_identity_fails_before_claim():
         )
 
 
-def test_exact_terminal_result_replay_is_idempotent():
-    successor = {"PASS": integration_successor()}
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors=successor))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+def test_exact_terminal_result_replay_is_idempotent_without_run_projection():
+    q1, _ = core.claim(
+        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -436,33 +382,28 @@ def test_exact_terminal_result_replay_is_idempotent():
     )
     result = b_result("CONTROL-204-ASSURE", "run-replay", "PASS")
     ref = "control/worker-results/CONTROL-204-ASSURE--run-replay.json"
-    q2, r2, first_successor = core.finalize_result(
+    q2, first_successor = core.finalize_result(
         q1,
-        r1,
         task_id="CONTROL-204-ASSURE",
         result=result,
         result_ref=ref,
         now=NOW + timedelta(minutes=1),
     )
-    q3, r3, replay_successor = core.finalize_result(
+    q3, replay_successor = core.finalize_result(
         q2,
-        r2,
         task_id="CONTROL-204-ASSURE",
         result=result,
         result_ref=ref,
         now=NOW + timedelta(minutes=2),
     )
     assert q3 == q2
-    assert r3 == r2
     assert replay_successor == first_successor == "CONTROL-204-INTEGRATE"
+    assert core.explain_task(q3, "CONTROL-204-ASSURE")["run_id"] == "run-replay"
 
 
 def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
-    successor = {"PASS": integration_successor()}
-    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors=successor))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
         task_id="CONTROL-204-ASSURE",
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -471,9 +412,8 @@ def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
     )
     result = b_result("CONTROL-204-ASSURE", "run-replay-bind", "PASS")
     ref = "control/worker-results/CONTROL-204-ASSURE--run-replay-bind.json"
-    q2, r2, _ = core.finalize_result(
+    q2, _ = core.finalize_result(
         q1,
-        r1,
         task_id="CONTROL-204-ASSURE",
         result=result,
         result_ref=ref,
@@ -483,7 +423,6 @@ def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
     with pytest.raises(core.MinimalCoreError, match="terminal successor candidate replay mismatch"):
         core.finalize_result(
             q2,
-            r2,
             task_id="CONTROL-204-ASSURE",
             result=result,
             result_ref=ref,
@@ -491,12 +430,19 @@ def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
         )
 
 
+def test_terminal_run_identity_is_unique_in_queue():
+    first = task("DONE-1", "ASSURANCE", core.ROLE_B)
+    first.update(status=core.STATUS_TERMINAL, outcome="INDETERMINATE", result_ref="r1.json", terminal_run_id="run-same")
+    second = task("DONE-2", "ASSURANCE", core.ROLE_B)
+    second.update(status=core.STATUS_TERMINAL, outcome="INDETERMINATE", result_ref="r2.json", terminal_run_id="run-same")
+    with pytest.raises(core.MinimalCoreError, match="duplicate Minimal Core run identity"):
+        core.validate(queue(first, second))
+
+
 def test_stale_result_from_prior_run_cannot_block_current_retry_expiry():
     task_id = "CONTROL-204-ASSURE"
-    q0 = queue(task(task_id, "ASSURANCE", core.ROLE_B))
-    q1, r1, _ = core.claim(
-        q0,
-        runs(),
+    q1, _ = core.claim(
+        queue(task(task_id, "ASSURANCE", core.ROLE_B)),
         task_id=task_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -504,17 +450,15 @@ def test_stale_result_from_prior_run_cannot_block_current_retry_expiry():
         lease_seconds=10,
         run_id="run-old",
     )
-    q2, r2 = core.release_execution_failure(
+    q2 = core.release_execution_failure(
         q1,
-        r1,
         task_id=task_id,
         run_id="run-old",
         code="EXECUTOR_UNAVAILABLE",
         now=NOW + timedelta(seconds=5),
     )
-    q3, r3, _ = core.claim(
+    q3, _ = core.claim(
         q2,
-        r2,
         task_id=task_id,
         worker_instance=core.INSTANCE_B1,
         backend="test",
@@ -522,16 +466,17 @@ def test_stale_result_from_prior_run_cannot_block_current_retry_expiry():
         lease_seconds=10,
         run_id="run-new",
     )
-    old_result = b_result(task_id, "run-old", "PASS")
-    old_ref = "control/worker-results/CONTROL-204-ASSURE--run-old.json"
-    q4, r4, report = core.reconcile(
+    q4, report = core.reconcile(
         q3,
-        r3,
-        persisted_results={(task_id, "run-old"): (old_result, old_ref)},
+        persisted_results={
+            (task_id, "run-old"): (
+                b_result(task_id, "run-old", "PASS"),
+                "control/worker-results/CONTROL-204-ASSURE--run-old.json",
+            )
+        },
         now=NOW + timedelta(seconds=25),
     )
     assert report == {"finalized_results": [], "expired_claims": [task_id]}
     current = core.explain_task(q4, task_id)
     assert current["status"] == core.STATUS_QUEUED
     assert current["last_execution_error"] == "LEASE_EXPIRED"
-    assert [run["outcome"] for run in r4["runs"]] == ["EXECUTOR_UNAVAILABLE", "LEASE_EXPIRED"]
