@@ -368,6 +368,21 @@ def test_role_capacity_is_fail_closed():
         )
 
 
+def test_active_claim_must_match_exact_run_record():
+    q1, r1, _ = core.claim(
+        queue(task("ASSURE", "ASSURANCE", core.ROLE_B)),
+        runs(),
+        task_id="ASSURE",
+        worker_instance=core.INSTANCE_B1,
+        backend="test",
+        now=NOW,
+        run_id="run-bound",
+    )
+    r1["runs"][0]["task_id"] = "OTHER-TASK"
+    with pytest.raises(core.MinimalCoreError, match="active claim/run binding mismatch"):
+        core.validate(q1, r1)
+
+
 def test_operation_role_is_immutable_and_principal_relay_stays_zero():
     invalid = task("X", "ASSURANCE", core.ROLE_A)
     with pytest.raises(core.MinimalCoreError, match="role does not match immutable operation"):
@@ -391,27 +406,19 @@ def test_operation_role_is_immutable_and_principal_relay_stays_zero():
         core.validate(queue(missing))
 
 
-def test_duplicate_successor_identity_fails_closed():
+def test_duplicate_successor_identity_fails_before_claim():
     successor = {"PASS": integration_successor("EXISTING")}
     assure = task("ASSURE", "ASSURANCE", core.ROLE_B, successors=successor)
     existing = task("EXISTING", "PROJECT_INTEGRATION", core.ROLE_A)
-    q1, r1, _ = core.claim(
-        queue(assure, existing),
-        runs(),
-        task_id="ASSURE",
-        worker_instance=core.INSTANCE_B1,
-        backend="test",
-        now=NOW,
-        run_id="run-dup",
-    )
     with pytest.raises(core.MinimalCoreError, match="successor task already exists"):
-        core.finalize_result(
-            q1,
-            r1,
+        core.claim(
+            queue(assure, existing),
+            runs(),
             task_id="ASSURE",
-            result=b_result("ASSURE", "run-dup", "PASS"),
-            result_ref="control/worker-results/ASSURE--run-dup.json",
-            now=NOW + timedelta(minutes=1),
+            worker_instance=core.INSTANCE_B1,
+            backend="test",
+            now=NOW,
+            run_id="run-dup",
         )
 
 
@@ -448,6 +455,40 @@ def test_exact_terminal_result_replay_is_idempotent():
     assert q3 == q2
     assert r3 == r2
     assert replay_successor == first_successor == "CONTROL-204-INTEGRATE"
+
+
+def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
+    successor = {"PASS": integration_successor()}
+    q0 = queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors=successor))
+    q1, r1, _ = core.claim(
+        q0,
+        runs(),
+        task_id="CONTROL-204-ASSURE",
+        worker_instance=core.INSTANCE_B1,
+        backend="test",
+        now=NOW,
+        run_id="run-replay-bind",
+    )
+    result = b_result("CONTROL-204-ASSURE", "run-replay-bind", "PASS")
+    ref = "control/worker-results/CONTROL-204-ASSURE--run-replay-bind.json"
+    q2, r2, _ = core.finalize_result(
+        q1,
+        r1,
+        task_id="CONTROL-204-ASSURE",
+        result=result,
+        result_ref=ref,
+        now=NOW + timedelta(minutes=1),
+    )
+    core._task(q2, "CONTROL-204-INTEGRATE")["candidate_sha"] = "b" * 40
+    with pytest.raises(core.MinimalCoreError, match="terminal successor candidate replay mismatch"):
+        core.finalize_result(
+            q2,
+            r2,
+            task_id="CONTROL-204-ASSURE",
+            result=result,
+            result_ref=ref,
+            now=NOW + timedelta(minutes=2),
+        )
 
 
 def test_stale_result_from_prior_run_cannot_block_current_retry_expiry():
