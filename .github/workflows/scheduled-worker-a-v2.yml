@@ -27,8 +27,7 @@ jobs:
        (github.event.comment.user.login == 'market-predictions' &&
         (github.event.comment.body == 'CONTROL_CORE_RECONCILE_V1' ||
          startsWith(github.event.comment.body, 'CONTROL_CORE_CLAIM_V1 ') ||
-         startsWith(github.event.comment.body, 'CONTROL_CORE_RECORD_V1 ') ||
-         startsWith(github.event.comment.body, 'CONTROL_PRIVATE_VALIDATE_V1 '))))
+         startsWith(github.event.comment.body, 'CONTROL_CORE_RECORD_V1 '))))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -55,7 +54,6 @@ jobs:
           private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: 'write'
-          permission-actions: 'write'
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -108,15 +106,6 @@ jobs:
               task_id="${COMMENT_BODY#CONTROL_CORE_RECORD_V1 }"
               [[ "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]]
               python scripts/private_minimal_core_apply.py record --task-id "$task_id"
-              ;;
-            CONTROL_PRIVATE_VALIDATE_V1\ *)
-              candidate_sha="${COMMENT_BODY#CONTROL_PRIVATE_VALIDATE_V1 }"
-              [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
-              GH_TOKEN="$CONTROL_GITHUB_WRITE_TOKEN" gh workflow run \
-                private-control-deterministic-validation-v1.yml \
-                --repo "$GITHUB_REPOSITORY" \
-                --ref main \
-                -f candidate_sha="$candidate_sha"
               ;;
             *)
               echo 'unsupported Minimal Core command' >&2

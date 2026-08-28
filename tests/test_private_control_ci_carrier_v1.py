@@ -24,26 +24,30 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertNotIn("cat \"$log\"", text)
         self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS candidate_sha=$CANDIDATE_SHA", text)
 
-    def test_minimal_core_actuator_launches_existing_carrier_deterministically(self) -> None:
-        text = ACTUATOR.read_text(encoding="utf-8")
-        self.assertIn("name: Control Minimal Core lifecycle actuator", text)
-        self.assertNotIn("\n  schedule:", text)
+    def test_carrier_has_connector_compatible_trusted_comment_launch(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
+        self.assertIn("issue_comment:", text)
+        self.assertIn("types: [created]", text)
+        self.assertIn("github.event.comment.user.login == 'market-predictions'", text)
         self.assertIn("startsWith(github.event.comment.body, 'CONTROL_PRIVATE_VALIDATE_V1 ')", text)
-        self.assertIn("permission-actions: 'write'", text)
         self.assertIn('candidate_sha="${COMMENT_BODY#CONTROL_PRIVATE_VALIDATE_V1 }"', text)
         self.assertIn('[[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]', text)
-        self.assertIn("gh workflow run \\", text)
-        self.assertIn("private-control-deterministic-validation-v1.yml", text)
-        self.assertIn('--ref main', text)
-        self.assertIn('-f candidate_sha="$candidate_sha"', text)
-        self.assertIn("GITHUB_ACTIONS_SEMANTIC_ASSURANCE=false", text)
-        self.assertIn("GITHUB_ACTIONS_WORKER_SCHEDULER=false", text)
+        self.assertIn("INPUT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}", text)
+        self.assertNotIn("schedule:", text)
+        self.assertNotIn("cron:", text)
+        self.assertNotIn("gh workflow run", text)
 
-    def test_launch_path_has_no_retired_legacy_b1_dependency(self) -> None:
-        combined = CARRIER.read_text(encoding="utf-8") + ACTUATOR.read_text(encoding="utf-8")
-        self.assertNotIn("canonical-b1-dual-executor-v1.yml", combined)
-        self.assertNotIn("PUBLIC_CONTROL_CI_RUN_ID", combined)
-        self.assertNotIn("PUBLIC_CONTROL_CI_EXECUTOR_SHA", combined)
+    def test_launch_path_does_not_expand_minimal_core_or_legacy_b1_authority(self) -> None:
+        carrier = CARRIER.read_text(encoding="utf-8")
+        actuator = ACTUATOR.read_text(encoding="utf-8")
+        self.assertNotIn("canonical-b1-dual-executor-v1.yml", carrier)
+        self.assertNotIn("PUBLIC_CONTROL_CI_RUN_ID", carrier)
+        self.assertNotIn("PUBLIC_CONTROL_CI_EXECUTOR_SHA", carrier)
+        self.assertNotIn("CONTROL_PRIVATE_VALIDATE_V1", actuator)
+        self.assertNotIn("permission-actions: 'write'", actuator)
+        self.assertNotIn("gh workflow run", actuator)
+        self.assertIn("GITHUB_ACTIONS_SEMANTIC_ASSURANCE=false", actuator)
+        self.assertIn("GITHUB_ACTIONS_WORKER_SCHEDULER=false", actuator)
 
 
 if __name__ == "__main__":
