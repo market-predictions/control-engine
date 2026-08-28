@@ -371,6 +371,50 @@ def test_duplicate_successor_identity_fails_before_claim():
         )
 
 
+def test_duplicate_successor_reservation_fails_before_claim():
+    shared_id = "SHARED-FUTURE-TASK"
+    first = task(
+        "ASSURE-A",
+        "ASSURANCE",
+        core.ROLE_B,
+        repository="repo-a",
+        successors={
+            "PASS": {
+                "task_id": shared_id,
+                "operation": "PROJECT_INTEGRATION",
+                "role": core.ROLE_A,
+                "repository": "repo-a",
+                "candidate_sha": SHA,
+            }
+        },
+    )
+    second = task(
+        "ASSURE-B",
+        "ASSURANCE",
+        core.ROLE_B,
+        repository="repo-b",
+        priority=1,
+        successors={
+            "PASS": {
+                "task_id": shared_id,
+                "operation": "PROJECT_INTEGRATION",
+                "role": core.ROLE_A,
+                "repository": "repo-b",
+                "candidate_sha": SHA,
+            }
+        },
+    )
+    with pytest.raises(core.MinimalCoreError, match="reserved by another task"):
+        core.claim(
+            queue(first, second),
+            task_id="ASSURE-A",
+            worker_instance=core.INSTANCE_B1,
+            backend="test",
+            now=NOW,
+            run_id="run-reservation-collision",
+        )
+
+
 def test_exact_terminal_result_replay_is_idempotent_without_run_projection():
     q1, _ = core.claim(
         queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B, successors={"PASS": integration_successor()})),
