@@ -66,16 +66,21 @@ def test_public_workflow_contains_no_semantic_compute_or_provider_credentials() 
     assert "TASK_SPECIFIC_RECOVERY=false" in text
 
 
-def test_minimal_core_bridge_is_single_state_only_cas_surface() -> None:
+def test_minimal_core_bridge_is_single_queue_state_only_cas_surface() -> None:
     bridge = BRIDGE.read_text(encoding="utf-8")
     kernel = KERNEL.read_text(encoding="utf-8")
     assert "_remote_identity" in bridge and "_persist(" in bridge
+    assert 'QUEUE_REL = "control/DISPATCH_QUEUE.json"' in bridge
+    assert "DISPATCH_RUNS.json" not in bridge
+    assert "DISPATCH_RUNS.json" not in kernel
+    assert "RUNS_REL" not in bridge
     assert "control/project-intake" not in bridge
     assert "control/handovers" not in bridge
     assert "control/claim-completions" not in bridge
     assert "CONTROL_MINIMAL_CORE_V1" in kernel
     assert "PASS" in kernel and "FAIL" in kernel and "INDETERMINATE" in kernel
     assert "LEASE_EXPIRED" in kernel
+    assert "terminal_run_id" in kernel
     for text in (bridge, kernel):
         assert "CONTROL_CLOUDFLARE_API_TOKEN" not in text
         assert "CONTROL_CLOUDFLARE_ACCOUNT_ID" not in text
