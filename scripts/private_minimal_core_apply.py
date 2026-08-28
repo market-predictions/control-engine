@@ -250,15 +250,18 @@ def command_record(token: str, task_id: str) -> int:
         if len(matches) != 1 or matches[0].get("lifecycle_model") != core.PROTOCOL_ID:
             raise RuntimeError("Minimal Core task identity is not unique")
         task = matches[0]
-        if task.get("status") == core.STATUS_EXECUTING:
+        executing = task.get("status") == core.STATUS_EXECUTING
+        if executing:
             claim = task.get("claim")
             if not isinstance(claim, dict) or not isinstance(claim.get("run_id"), str):
                 raise RuntimeError("Minimal Core active run is missing")
-            result_ref = _result_ref(task_id, claim["run_id"])
+            run_id = claim["run_id"]
+            result_ref = _result_ref(task_id, run_id)
         elif task.get("status") == core.STATUS_TERMINAL:
+            run_id = task.get("terminal_run_id")
             result_ref = task.get("result_ref")
-            if not isinstance(result_ref, str) or not result_ref:
-                raise RuntimeError("Minimal Core terminal result ref is missing")
+            if not isinstance(run_id, str) or not run_id or not isinstance(result_ref, str) or not result_ref:
+                raise RuntimeError("Minimal Core terminal result identity is missing")
         else:
             raise RuntimeError("Minimal Core result target is not executing or terminal")
 
@@ -269,45 +272,34 @@ def command_record(token: str, task_id: str) -> int:
             result = _load(result_path)
         except (OSError, UnicodeError, json.JSONDecodeError):
             result = None
+        now = _now()
+
+        if executing:
+            queue, _ = core.reconcile(
+                queue,
+                persisted_results={(task_id, run_id): (result if isinstance(result, dict) else None, result_ref)},
+                now=now,
+            )
+            projection = core.explain_task(queue, task_id)
+            _write(queue_path, queue)
+            if projection["status"] != core.STATUS_TERMINAL:
+                return {"outcome": projection["last_execution_error"], "successor_id": None}
+            terminal_task = next(item for item in queue["tasks"] if item.get("task_id") == task_id)
+            template = terminal_task.get("successor_by_outcome", {}).get(projection["outcome"])
+            successor_id = template.get("task_id") if isinstance(template, dict) else None
+            return {"outcome": projection["outcome"], "successor_id": successor_id}
+
         if not isinstance(result, dict):
-            if task.get("status") != core.STATUS_EXECUTING:
-                raise RuntimeError("Minimal Core terminal result is unreadable")
-            queue = core.release_execution_failure(
-                queue,
-                task_id=task_id,
-                run_id=task["claim"]["run_id"],
-                code="INVALID_PERSISTED_RESULT",
-                now=_now(),
-            )
-            _write(queue_path, queue)
-            return {"outcome": "INVALID_PERSISTED_RESULT", "successor_id": None}
-
-        try:
-            queue, successor_id = core.finalize_result(
-                queue,
-                task_id=task_id,
-                result=result,
-                result_ref=result_ref,
-                now=_now(),
-            )
-        except core.MinimalCoreError:
-            if task.get("status") != core.STATUS_EXECUTING:
-                raise
-            queue = core.release_execution_failure(
-                queue,
-                task_id=task_id,
-                run_id=task["claim"]["run_id"],
-                code="INVALID_PERSISTED_RESULT",
-                now=_now(),
-            )
-            _write(queue_path, queue)
-            return {"outcome": "INVALID_PERSISTED_RESULT", "successor_id": None}
-
+            raise RuntimeError("Minimal Core terminal result is unreadable")
+        queue, successor_id = core.finalize_result(
+            queue,
+            task_id=task_id,
+            result=result,
+            result_ref=result_ref,
+            now=now,
+        )
         _write(queue_path, queue)
-        return {
-            "outcome": result.get("outcome"),
-            "successor_id": successor_id,
-        }
+        return {"outcome": result.get("outcome"), "successor_id": successor_id}
 
     captured, readback_queue, attempt = _with_cas(
         token,
