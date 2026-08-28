@@ -23,7 +23,6 @@ from control_engine import minimal_core as core
 from scripts import project_integration_executor as integration
 
 QUEUE_REL = "control/DISPATCH_QUEUE.json"
-RUNS_REL = "control/DISPATCH_RUNS.json"
 RESULT_DIR = Path("control/worker-results")
 LEGACY_B1_PROFILE_REL = "control/CONTROL_ASSURANCE_EXECUTION_PROFILE_V1.json"
 LEGACY_B1_RETIRED_STATUS = "RETIRED"
@@ -100,20 +99,16 @@ def _persisted_results(
     return found
 
 
-def _reconcile_files(state_dir: Path, now: datetime) -> dict[str, list[str]]:
+def _reconcile_file(state_dir: Path, now: datetime) -> dict[str, list[str]]:
     queue_path = state_dir / QUEUE_REL
-    runs_path = state_dir / RUNS_REL
     queue = _load(queue_path)
-    runs = _load(runs_path)
     _assert_cutover_safe(state_dir, queue)
-    queue, runs, report = core.reconcile(
+    queue, report = core.reconcile(
         queue,
-        runs,
         persisted_results=_persisted_results(state_dir, queue),
         now=now,
     )
     _write(queue_path, queue)
-    _write(runs_path, runs)
     return report
 
 
@@ -140,7 +135,7 @@ def _persist(token: str, state_dir: Path, observed: tuple[str, str], message: st
     if integration._remote_identity(token, state_dir) != observed:
         return False
     changed = integration._changed_paths(state_dir)
-    allowed = {QUEUE_REL, RUNS_REL}
+    allowed = {QUEUE_REL}
     if not changed:
         return True
     if not changed.issubset(allowed):
@@ -149,13 +144,13 @@ def _persist(token: str, state_dir: Path, observed: tuple[str, str], message: st
         token,
         state_dir,
         message=message,
-        paths=[QUEUE_REL, RUNS_REL],
+        paths=[QUEUE_REL],
         allowed=allowed,
     )
 
 
 def _with_cas(token: str, mutate, *, message: str):
-    """Apply one queue/runs mutation and return the winning attempt's readback."""
+    """Apply one queue mutation and return the winning attempt's readback."""
     with tempfile.TemporaryDirectory(prefix="control-minimal-core-") as temp:
         state_dir = Path(temp) / "state"
         _init_state(state_dir)
@@ -172,7 +167,7 @@ def _with_cas(token: str, mutate, *, message: str):
 
 def command_reconcile(token: str) -> int:
     def mutate(state_dir: Path):
-        return _reconcile_files(state_dir, _now())
+        return _reconcile_file(state_dir, _now())
 
     report, _, attempt = _with_cas(token, mutate, message="runtime: reconcile Control Minimal Core")
     print("CONTROL_MINIMAL_CORE_RECONCILE=SUCCESS")
@@ -188,11 +183,9 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
         raise RuntimeError("unsupported worker instance")
 
     def mutate(state_dir: Path):
-        _reconcile_files(state_dir, _now())
+        _reconcile_file(state_dir, _now())
         queue_path = state_dir / QUEUE_REL
-        runs_path = state_dir / RUNS_REL
         queue = _load(queue_path)
-        runs = _load(runs_path)
         _assert_cutover_safe(state_dir, queue)
         task_id = requested_task_id
         if task_id == AUTO_TASK_ID:
@@ -204,9 +197,8 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
         if len(matches) != 1:
             raise RuntimeError("Minimal Core task identity is not unique")
         _assert_no_legacy_conflict(queue, role, matches[0].get("repository", ""))
-        queue, runs, claimed = core.claim(
+        queue, claimed = core.claim(
             queue,
-            runs,
             task_id=task_id,
             worker_instance=worker_instance,
             backend=f"canonical-minimal-core/{worker_instance.lower()}",
@@ -214,7 +206,6 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
             lease_seconds=LEASE_SECONDS,
         )
         _write(queue_path, queue)
-        _write(runs_path, runs)
         return {
             "idle": False,
             "task_id": task_id,
@@ -253,9 +244,7 @@ def command_claim(token: str, worker_instance: str, requested_task_id: str) -> i
 def command_record(token: str, task_id: str) -> int:
     def mutate(state_dir: Path):
         queue_path = state_dir / QUEUE_REL
-        runs_path = state_dir / RUNS_REL
         queue = _load(queue_path)
-        runs = _load(runs_path)
         _assert_cutover_safe(state_dir, queue)
         matches = [item for item in queue.get("tasks", []) if item.get("task_id") == task_id]
         if len(matches) != 1 or matches[0].get("lifecycle_model") != core.PROTOCOL_ID:
@@ -283,28 +272,24 @@ def command_record(token: str, task_id: str) -> int:
         if not isinstance(result, dict):
             if task.get("status") != core.STATUS_EXECUTING:
                 raise RuntimeError("Minimal Core terminal result is unreadable")
-            queue, runs = core.release_execution_failure(
+            queue = core.release_execution_failure(
                 queue,
-                runs,
                 task_id=task_id,
                 run_id=task["claim"]["run_id"],
                 code="INVALID_PERSISTED_RESULT",
                 now=_now(),
             )
             _write(queue_path, queue)
-            _write(runs_path, runs)
             return {"outcome": "INVALID_PERSISTED_RESULT", "successor_id": None}
 
-        queue, runs, successor_id = core.finalize_result(
+        queue, successor_id = core.finalize_result(
             queue,
-            runs,
             task_id=task_id,
             result=result,
             result_ref=result_ref,
             now=_now(),
         )
         _write(queue_path, queue)
-        _write(runs_path, runs)
         return {
             "outcome": result.get("outcome"),
             "successor_id": successor_id,
