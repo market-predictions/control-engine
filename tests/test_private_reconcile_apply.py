@@ -6,6 +6,7 @@ LEGACY_RECONCILE = ROOT / "scripts" / "private_reconcile_apply.py"
 LEGACY_CLAIM = ROOT / "scripts" / "private_a1_claim_apply.py"
 LEGACY_RECORD = ROOT / "scripts" / "private_a1_record_apply.py"
 MINIMAL_BRIDGE = ROOT / "scripts" / "private_minimal_core_apply.py"
+MINIMAL_KERNEL = ROOT / "control_engine" / "minimal_core.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "scheduled-worker-a-v2.yml"
 
 
@@ -34,9 +35,10 @@ def test_legacy_claim_and_record_remain_non_semantic_audit_artifacts():
             assert token not in text
 
 
-def test_minimal_bridge_replaces_three_active_lifecycle_surfaces_with_one():
+def test_minimal_bridge_replaces_three_active_lifecycle_surfaces_with_one_queue_write():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     bridge = MINIMAL_BRIDGE.read_text(encoding="utf-8")
+    kernel = MINIMAL_KERNEL.read_text(encoding="utf-8")
     assert "private_minimal_core_apply.py" in workflow
     assert "private_reconcile_apply.py" not in workflow
     assert "private_a1_claim_apply.py" not in workflow
@@ -47,6 +49,10 @@ def test_minimal_bridge_replaces_three_active_lifecycle_surfaces_with_one():
     assert "CONTROL_CORE_RECORD_V1 " in workflow
     assert "github.event.comment.user.login == 'market-predictions'" in workflow
     assert "_remote_identity" in bridge and "_persist(" in bridge
+    assert 'QUEUE_REL = "control/DISPATCH_QUEUE.json"' in bridge
+    assert "DISPATCH_RUNS.json" not in bridge
+    assert "DISPATCH_RUNS.json" not in kernel
+    assert "RUNS_REL" not in bridge
     assert "control/project-intake" not in bridge
     assert "control/handovers" not in bridge
     assert "control/claim-completions" not in bridge
