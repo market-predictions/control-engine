@@ -210,6 +210,45 @@ def test_invalid_current_run_result_is_execution_failure_not_semantic_verdict():
     assert current["last_execution_error"] == "INVALID_PERSISTED_RESULT"
 
 
+def test_invalid_present_candidate_on_blocked_a1_requeues_as_execution_failure():
+    task_id = "A1-BLOCKED-BAD-CANDIDATE"
+    run_id = "run-bad-a1-candidate"
+    work = task(
+        task_id,
+        "IMPLEMENTATION",
+        core.ROLE_A,
+        candidate_sha=None,
+        successors={"COMPLETED": assurance_successor(f"{task_id}--ASSURE", candidate_sha=None)},
+    )
+    q1, _ = core.claim(
+        queue(work),
+        task_id=task_id,
+        worker_instance=core.INSTANCE_A1,
+        backend="test",
+        now=NOW,
+        run_id=run_id,
+    )
+    malformed = {
+        "version": "1.0",
+        "task_id": task_id,
+        "run_id": run_id,
+        "role": core.ROLE_A,
+        "outcome": "BLOCKED",
+        "candidate_sha": [],
+    }
+    result_ref = f"control/worker-results/{task_id}--{run_id}.json"
+    q2, report = core.reconcile(
+        q1,
+        persisted_results={(task_id, run_id): (malformed, result_ref)},
+        now=NOW + timedelta(seconds=10),
+    )
+    assert report == {"finalized_results": [], "expired_claims": []}
+    current = core.explain_task(q2, task_id)
+    assert current["status"] == core.STATUS_QUEUED
+    assert current["outcome"] is None
+    assert current["last_execution_error"] == "INVALID_PERSISTED_RESULT"
+
+
 def test_expired_claim_without_result_requeues_same_task():
     q1, _ = core.claim(
         queue(task("CONTROL-204-ASSURE", "ASSURANCE", core.ROLE_B)),
@@ -265,6 +304,13 @@ def test_assurance_successor_routing_is_fail_closed(successors, message):
 
 
 @pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
+def test_a1_completed_work_requires_assurance_reservation(operation):
+    invalid = task("A1-NO-ASSURE", operation, core.ROLE_A, successors={})
+    with pytest.raises(core.MinimalCoreError, match="must reserve assurance"):
+        core.validate(queue(invalid))
+
+
+@pytest.mark.parametrize("operation", ["IMPLEMENTATION", "REPAIR"])
 def test_a1_completed_work_cannot_route_directly_to_integration(operation):
     with pytest.raises(core.MinimalCoreError, match="must route through assurance"):
         core.validate(
@@ -315,8 +361,8 @@ def test_blocked_a1_work_cannot_create_successor_authority():
 def test_role_capacity_is_fail_closed_from_queue_alone():
     q1, _ = core.claim(
         queue(
-            task("A", "IMPLEMENTATION", core.ROLE_A, repository="repo-a", candidate_sha=None),
-            task("B", "IMPLEMENTATION", core.ROLE_A, repository="repo-b", candidate_sha=None, priority=1),
+            task("A", "PROJECT_INTEGRATION", core.ROLE_A, repository="repo-a"),
+            task("B", "PROJECT_INTEGRATION", core.ROLE_A, repository="repo-b", priority=1),
         ),
         task_id="A",
         worker_instance=core.INSTANCE_A1,
