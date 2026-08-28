@@ -162,14 +162,15 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
         if "BLOCKED" in successors:
             raise MinimalCoreError("blocked A1 work may not create a successor")
         completed = successors.get("COMPLETED")
-        if completed is not None:
-            if completed.get("operation") != "ASSURANCE" or completed.get("role") != ROLE_B:
-                raise MinimalCoreError("A1 completion must route through assurance")
-            if completed.get("repository") != task["repository"]:
-                raise MinimalCoreError("A1 assurance successor repository mismatch")
-            template_candidate = completed.get("candidate_sha")
-            if template_candidate is not None and not _valid_sha(template_candidate):
-                raise MinimalCoreError("A1 assurance successor candidate template is invalid")
+        if completed is None:
+            raise MinimalCoreError("A1 completion must reserve assurance")
+        if completed.get("operation") != "ASSURANCE" or completed.get("role") != ROLE_B:
+            raise MinimalCoreError("A1 completion must route through assurance")
+        if completed.get("repository") != task["repository"]:
+            raise MinimalCoreError("A1 assurance successor repository mismatch")
+        template_candidate = completed.get("candidate_sha")
+        if template_candidate is not None and not _valid_sha(template_candidate):
+            raise MinimalCoreError("A1 assurance successor candidate template is invalid")
 
 
 def _assert_direct_successor_ids_available(queue: Mapping[str, Any], task: Mapping[str, Any]) -> None:
@@ -491,10 +492,11 @@ def finalize_result(
     if not isinstance(outcome, str) or outcome not in OUTCOMES_BY_OPERATION[task["operation"]]:
         raise MinimalCoreError("result outcome is invalid for operation")
     result_candidate_sha = result.get("candidate_sha")
+    if result_candidate_sha is not None and not _valid_sha(result_candidate_sha):
+        raise MinimalCoreError("result candidate SHA is invalid")
     a1_result_binds_successor = (
         task["operation"] in {"IMPLEMENTATION", "REPAIR"}
         and outcome == "COMPLETED"
-        and task.get("successor_by_outcome", {}).get("COMPLETED") is not None
     )
     if task["role"] == ROLE_B:
         if not _valid_sha(result_candidate_sha) or result_candidate_sha != task["candidate_sha"]:
