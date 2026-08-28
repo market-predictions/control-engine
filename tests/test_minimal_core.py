@@ -464,7 +464,7 @@ def test_terminal_b1_replay_rejects_mismatched_successor_candidate():
         now=NOW + timedelta(minutes=1),
     )
     core._task(q2, "CONTROL-204-INTEGRATE")["candidate_sha"] = "b" * 40
-    with pytest.raises(core.MinimalCoreError, match="terminal successor candidate replay mismatch"):
+    with pytest.raises(core.MinimalCoreError, match="terminal task materialized successor candidate mismatch"):
         core.finalize_result(
             q2,
             task_id="CONTROL-204-ASSURE",
