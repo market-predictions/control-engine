@@ -145,6 +145,8 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
 
     if operation == "ASSURANCE":
         expected_operation = {"PASS": "PROJECT_INTEGRATION", "FAIL": "REPAIR"}
+        if set(successors) != set(expected_operation):
+            raise MinimalCoreError("assurance must reserve PASS and FAIL successors")
         if "INDETERMINATE" in successors:
             raise MinimalCoreError("INDETERMINATE assurance may not create a successor")
         for outcome, successor in successors.items():
