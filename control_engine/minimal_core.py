@@ -168,6 +168,13 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
                 raise MinimalCoreError("A1 assurance successor candidate template is invalid")
 
 
+def _assert_direct_successor_ids_available(queue: Mapping[str, Any], task: Mapping[str, Any]) -> None:
+    for successor in task.get("successor_by_outcome", {}).values():
+        successor_id = successor["task_id"]
+        if any(item.get("task_id") == successor_id for item in queue.get("tasks", [])):
+            raise MinimalCoreError(f"successor task already exists: {successor_id}")
+
+
 def _derived_task_id(task_id: str, suffix: str) -> str:
     return f"{task_id}--{suffix}"
 
@@ -251,6 +258,21 @@ def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) ->
         run_ids = [run.get("run_id") for run in runs["runs"]]
         if len(run_ids) != len(set(run_ids)):
             raise MinimalCoreError("duplicate run id in runs")
+        runs_by_id = {run.get("run_id"): run for run in runs["runs"]}
+        for task in queue["tasks"]:
+            if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") != STATUS_EXECUTING:
+                continue
+            claim = task["claim"]
+            run = runs_by_id.get(claim["run_id"])
+            if (
+                not isinstance(run, dict)
+                or run.get("task_id") != task["task_id"]
+                or run.get("role") != task["role"]
+                or run.get("worker_instance") != claim.get("worker_instance")
+                or run.get("repository") != task["repository"]
+                or run.get("outcome") != "EXECUTING"
+            ):
+                raise MinimalCoreError("active claim/run binding mismatch")
 
 
 def _eligible(task: Mapping[str, Any], role: str) -> bool:
@@ -297,6 +319,7 @@ def claim(
     _assert_principal_zero(current_queue, task)
     if not _eligible(task, role):
         raise MinimalCoreError("task is not eligible for worker role")
+    _assert_direct_successor_ids_available(current_queue, task)
     if require_preferred:
         preferred = select_task(current_queue, role)
         if preferred is None or preferred["task_id"] != task_id:
@@ -486,8 +509,8 @@ def finalize_result(
             successor = _task(current_queue, successor_id)
             if successor.get("predecessor_task_id") != task_id:
                 raise MinimalCoreError("terminal successor replay mismatch")
-            if a1_result_binds_successor and successor.get("candidate_sha") != result_candidate_sha:
-                raise MinimalCoreError("terminal A1 successor candidate replay mismatch")
+            if (a1_result_binds_successor or task["role"] == ROLE_B) and successor.get("candidate_sha") != result_candidate_sha:
+                raise MinimalCoreError("terminal successor candidate replay mismatch")
         return current_queue, current_runs, successor_id
 
     if task.get("status") != STATUS_EXECUTING:
