@@ -75,13 +75,6 @@ def _task(queue: Mapping[str, Any], task_id: str) -> dict[str, Any]:
     return matches[0]
 
 
-def _run(runs: Mapping[str, Any], run_id: str) -> dict[str, Any]:
-    matches = [run for run in runs.get("runs", []) if run.get("run_id") == run_id]
-    if len(matches) != 1:
-        raise MinimalCoreError(f"expected exactly one run {run_id!r}, found {len(matches)}")
-    return matches[0]
-
-
 def _assert_principal_zero(queue: Mapping[str, Any], task: Mapping[str, Any] | None = None) -> None:
     if not _exact_integer_zero(queue.get("principal_manual_relay_count")):
         raise MinimalCoreError("queue principal_manual_relay_count must remain integer zero")
@@ -104,25 +97,32 @@ def _assert_task_shape(task: Mapping[str, Any]) -> None:
         raise MinimalCoreError("invalid task status")
     if not isinstance(task.get("repository"), str) or not task["repository"]:
         raise MinimalCoreError("repository is required")
-    if operation == "ASSURANCE" and not _valid_sha(task.get("candidate_sha")):
-        raise MinimalCoreError("assurance task requires exact candidate SHA")
+    if operation in {"ASSURANCE", "REPAIR", "PROJECT_INTEGRATION"} and not _valid_sha(task.get("candidate_sha")):
+        raise MinimalCoreError(f"{operation.lower()} task requires exact candidate SHA")
     if not isinstance(task.get("priority", 0), int):
         raise MinimalCoreError("priority must be an integer")
     if not isinstance(task.get("attempt_count", 0), int) or task.get("attempt_count", 0) < 0:
         raise MinimalCoreError("attempt_count must be a non-negative integer")
+
     claim = task.get("claim")
+    terminal_run_id = task.get("terminal_run_id")
     if task["status"] == STATUS_EXECUTING:
         if not isinstance(claim, dict):
             raise MinimalCoreError("executing task requires a claim")
+        if terminal_run_id is not None:
+            raise MinimalCoreError("executing task may not retain terminal_run_id")
     elif claim is not None:
         raise MinimalCoreError("only executing tasks may retain a claim")
+
     if task["status"] == STATUS_TERMINAL:
         if task.get("outcome") not in OUTCOMES_BY_OPERATION[operation]:
             raise MinimalCoreError("terminal task outcome is invalid for operation")
         if not isinstance(task.get("result_ref"), str) or not task["result_ref"]:
             raise MinimalCoreError("terminal task requires result_ref")
-    elif task.get("outcome") is not None or task.get("result_ref") is not None:
-        raise MinimalCoreError("non-terminal task may not retain semantic result state")
+        if not isinstance(terminal_run_id, str) or not terminal_run_id:
+            raise MinimalCoreError("terminal task requires terminal_run_id")
+    elif task.get("outcome") is not None or task.get("result_ref") is not None or terminal_run_id is not None:
+        raise MinimalCoreError("non-terminal task may not retain semantic terminal state")
 
     successors = task.get("successor_by_outcome", {})
     if not isinstance(successors, dict):
@@ -180,7 +180,7 @@ def _derived_task_id(task_id: str, suffix: str) -> str:
 
 
 def _default_successors(task: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """Create one-step successor authority; never prebuild a nested lifecycle tree."""
+    """Create only the immediate next transition; never prebuild a lifecycle tree."""
     operation = task["operation"]
     task_id = task["task_id"]
     repository = task["repository"]
@@ -215,14 +215,15 @@ def _default_successors(task: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return {}
 
 
-def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) -> None:
+def validate(queue: Mapping[str, Any]) -> None:
     if queue.get("version") != VERSION or not isinstance(queue.get("tasks"), list):
         raise MinimalCoreError("queue must contain version=1.0 and tasks array")
     _assert_principal_zero(queue)
     ids: set[str] = set()
     active_roles: set[str] = set()
     active_repositories: set[str] = set()
-    active_runs: set[str] = set()
+    active_run_ids: set[str] = set()
+    terminal_run_ids: set[str] = set()
     for task in queue["tasks"]:
         if task.get("lifecycle_model") != PROTOCOL_ID:
             continue
@@ -232,8 +233,16 @@ def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) ->
         if task_id in ids:
             raise MinimalCoreError(f"duplicate Minimal Core task id: {task_id}")
         ids.add(task_id)
+
+        if task["status"] == STATUS_TERMINAL:
+            run_id = task["terminal_run_id"]
+            if run_id in terminal_run_ids or run_id in active_run_ids:
+                raise MinimalCoreError("duplicate Minimal Core run identity")
+            terminal_run_ids.add(run_id)
+            continue
         if task["status"] != STATUS_EXECUTING:
             continue
+
         role = task["role"]
         repository = task["repository"]
         claim = task["claim"]
@@ -242,7 +251,7 @@ def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) ->
             raise MinimalCoreError(f"role capacity exceeded: {role}")
         if repository in active_repositories:
             raise MinimalCoreError(f"repository exclusivity exceeded: {repository}")
-        if not isinstance(run_id, str) or not run_id or run_id in active_runs:
+        if not isinstance(run_id, str) or not run_id or run_id in active_run_ids or run_id in terminal_run_ids:
             raise MinimalCoreError("invalid or duplicate active run id")
         if claim.get("role") != role or WORKER_ROLE.get(claim.get("worker_instance")) != role:
             raise MinimalCoreError("claim role/worker mismatch")
@@ -251,28 +260,7 @@ def validate(queue: Mapping[str, Any], runs: Mapping[str, Any] | None = None) ->
             raise MinimalCoreError("claim expiry must be after start")
         active_roles.add(role)
         active_repositories.add(repository)
-        active_runs.add(run_id)
-    if runs is not None:
-        if runs.get("version") != VERSION or not isinstance(runs.get("runs"), list):
-            raise MinimalCoreError("runs must contain version=1.0 and runs array")
-        run_ids = [run.get("run_id") for run in runs["runs"]]
-        if len(run_ids) != len(set(run_ids)):
-            raise MinimalCoreError("duplicate run id in runs")
-        runs_by_id = {run.get("run_id"): run for run in runs["runs"]}
-        for task in queue["tasks"]:
-            if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") != STATUS_EXECUTING:
-                continue
-            claim = task["claim"]
-            run = runs_by_id.get(claim["run_id"])
-            if (
-                not isinstance(run, dict)
-                or run.get("task_id") != task["task_id"]
-                or run.get("role") != task["role"]
-                or run.get("worker_instance") != claim.get("worker_instance")
-                or run.get("repository") != task["repository"]
-                or run.get("outcome") != "EXECUTING"
-            ):
-                raise MinimalCoreError("active claim/run binding mismatch")
+        active_run_ids.add(run_id)
 
 
 def _eligible(task: Mapping[str, Any], role: str) -> bool:
@@ -297,7 +285,6 @@ def select_task(queue: Mapping[str, Any], role: str) -> dict[str, Any] | None:
 
 def claim(
     queue: Mapping[str, Any],
-    runs: Mapping[str, Any],
     *,
     task_id: str,
     worker_instance: str,
@@ -306,12 +293,11 @@ def claim(
     lease_seconds: int = 5400,
     run_id: str | None = None,
     require_preferred: bool = True,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if lease_seconds <= 0:
         raise MinimalCoreError("lease_seconds must be positive")
     current_queue = deepcopy(queue)
-    current_runs = deepcopy(runs)
-    validate(current_queue, current_runs)
+    validate(current_queue)
     role = WORKER_ROLE.get(worker_instance)
     if role is None:
         raise MinimalCoreError("unsupported worker instance")
@@ -324,26 +310,23 @@ def claim(
         preferred = select_task(current_queue, role)
         if preferred is None or preferred["task_id"] != task_id:
             raise MinimalCoreError("task is not the preferred eligible task")
-    if any(
-        item.get("lifecycle_model") == PROTOCOL_ID
-        and item.get("status") == STATUS_EXECUTING
-        and item.get("role") == role
-        for item in current_queue["tasks"]
-    ):
-        raise MinimalCoreError("role capacity is already occupied")
-    if any(
-        item.get("lifecycle_model") == PROTOCOL_ID
-        and item.get("status") == STATUS_EXECUTING
-        and item.get("repository") == task["repository"]
-        for item in current_queue["tasks"]
-    ):
-        raise MinimalCoreError("repository is already claimed")
 
     started = _utc(now)
     expires = started + timedelta(seconds=lease_seconds)
     actual_run_id = run_id or f"run-{uuid.uuid4()}"
-    if any(run.get("run_id") == actual_run_id for run in current_runs["runs"]):
+    used_run_ids = {
+        value
+        for item in current_queue["tasks"]
+        if item.get("lifecycle_model") == PROTOCOL_ID
+        for value in (
+            (item.get("claim") or {}).get("run_id"),
+            item.get("terminal_run_id"),
+        )
+        if isinstance(value, str)
+    }
+    if actual_run_id in used_run_ids:
         raise MinimalCoreError("run id already exists")
+
     task["status"] = STATUS_EXECUTING
     task["attempt_count"] = task.get("attempt_count", 0) + 1
     task["last_execution_error"] = None
@@ -356,23 +339,8 @@ def claim(
         "expires_at": _ts(expires),
     }
     task["updated_at"] = _ts(started)
-    current_runs["runs"].append({
-        "run_id": actual_run_id,
-        "task_id": task_id,
-        "role": role,
-        "worker_instance": worker_instance,
-        "backend": backend,
-        "repository": task["repository"],
-        "candidate_sha_or_branch": task.get("candidate_sha") or task.get("work_branch"),
-        "attempt": task["attempt_count"],
-        "started_at": _ts(started),
-        "heartbeat_at": _ts(started),
-        "lease_expires_at": _ts(expires),
-        "outcome": "EXECUTING",
-        "finished_at": None,
-    })
-    validate(current_queue, current_runs)
-    return current_queue, current_runs, deepcopy(task)
+    validate(current_queue)
+    return current_queue, deepcopy(task)
 
 
 def assert_current_claim(
@@ -394,15 +362,6 @@ def assert_current_claim(
     if _parse_ts(claim_data["expires_at"]) <= _utc(now):
         raise MinimalCoreError("claim has expired")
     return deepcopy(task)
-
-
-def _close_run(runs: dict[str, Any], run_id: str, outcome: str, finished_at: str) -> None:
-    run = _run(runs, run_id)
-    if run.get("outcome") != "EXECUTING":
-        raise MinimalCoreError("run is not executing")
-    run["outcome"] = outcome
-    run["heartbeat_at"] = finished_at
-    run["finished_at"] = finished_at
 
 
 def _materialize_successor(
@@ -432,6 +391,7 @@ def _materialize_successor(
         "outcome": None,
         "claim": None,
         "result_ref": None,
+        "terminal_run_id": None,
         "attempt_count": 0,
         "last_execution_error": None,
         "predecessor_task_id": task["task_id"],
@@ -448,16 +408,14 @@ def _materialize_successor(
 
 def finalize_result(
     queue: Mapping[str, Any],
-    runs: Mapping[str, Any],
     *,
     task_id: str,
     result: Mapping[str, Any],
     result_ref: str,
     now: datetime,
-) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], str | None]:
     current_queue = deepcopy(queue)
-    current_runs = deepcopy(runs)
-    validate(current_queue, current_runs)
+    validate(current_queue)
     task = _task(current_queue, task_id)
     _assert_principal_zero(current_queue, task)
 
@@ -489,16 +447,12 @@ def finalize_result(
         raise MinimalCoreError("A1 result candidate mismatch")
 
     if task.get("status") == STATUS_TERMINAL:
-        if task.get("outcome") != outcome or task.get("result_ref") != result_ref:
-            raise MinimalCoreError("terminal result replay mismatch")
-        run = _run(current_runs, result_run_id)
         if (
-            run.get("task_id") != task_id
-            or run.get("role") != task["role"]
-            or run.get("outcome") != outcome
-            or not run.get("finished_at")
+            task.get("outcome") != outcome
+            or task.get("result_ref") != result_ref
+            or task.get("terminal_run_id") != result_run_id
         ):
-            raise MinimalCoreError("terminal run replay mismatch")
+            raise MinimalCoreError("terminal result replay mismatch")
         template = task.get("successor_by_outcome", {}).get(outcome)
         if template is None:
             successor_id = None
@@ -511,7 +465,7 @@ def finalize_result(
                 raise MinimalCoreError("terminal successor replay mismatch")
             if (a1_result_binds_successor or task["role"] == ROLE_B) and successor.get("candidate_sha") != result_candidate_sha:
                 raise MinimalCoreError("terminal successor candidate replay mismatch")
-        return current_queue, current_runs, successor_id
+        return current_queue, successor_id
 
     if task.get("status") != STATUS_EXECUTING:
         raise MinimalCoreError("result target is not executing")
@@ -522,14 +476,14 @@ def finalize_result(
     if _parse_ts(claim_data["expires_at"]) <= _utc(now):
         raise MinimalCoreError("claim expired before result finalization")
 
-    stamp = _ts(now)
     task.update({
         "status": STATUS_TERMINAL,
         "outcome": outcome,
         "result_ref": result_ref,
+        "terminal_run_id": run_id,
         "claim": None,
         "last_execution_error": None,
-        "updated_at": stamp,
+        "updated_at": _ts(now),
     })
     successor_id = _materialize_successor(
         current_queue,
@@ -538,53 +492,47 @@ def finalize_result(
         now=now,
         result_candidate_sha=result_candidate_sha if isinstance(result_candidate_sha, str) else None,
     )
-    _close_run(current_runs, run_id, outcome, stamp)
-    validate(current_queue, current_runs)
-    return current_queue, current_runs, successor_id
+    validate(current_queue)
+    return current_queue, successor_id
 
 
 def release_execution_failure(
     queue: Mapping[str, Any],
-    runs: Mapping[str, Any],
     *,
     task_id: str,
     run_id: str,
     code: str,
     now: datetime,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> dict[str, Any]:
     if not isinstance(code, str) or not code or code in {"PASS", "FAIL", "INDETERMINATE"}:
         raise MinimalCoreError("execution error code is invalid")
     current_queue = deepcopy(queue)
-    current_runs = deepcopy(runs)
-    validate(current_queue, current_runs)
+    validate(current_queue)
     task = _task(current_queue, task_id)
     if task.get("status") != STATUS_EXECUTING or task.get("claim", {}).get("run_id") != run_id:
         raise MinimalCoreError("execution failure does not own current claim")
-    stamp = _ts(now)
     task.update({
         "status": STATUS_QUEUED,
         "outcome": None,
         "result_ref": None,
+        "terminal_run_id": None,
         "claim": None,
         "last_execution_error": code,
-        "updated_at": stamp,
+        "updated_at": _ts(now),
     })
-    _close_run(current_runs, run_id, code, stamp)
-    validate(current_queue, current_runs)
-    return current_queue, current_runs
+    validate(current_queue)
+    return current_queue
 
 
 def reconcile(
     queue: Mapping[str, Any],
-    runs: Mapping[str, Any],
     *,
     persisted_results: Mapping[tuple[str, str], tuple[Mapping[str, Any] | None, str]] | None = None,
     now: datetime,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, list[str]]]:
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """Expire lost authority first; only current claims may finalize persisted results."""
     current_queue = deepcopy(queue)
-    current_runs = deepcopy(runs)
-    validate(current_queue, current_runs)
+    validate(current_queue)
     report = {"finalized_results": [], "expired_claims": []}
     persisted_results = persisted_results or {}
 
@@ -593,9 +541,8 @@ def reconcile(
             continue
         run_id = task["claim"]["run_id"]
         if _parse_ts(task["claim"]["expires_at"]) <= _utc(now):
-            current_queue, current_runs = release_execution_failure(
+            current_queue = release_execution_failure(
                 current_queue,
-                current_runs,
                 task_id=task["task_id"],
                 run_id=run_id,
                 code="LEASE_EXPIRED",
@@ -611,18 +558,16 @@ def reconcile(
         try:
             if not isinstance(result, Mapping):
                 raise MinimalCoreError("persisted result must be an object")
-            current_queue, current_runs, _ = finalize_result(
+            current_queue, _ = finalize_result(
                 current_queue,
-                current_runs,
                 task_id=task["task_id"],
                 result=result,
                 result_ref=result_ref,
                 now=now,
             )
         except MinimalCoreError:
-            current_queue, current_runs = release_execution_failure(
+            current_queue = release_execution_failure(
                 current_queue,
-                current_runs,
                 task_id=task["task_id"],
                 run_id=run_id,
                 code="INVALID_PERSISTED_RESULT",
@@ -631,8 +576,8 @@ def reconcile(
             continue
         report["finalized_results"].append(task["task_id"])
 
-    validate(current_queue, current_runs)
-    return current_queue, current_runs, report
+    validate(current_queue)
+    return current_queue, report
 
 
 def explain_task(queue: Mapping[str, Any], task_id: str) -> dict[str, Any]:
@@ -649,7 +594,7 @@ def explain_task(queue: Mapping[str, Any], task_id: str) -> dict[str, Any]:
         "outcome": task.get("outcome"),
         "repository": task["repository"],
         "candidate_sha": task.get("candidate_sha"),
-        "run_id": claim_data.get("run_id"),
+        "run_id": claim_data.get("run_id") or task.get("terminal_run_id"),
         "lease_expires_at": claim_data.get("expires_at"),
         "result_ref": task.get("result_ref"),
         "last_execution_error": task.get("last_execution_error"),
