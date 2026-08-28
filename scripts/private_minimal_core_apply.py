@@ -282,13 +282,27 @@ def command_record(token: str, task_id: str) -> int:
             _write(queue_path, queue)
             return {"outcome": "INVALID_PERSISTED_RESULT", "successor_id": None}
 
-        queue, successor_id = core.finalize_result(
-            queue,
-            task_id=task_id,
-            result=result,
-            result_ref=result_ref,
-            now=_now(),
-        )
+        try:
+            queue, successor_id = core.finalize_result(
+                queue,
+                task_id=task_id,
+                result=result,
+                result_ref=result_ref,
+                now=_now(),
+            )
+        except core.MinimalCoreError:
+            if task.get("status") != core.STATUS_EXECUTING:
+                raise
+            queue = core.release_execution_failure(
+                queue,
+                task_id=task_id,
+                run_id=task["claim"]["run_id"],
+                code="INVALID_PERSISTED_RESULT",
+                now=_now(),
+            )
+            _write(queue_path, queue)
+            return {"outcome": "INVALID_PERSISTED_RESULT", "successor_id": None}
+
         _write(queue_path, queue)
         return {
             "outcome": result.get("outcome"),
