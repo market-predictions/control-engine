@@ -117,6 +117,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
             "extra-job": VALID_RETIRED_STUB + "\n  active:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Active\n        run: echo active\n",
             "extra-step": VALID_RETIRED_STUB.replace("          exit 1", "          exit 1\n      - name: Active\n        shell: bash\n        run: echo active"),
             "dangerous-command": VALID_RETIRED_STUB.replace("          echo 'Use current Control runtime.'", "          python dangerous.py"),
+            "echo-breakout": VALID_RETIRED_STUB.replace("          echo 'Use current Control runtime.'", "          echo 'safe'; python dangerous.py; echo 'still echoed'"),
             "uses-step": VALID_RETIRED_STUB.replace("        shell: bash", "        uses: actions/checkout@v4\n        shell: bash"),
         }
         with tempfile.TemporaryDirectory() as temp:
