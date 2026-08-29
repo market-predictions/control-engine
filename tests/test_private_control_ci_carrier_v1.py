@@ -8,6 +8,7 @@ import unittest
 from scripts.validate_retired_control_workflows import (
     RetiredWorkflowError,
     validate_control_workflow_inventory,
+    validate_read_only_convergence_workflow,
     validate_retired_workflow,
 )
 
@@ -35,6 +36,28 @@ jobs:
           echo '::error::RETIRED_FOR_CONTROL_MINIMAL_CORE_V1'
           echo 'Use current Control runtime.'
           exit 1
+"""
+
+VALID_READ_ONLY_CONVERGENCE_WORKFLOW = """name: Safe convergence validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Check boundary
+        run: echo safe
 """
 
 
@@ -81,6 +104,8 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertIn('trusted_main_sha="$(cat "$root/trusted-main-sha")"', validation_block)
         self.assertIn('rev-parse refs/control/trusted-main', validation_block)
         self.assertIn('--repo "$repo" "$trusted_main_sha"', validation_block)
+        self.assertIn("Only the explicitly", validation_block)
+        self.assertIn("read-only/no-secrets/no-schedule authority envelope", validation_block)
         self.assertLess(
             validation_block.index('--repo "$repo" "$trusted_main_sha"'),
             validation_block.index("python -m unittest discover"),
@@ -157,7 +182,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=FAIL profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
         self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
 
-    def test_carrier_uses_trusted_structural_retirement_validator(self) -> None:
+    def test_carrier_uses_trusted_structural_workflow_authority_validator(self) -> None:
         carrier = CARRIER.read_text(encoding="utf-8")
         validator = VALIDATOR.read_text(encoding="utf-8")
         self.assertIn('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', carrier)
@@ -169,8 +194,20 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
             ".github/workflows/control-zero-relay-provider-preflight.yml",
         ):
             self.assertIn(path, validator)
+        for path in (
+            ".github/workflows/audit-control-state-freshness.yml",
+            ".github/workflows/control-provider-preflight-bootstrap.yml",
+            ".github/workflows/validate-agentic-runtime.yml",
+            ".github/workflows/validate-provider-preflight-bootstrap.yml",
+            ".github/workflows/validate-terminal-worker-completion.yml",
+            ".github/workflows/validate-work-claim-lifecycle-standard.yml",
+            ".github/workflows/validate-zero-relay-runtime.yml",
+        ):
+            self.assertIn(path, validator)
         self.assertIn("workflow filename inventory differs from trusted main", validator)
         self.assertIn("active workflow differs from trusted main", validator)
+        self.assertIn("permissions must be exactly contents: read", validator)
+        self.assertIn("secrets are forbidden in convergence validation workflow", validator)
         self.assertIn('"-z",', validator)
         self.assertNotIn("grep -Fq '[RETIRED]'", carrier)
         self.assertNotIn("! grep -Fq 'contents: write'", carrier)
@@ -198,7 +235,37 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
                     with self.assertRaises(RetiredWorkflowError):
                         validate_retired_workflow(path)
 
-    def test_workflow_inventory_rejects_non_ascii_extra_rename_and_active_mutation(self) -> None:
+    def test_read_only_convergence_validator_rejects_authority_expansion(self) -> None:
+        mutations = {
+            "write-permission": VALID_READ_ONLY_CONVERGENCE_WORKFLOW.replace(
+                "contents: read", "contents: write"
+            ),
+            "secret": VALID_READ_ONLY_CONVERGENCE_WORKFLOW.replace(
+                "run: echo safe", "run: echo '${{ secrets.BAD }}'"
+            ),
+            "schedule": VALID_READ_ONLY_CONVERGENCE_WORKFLOW.replace(
+                "  workflow_dispatch:\n", "  workflow_dispatch:\n  schedule:\n    - cron: '17 * * * *'\n"
+            ),
+            "persisted-checkout": VALID_READ_ONLY_CONVERGENCE_WORKFLOW.replace(
+                "persist-credentials: false", "persist-credentials: true"
+            ),
+            "network-transfer": VALID_READ_ONLY_CONVERGENCE_WORKFLOW.replace(
+                "run: echo safe", "run: curl https://example.invalid"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            valid = root / "valid.yml"
+            valid.write_text(VALID_READ_ONLY_CONVERGENCE_WORKFLOW, encoding="utf-8")
+            validate_read_only_convergence_workflow(valid)
+            for name, payload in mutations.items():
+                path = root / f"{name}.yml"
+                path.write_text(payload, encoding="utf-8")
+                with self.subTest(name=name):
+                    with self.assertRaises(RetiredWorkflowError):
+                        validate_read_only_convergence_workflow(path)
+
+    def test_workflow_inventory_rejects_non_ascii_extra_rename_and_non_allowlisted_mutation(self) -> None:
         retired_rel = ".github/workflows/retired.yml"
         active_rel = ".github/workflows/active.yml"
         active_text = "name: Active\non: workflow_dispatch\njobs: {}\n"
@@ -221,28 +288,80 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
                 ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
             ).strip()
 
-            validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+            validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,), ())
 
             extra = repo / ".github/workflows/é.yml"
             extra.write_text(active_text, encoding="utf-8")
             subprocess.run(["git", "-C", str(repo), "add", str(extra)], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-qm", "non-ascii-extra"], check=True)
             with self.assertRaises(RetiredWorkflowError):
-                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,), ())
 
             subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", trusted_sha], check=True)
             active.write_text(active_text + "permissions: write-all\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(repo), "add", str(active)], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-qm", "mutate-active"], check=True)
             with self.assertRaises(RetiredWorkflowError):
-                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,), ())
 
             subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", trusted_sha], check=True)
             renamed_rel = ".github/workflows/renamed.yml"
             subprocess.run(["git", "-C", str(repo), "mv", retired_rel, renamed_rel], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-qm", "rename-retired"], check=True)
             with self.assertRaises(RetiredWorkflowError):
-                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,), ())
+
+    def test_workflow_inventory_allows_only_bounded_mutable_validator_change(self) -> None:
+        retired_rel = ".github/workflows/retired.yml"
+        mutable_rel = ".github/workflows/validate-agentic-runtime.yml"
+        immutable_rel = ".github/workflows/active.yml"
+        immutable_text = "name: Active\non: workflow_dispatch\njobs: {}\n"
+
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Control Test"], check=True)
+
+            retired = repo / retired_rel
+            mutable = repo / mutable_rel
+            immutable = repo / immutable_rel
+            retired.parent.mkdir(parents=True)
+            retired.write_text(VALID_RETIRED_STUB, encoding="utf-8")
+            mutable.write_text(VALID_READ_ONLY_CONVERGENCE_WORKFLOW, encoding="utf-8")
+            immutable.write_text(immutable_text, encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", ".github/workflows"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "trusted"], check=True)
+            trusted_sha = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+
+            mutable.write_text(
+                VALID_READ_ONLY_CONVERGENCE_WORKFLOW.replace(
+                    "name: Safe convergence validation", "name: Updated safe convergence validation"
+                ),
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(repo), "add", str(mutable)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "safe-mutable-change"], check=True)
+            validate_control_workflow_inventory(
+                repo,
+                trusted_sha,
+                (retired_rel,),
+                (mutable_rel,),
+            )
+
+            immutable.write_text(immutable_text + "# changed\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", str(immutable)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unsafe-immutable-change"], check=True)
+            with self.assertRaises(RetiredWorkflowError):
+                validate_control_workflow_inventory(
+                    repo,
+                    trusted_sha,
+                    (retired_rel,),
+                    (mutable_rel,),
+                )
 
     def test_carrier_has_connector_compatible_trusted_comment_launch(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
