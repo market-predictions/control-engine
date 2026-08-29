@@ -130,13 +130,14 @@ jobs:
             set -euo pipefail
             cd "$repo"
 
-            # Before any candidate-controlled Python executes, compare the complete
-            # workflow filename authority to current trusted private main. Ordinary
-            # active workflows retain exact trusted-main blobs. Only the explicitly
-            # named Minimal Core convergence validators may change, and then only
-            # inside the trusted read-only/no-secrets/no-schedule authority envelope.
-            # The five canonical retired stubs remain structurally inert. Isolated
-            # mode prevents candidate-controlled Python module resolution here.
+            # Before any candidate-controlled Python executes, bind the complete
+            # workflow filename inventory to trusted private main. Ordinary active
+            # workflows remain exact trusted-main blobs. The seven known Minimal Core
+            # convergence changes are one-time exact Git-blob transitions: both their
+            # trusted-main source blobs and frozen PR #208 target blobs are pinned in
+            # the trusted public validator. Once the targets become private main, the
+            # exception cannot be replayed. Five retired semantic entrypoints remain
+            # structurally inert. Isolated mode prevents candidate module shadowing.
             python -I "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py" \
               --repo "$repo" "$trusted_main_sha"
 
