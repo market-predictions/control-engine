@@ -7,11 +7,19 @@ SCRIPT = ROOT / "scripts" / "private_minimal_core_feed.py"
 
 
 class PrivateMinimalCoreFeedCarrierTests(unittest.TestCase):
-    def test_existing_actuator_accepts_feed_without_becoming_scheduler(self):
+    def test_existing_actuator_accepts_manual_feed_and_has_one_hourly_auto_feed_trigger(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("github.event.comment.body == 'CONTROL_CORE_FEED_V1'", text)
         self.assertIn("CONTROL_CORE_FEED_V1)\n              python scripts/private_minimal_core_feed.py", text)
-        self.assertNotIn("schedule:", text)
+        self.assertEqual(text.count("cron: '25 * * * *'"), 1)
+        self.assertIn('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', text)
+        scheduled_block = text.split('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', 1)[1].split("fi", 1)[0]
+        self.assertLess(
+            scheduled_block.index("python scripts/private_minimal_core_apply.py reconcile"),
+            scheduled_block.index("python scripts/private_minimal_core_feed.py"),
+        )
+        self.assertNotIn(" claim ", scheduled_block)
+        self.assertIn("GITHUB_ACTIONS_DETERMINISTIC_FEED_SCHEDULE=true", text)
         self.assertIn("GITHUB_ACTIONS_WORKER_SCHEDULER=false", text)
         self.assertIn("GITHUB_ACTIONS_SEMANTIC_IMPLEMENTATION=false", text)
         self.assertIn("GITHUB_ACTIONS_SEMANTIC_ASSURANCE=false", text)
