@@ -30,6 +30,8 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         text = CARRIER.read_text(encoding="utf-8")
         self.assertIn("tools/control_minimal_mission_feed_v1.py", text)
         self.assertIn("tools/mission_contract_v1.py", text)
+        self.assertIn("test -f tests/test_mission_contract_v1.py", text)
+        self.assertIn("test -f tests/test_control_minimal_mission_feed_v1.py", text)
         self.assertIn("test_mission_contract_v1.py", text)
         self.assertIn("test_control_minimal_mission_feed_v1.py", text)
         self.assertIn("profile=CONTROL_MINIMAL_CORE_V1", text)
@@ -46,6 +48,19 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
             "test_control_stale_queue_inertness_v1.py",
         ):
             self.assertNotIn(retired_test, text)
+
+    def test_carrier_captured_validation_subprocess_is_fail_fast(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
+        capture_start = text.index("set +e")
+        inner_fail_fast = text.index("set -euo pipefail", capture_start + len("set +e"))
+        first_private_check = text.index("python -m py_compile", capture_start)
+        capture_end = text.index(')>"$log" 2>&1', capture_start)
+
+        self.assertLess(capture_start, inner_fail_fast)
+        self.assertLess(inner_fail_fast, first_private_check)
+        self.assertLess(first_private_check, capture_end)
+        self.assertIn("rc=$?", text[capture_end:])
+        self.assertIn('if [ "$rc" -ne 0 ]; then', text[capture_end:])
 
     def test_carrier_keeps_private_validation_output_bounded_and_ephemeral(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
