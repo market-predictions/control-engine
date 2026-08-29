@@ -18,6 +18,7 @@ class PrivateMinimalCoreFeedCarrierTests(unittest.TestCase):
 
     def test_carrier_executes_private_main_policy_against_only_runtime_queue(self):
         text = SCRIPT.read_text(encoding="utf-8")
+        compile(text, str(SCRIPT), "exec")
         self.assertIn('MAIN_REF = "main"', text)
         self.assertIn('RUNTIME_REF = integration.CONTROL_RUNTIME_REF', text)
         self.assertIn('PRIVATE_FEED_REL = "tools/control_minimal_mission_feed_v1.py"', text)
