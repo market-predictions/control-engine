@@ -77,7 +77,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         text = CARRIER.read_text(encoding="utf-8")
         capture_start = text.index("set +e")
         inner_fail_fast = text.index("set -euo pipefail", capture_start + len("set +e"))
-        first_private_check = text.index("python -m py_compile", capture_start)
+        first_private_check = text.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', capture_start)
         capture_end = text.index(') >"$log" 2>&1', capture_start)
 
         self.assertLess(capture_start, inner_fail_fast)
@@ -85,6 +85,19 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertLess(first_private_check, capture_end)
         self.assertIn("rc=$?", text[capture_end:])
         self.assertIn('if [ "$rc" -ne 0 ]; then', text[capture_end:])
+
+    def test_trusted_source_checks_run_before_sanitized_candidate_tests(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
+        helper = text.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py')
+        doctrine = text.index("runtime_model=CONTROL_MINIMAL_CORE_V1")
+        first_test = text.index("python -m unittest discover")
+        self.assertLess(helper, first_test)
+        self.assertLess(doctrine, first_test)
+        self.assertIn("env -i", text)
+        self.assertIn('HOME="$root/test-home"', text)
+        self.assertIn('TMPDIR="$root/test-tmp"', text)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", text)
+        self.assertLess(text.index("unset CONTROL_GITHUB_READ_TOKEN auth_header"), first_test)
 
     def test_carrier_keeps_private_validation_output_bounded_and_ephemeral(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
@@ -111,13 +124,14 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertNotIn("! grep -Fq 'contents: write'", text)
         self.assertNotIn("! grep -Fq 'actions: write'", text)
 
-    def test_retirement_validator_rejects_write_all_extra_jobs_steps_and_commands(self) -> None:
+    def test_retirement_validator_rejects_authority_and_shell_escape_classes(self) -> None:
         mutations = {
             "write-all": VALID_RETIRED_STUB.replace("permissions:\n  contents: read", "permissions: write-all"),
             "extra-job": VALID_RETIRED_STUB + "\n  active:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Active\n        run: echo active\n",
             "extra-step": VALID_RETIRED_STUB.replace("          exit 1", "          exit 1\n      - name: Active\n        shell: bash\n        run: echo active"),
             "dangerous-command": VALID_RETIRED_STUB.replace("          echo 'Use current Control runtime.'", "          python dangerous.py"),
             "echo-breakout": VALID_RETIRED_STUB.replace("          echo 'Use current Control runtime.'", "          echo 'safe'; python dangerous.py; echo 'still echoed'"),
+            "actions-expression": VALID_RETIRED_STUB.replace("          echo 'Use current Control runtime.'", "          echo '${{ github.ref_name }}'"),
             "uses-step": VALID_RETIRED_STUB.replace("        shell: bash", "        uses: actions/checkout@v4\n        shell: bash"),
         }
         with tempfile.TemporaryDirectory() as temp:
