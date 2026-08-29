@@ -15,7 +15,7 @@ QUEUED task
   -> atomic terminalization + at most one direct successor
 ```
 
-A scheduler only wakes a worker. A current queue claim is the only proof that work started.
+A scheduler only wakes a worker. A current queue claim is the only proof that semantic work started.
 
 ## One mutable authority
 
@@ -45,7 +45,24 @@ Control uses the recurring ChatGPT A1, A2 and B1 workers as one semantic worker-
 
 A role-worker invocation calls the deterministic Minimal Core actuator for its own role. The actuator reconciles expired/current results, selects the preferred eligible task, persists exactly one bounded claim in the queue, then rereads that queue. Semantic work starts only after the exact claim is `START_PROVEN`.
 
-`.github/workflows/scheduled-worker-a-v2.yml` is deliberately an actuator, not a scheduler. It has no cron, performs no semantic implementation/assurance and cannot create an ownerless scheduled claim.
+`.github/workflows/scheduled-worker-a-v2.yml` is the deterministic lifecycle actuator, not a semantic worker scheduler. It performs no semantic implementation or assurance and cannot create an ownerless scheduled claim. It may have a bounded periodic housekeeping trigger for deterministic reconciliation and Mission Feed replenishment; such a trigger creates no worker claim and is never `START_PROVEN` evidence.
+
+## Automatic queue replenishment
+
+Mission-derived A work is replenished independently from semantic worker execution through `CONTROL_MISSION_FEED_V1`.
+
+The existing lifecycle actuator has one hourly housekeeping trigger at minute `:25`. A scheduled housekeeping invocation performs only:
+
+```text
+reconcile expired/current Minimal Core lifecycle state
+-> deterministic CONTROL_CORE_FEED_V1
+```
+
+The feed uses the same authoritative `control/DISPATCH_QUEUE.json`, exact private-main/runtime identity fencing and trusted private Mission Contract policy. It creates only eligible governed IMPLEMENTATION roots, never takes an A/B claim, never performs semantic work and never creates ASSURANCE work directly.
+
+A1 starts on its existing `:29` cadence and A2 remains an additional consume-only A worker. Therefore queue replenishment liveness is no longer dependent on successful execution of an A1 prompt, while semantic execution remains exclusively with the recurring ChatGPT role workers.
+
+The periodic housekeeping trigger is not a second scheduler family or execution plane: it is a trigger on the already-existing deterministic lifecycle actuator and has no semantic worker identity, capacity slot or verdict authority.
 
 ## Core invariants
 
@@ -62,6 +79,7 @@ A role-worker invocation calls the deterministic Minimal Core actuator for its o
 11. `principal_manual_relay_count` must exist and be exact integer `0`.
 12. A direct successor ID must be free before the predecessor can be claimed.
 13. `PROJECT_INTEGRATION` is terminal for its task purpose and has no successor authority.
+14. Automatic Mission Feed housekeeping creates no claim and performs no semantic work.
 
 ## Task lifecycle
 
@@ -123,6 +141,8 @@ Each role-worker wake performs:
 7. claim with worker-instance-capacity/repository-exclusivity checks;
 8. authoritative queue reread proves `START_PROVEN`.
 
+The automatic housekeeping cycle performs only the lifecycle reconciliation needed before Mission Feed selection; it does not execute steps 5-8 and never takes a worker claim.
+
 A result discovered after lease expiry cannot recover semantic authority. Retrying work is safer than allowing an expired owner to create a verdict.
 
 Exact terminal replay requires the same outcome, result reference, `terminal_run_id`, predecessor/successor identity and—where candidate-bound—the same exact successor candidate SHA.
@@ -141,13 +161,14 @@ Cutover is bounded:
 6. materialize current required work as Minimal Core tasks;
 7. prove the live `#204 -> #202 if still needed -> GAP-10` chain without manual lifecycle repair.
 
-The actuator fails closed unless the legacy profile exists and validates exactly as `RETIRED`, including exact integer relay zero. No second lock, queue, run state plane, scheduler family, provider route, B2/B3 or task-specific recovery framework is introduced.
+The actuator fails closed unless the legacy profile exists and validates exactly as `RETIRED`, including exact integer relay zero. No second lock, queue, run state plane, semantic worker-scheduler family, provider route, B2/B3 or task-specific recovery framework is introduced.
 
 ## Production acceptance
 
 Minimal Core is production-proven only when the live chain demonstrates:
 
 - autonomous A1/A2 and B1 wake/claim through the recurring workers;
+- automatic deterministic Mission Feed replenishment can expose eligible mission work without a semantic worker prompt;
 - START_PROVEN from authoritative queue reread;
 - A1/A2 completion creates exactly one exact-candidate assurance successor;
 - B1 PASS/FAIL/INDETERMINATE routes exactly as specified;
