@@ -171,6 +171,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
             self.assertIn(path, validator)
         self.assertIn("workflow filename inventory differs from trusted main", validator)
         self.assertIn("active workflow differs from trusted main", validator)
+        self.assertIn('"-z",', validator)
         self.assertNotIn("grep -Fq '[RETIRED]'", carrier)
         self.assertNotIn("! grep -Fq 'contents: write'", carrier)
         self.assertNotIn("! grep -Fq 'actions: write'", carrier)
@@ -197,7 +198,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
                     with self.assertRaises(RetiredWorkflowError):
                         validate_retired_workflow(path)
 
-    def test_workflow_inventory_rejects_extra_rename_and_active_mutation(self) -> None:
+    def test_workflow_inventory_rejects_non_ascii_extra_rename_and_active_mutation(self) -> None:
         retired_rel = ".github/workflows/retired.yml"
         active_rel = ".github/workflows/active.yml"
         active_text = "name: Active\non: workflow_dispatch\njobs: {}\n"
@@ -222,10 +223,10 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
 
             validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
 
-            extra = repo / ".github/workflows/extra.yml"
+            extra = repo / ".github/workflows/é.yml"
             extra.write_text(active_text, encoding="utf-8")
             subprocess.run(["git", "-C", str(repo), "add", str(extra)], check=True)
-            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "extra"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "non-ascii-extra"], check=True)
             with self.assertRaises(RetiredWorkflowError):
                 validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
 
