@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 import unittest
+
+from scripts.validate_retired_control_workflows import RetiredWorkflowError, validate_retired_workflow
 
 ROOT = Path(__file__).resolve().parents[1]
 CARRIER = ROOT / ".github" / "workflows" / "private-control-deterministic-validation-v1.yml"
 ACTUATOR = ROOT / ".github" / "workflows" / "scheduled-worker-a-v2.yml"
+
+VALID_RETIRED_STUB = """name: Example retired workflow [RETIRED]
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retired:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject retired runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '::error::RETIRED_FOR_CONTROL_MINIMAL_CORE_V1'
+          echo 'Use current Control runtime.'
+          exit 1
+"""
 
 
 class PrivateControlCiCarrierV1Tests(unittest.TestCase):
@@ -72,8 +96,9 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=FAIL profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
         self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
 
-    def test_carrier_proves_legacy_private_entrypoints_remain_fail_closed(self) -> None:
+    def test_carrier_uses_trusted_structural_retirement_validator(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
+        self.assertIn('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', text)
         for path in (
             ".github/workflows/control-manual-run-delivery.yml",
             ".github/workflows/control-zero-relay-dispatch.yml",
@@ -82,9 +107,29 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
             ".github/workflows/control-zero-relay-provider-preflight.yml",
         ):
             self.assertIn(path, text)
-        self.assertIn("grep -Fq '[RETIRED]'", text)
-        self.assertIn("! grep -Fq 'contents: write'", text)
-        self.assertIn("! grep -Fq 'actions: write'", text)
+        self.assertNotIn("grep -Fq '[RETIRED]'", text)
+        self.assertNotIn("! grep -Fq 'contents: write'", text)
+        self.assertNotIn("! grep -Fq 'actions: write'", text)
+
+    def test_retirement_validator_rejects_write_all_extra_jobs_steps_and_commands(self) -> None:
+        mutations = {
+            "write-all": VALID_RETIRED_STUB.replace("permissions:\n  contents: read", "permissions: write-all"),
+            "extra-job": VALID_RETIRED_STUB + "\n  active:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Active\n        run: echo active\n",
+            "extra-step": VALID_RETIRED_STUB.replace("          exit 1", "          exit 1\n      - name: Active\n        shell: bash\n        run: echo active"),
+            "dangerous-command": VALID_RETIRED_STUB.replace("          echo 'Use current Control runtime.'", "          python dangerous.py"),
+            "uses-step": VALID_RETIRED_STUB.replace("        shell: bash", "        uses: actions/checkout@v4\n        shell: bash"),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            valid = root / "valid.yml"
+            valid.write_text(VALID_RETIRED_STUB, encoding="utf-8")
+            validate_retired_workflow(valid)
+            for name, payload in mutations.items():
+                path = root / f"{name}.yml"
+                path.write_text(payload, encoding="utf-8")
+                with self.subTest(name=name):
+                    with self.assertRaises(RetiredWorkflowError):
+                        validate_retired_workflow(path)
 
     def test_carrier_has_connector_compatible_trusted_comment_launch(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
