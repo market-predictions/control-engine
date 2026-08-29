@@ -47,11 +47,31 @@ A role-worker invocation calls the deterministic Minimal Core actuator for its o
 
 `.github/workflows/scheduled-worker-a-v2.yml` is the deterministic lifecycle actuator, not a semantic worker scheduler. It performs no semantic implementation or assurance and cannot create an ownerless scheduled claim. It may have a bounded periodic housekeeping trigger for deterministic reconciliation and Mission Feed replenishment; such a trigger creates no worker claim and is never `START_PROVEN` evidence.
 
+## Canonical hourly operating cadence
+
+The canonical recurring cadence is deliberately staggered in `Europe/Amsterdam`:
+
+```text
+:20  GitHub deterministic housekeeping: reconcile -> Feed queue
+:30  ChatGPT A1: implementation_operations consumer
+:35  ChatGPT A2: implementation_operations consumer
+:55  ChatGPT B1: governance_release_assurance consumer
+```
+
+The spacing is an operational liveness boundary, not governance authority:
+
+- Feed gets 10 minutes to complete its deterministic queue mutation and readback before A1 wakes;
+- A1 gets 5 minutes to establish its claim before A2 independently selects remaining eligible work;
+- B1 wakes 25 minutes after A1 and 20 minutes after A2, increasing the probability that fresh ASSURANCE successors exist in the same hour;
+- long-running A work may legitimately miss that B1 window and be assured in a later hourly cycle; Control does not add event-driven polling or another scheduler merely to reduce that latency.
+
+Changing these minute offsets is an operational change and must keep the same separation: housekeeping first, then A capacity, then independent B assurance. The cadence itself never proves task ownership or semantic execution.
+
 ## Automatic queue replenishment
 
 Mission-derived A work is replenished independently from semantic worker execution through `CONTROL_MISSION_FEED_V1`.
 
-The existing lifecycle actuator has one hourly housekeeping trigger at minute `:25`. A scheduled housekeeping invocation performs only:
+The existing lifecycle actuator has one hourly housekeeping trigger at minute `:20`. A scheduled housekeeping invocation performs only:
 
 ```text
 reconcile expired/current Minimal Core lifecycle state
@@ -60,7 +80,7 @@ reconcile expired/current Minimal Core lifecycle state
 
 The feed uses the same authoritative `control/DISPATCH_QUEUE.json`, exact private-main/runtime identity fencing and trusted private Mission Contract policy. It creates only eligible governed IMPLEMENTATION roots, never takes an A/B claim, never performs semantic work and never creates ASSURANCE work directly.
 
-A1 starts on its existing `:29` cadence and A2 remains an additional consume-only A worker. Therefore queue replenishment liveness is no longer dependent on successful execution of an A1 prompt, while semantic execution remains exclusively with the recurring ChatGPT role workers.
+A1 wakes at `:30`, A2 at `:35`, and B1 at `:55`. Therefore queue replenishment liveness is independent from successful execution of an A1 prompt, while semantic execution remains exclusively with the recurring ChatGPT role workers.
 
 The periodic housekeeping trigger is not a second scheduler family or execution plane: it is a trigger on the already-existing deterministic lifecycle actuator and has no semantic worker identity, capacity slot or verdict authority.
 
