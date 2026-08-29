@@ -9,20 +9,67 @@ ACTUATOR = ROOT / ".github" / "workflows" / "scheduled-worker-a-v2.yml"
 
 
 class PrivateControlCiCarrierV1Tests(unittest.TestCase):
-    def test_carrier_is_private_read_only_and_exact_candidate_bound(self) -> None:
+    def test_carrier_is_private_read_only_exact_candidate_bound_and_credential_bounded(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
+        top_permissions = text.split("permissions:", 1)[1].split("concurrency:", 1)[0]
+
         self.assertIn("market-predictions/control-plane.git", text)
         self.assertIn("permission-contents: 'read'", text)
         self.assertNotIn("permission-contents: 'write'", text)
+        self.assertIn("contents: read", top_permissions)
+        self.assertNotIn("contents: write", top_permissions)
+        self.assertNotIn("actions: write", top_permissions)
+        self.assertNotIn("pull-requests: write", top_permissions)
         self.assertIn("[[ \"$CANDIDATE_SHA\" =~ ^[0-9a-f]{40}$ ]]", text)
         self.assertIn("git -C \"$repo\" checkout --detach --quiet FETCH_HEAD", text)
         self.assertIn("test \"$(git -C \"$repo\" rev-parse HEAD)\" = \"$CANDIDATE_SHA\"", text)
-        self.assertIn("test_control_queue_v1.py", text)
-        self.assertIn("test_control_orchestration_v1.py", text)
-        self.assertIn("test_control_stale_queue_inertness_v1.py", text)
+        self.assertIn("unset CONTROL_GITHUB_READ_TOKEN auth_header", text)
+        self.assertLess(text.index("unset CONTROL_GITHUB_READ_TOKEN auth_header"), text.index("python -m py_compile"))
+
+    def test_carrier_runs_current_minimal_core_validation_profile_not_retired_runtime_tests(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
+        self.assertIn("tools/control_minimal_mission_feed_v1.py", text)
+        self.assertIn("tools/mission_contract_v1.py", text)
+        self.assertIn("test_mission_contract_v1.py", text)
+        self.assertIn("test_control_minimal_mission_feed_v1.py", text)
+        self.assertIn("profile=CONTROL_MINIMAL_CORE_V1", text)
+        self.assertIn("runtime_model=CONTROL_MINIMAL_CORE_V1", text)
+        self.assertIn("mandatory_convergence_cleanup=true", text)
+        self.assertIn(":20  GitHub deterministic reconcile -> Feed queue", text)
+        self.assertIn(":30  ChatGPT A1", text)
+        self.assertIn(":35  ChatGPT A2", text)
+        self.assertIn(":55  ChatGPT B1", text)
+
+        for retired_test in (
+            "test_control_queue_v1.py",
+            "test_control_orchestration_v1.py",
+            "test_control_stale_queue_inertness_v1.py",
+        ):
+            self.assertNotIn(retired_test, text)
+
+    def test_carrier_keeps_private_validation_output_bounded_and_ephemeral(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
         self.assertIn(") >\"$log\" 2>&1", text)
         self.assertNotIn("cat \"$log\"", text)
-        self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS candidate_sha=$CANDIDATE_SHA", text)
+        self.assertNotIn("upload-artifact", text)
+        self.assertIn("private-validation.log", text)
+        self.assertIn("trap 'rm -rf \"$root\"' EXIT", text)
+        self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=FAIL profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
+        self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
+
+    def test_carrier_proves_legacy_private_entrypoints_remain_fail_closed(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
+        for path in (
+            ".github/workflows/control-manual-run-delivery.yml",
+            ".github/workflows/control-zero-relay-dispatch.yml",
+            ".github/workflows/control-zero-relay-implementation.yml",
+            ".github/workflows/control-zero-relay-assurance.yml",
+            ".github/workflows/control-zero-relay-provider-preflight.yml",
+        ):
+            self.assertIn(path, text)
+        self.assertIn("grep -Fq '[RETIRED]'", text)
+        self.assertIn("! grep -Fq 'contents: write'", text)
+        self.assertIn("! grep -Fq 'actions: write'", text)
 
     def test_carrier_has_connector_compatible_trusted_comment_launch(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
