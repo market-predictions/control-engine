@@ -91,8 +91,7 @@ def validate_retired_workflow(path: Path) -> None:
     _require(commands[0] == "set -euo pipefail", "rejection must start fail-fast")
     _require(commands[-1] == "exit 1", "rejection must terminate with exit 1")
     for command in commands[1:-1]:
-        _require(command.startswith("echo '") and command.endswith("'"), "only single-quoted explanatory echo commands are allowed")
-        _require("$(" not in command and "`" not in command, "shell evaluation is forbidden in retirement messages")
+        _require(re.fullmatch(r"echo '[^']*'", command) is not None, "only one literal single-quoted explanatory echo is allowed per command")
 
 
 def main(argv: list[str]) -> int:
