@@ -100,12 +100,17 @@ jobs:
 
           set +e
           (
+            # Re-enable fail-fast inside the captured validation subprocess. Without
+            # this, an early failing check could be masked by a later success.
+            set -euo pipefail
             cd "$repo"
 
             python -m py_compile \
               tools/control_minimal_mission_feed_v1.py \
               tools/mission_contract_v1.py
 
+            test -f tests/test_mission_contract_v1.py
+            test -f tests/test_control_minimal_mission_feed_v1.py
             python -m unittest discover -s tests -p 'test_mission_contract_v1.py' -v
             python -m unittest discover -s tests -p 'test_control_minimal_mission_feed_v1.py' -v
 
