@@ -73,7 +73,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate exact private Control candidate without public source leakage
+      - name: Validate exact private Control Minimal Core candidate without source leakage
         shell: bash
         env:
           CONTROL_GITHUB_READ_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -95,18 +95,67 @@ jobs:
           git -C "$repo" checkout --detach --quiet FETCH_HEAD
           test "$(git -C "$repo" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
+          # The private credential is fetch-only. Candidate code/tests never inherit it.
+          unset CONTROL_GITHUB_READ_TOKEN auth_header
+
           set +e
           (
             cd "$repo"
-            python -m unittest discover -s tests -p 'test_control_queue_v1.py' -v
-            python -m unittest discover -s tests -p 'test_control_orchestration_v1.py' -v
-            python -m unittest discover -s tests -p 'test_control_stale_queue_inertness_v1.py' -v
-            python -m py_compile dispatcher/state.py tools/control_queue_v1.py tools/control_orchestration_v1.py tools/control_intake_inertness_v1.py
+
+            python -m py_compile \
+              tools/control_minimal_mission_feed_v1.py \
+              tools/mission_contract_v1.py
+
+            python -m unittest discover -s tests -p 'test_mission_contract_v1.py' -v
+            python -m unittest discover -s tests -p 'test_control_minimal_mission_feed_v1.py' -v
+
+            python -m json.tool control/missions/SOLIDSECURITY.mission.json >/dev/null
+            python -m json.tool control/missions/SOLID_PRIVACY_PLATFORM.mission.json >/dev/null
+            python -m json.tool control/missions/WEEKLY_REVIEW_OS.mission.json >/dev/null
+
+            grep -Fq 'runtime_model=CONTROL_MINIMAL_CORE_V1' control/SYSTEM_INDEX_V2.md
+            grep -Fq 'status=SUPERSEDED_FOR_CONTROL_MINIMAL_CORE_V1' control/SYSTEM_INDEX.md
+            grep -Fq 'current_claim_lease_seconds=5400' control/CONTROL_WORKER_LIVENESS_BOUNDARY_V1.md
+            grep -Fq 'status=RETIRED_FOR_CONTROL_MINIMAL_CORE_V1' control/MISSION_RUNTIME_PUMP_V1.md
+            grep -Fq 'status=SUPERSEDED_FOR_CONTROL_MINIMAL_CORE_V1' control/CONTROL_QUEUE_PROTOCOL_V1.md
+            grep -Fq 'status=SUPERSEDED_FOR_CONTROL_MINIMAL_CORE_V1' control/CONTROL_TERMINAL_COMPLETION_V1.md
+            grep -Fq 'runtime_execution_model=CONTROL_MINIMAL_CORE_V1' control/MISSION_SYSTEM_V1.md
+            grep -Fq ':20  GitHub deterministic reconcile -> Feed queue' control/CONTROL_COMMAND_VOCABULARY_V1.md
+            grep -Fq ':30  ChatGPT A1' control/CONTROL_COMMAND_VOCABULARY_V1.md
+            grep -Fq ':35  ChatGPT A2' control/CONTROL_COMMAND_VOCABULARY_V1.md
+            grep -Fq ':55  ChatGPT B1' control/CONTROL_COMMAND_VOCABULARY_V1.md
+
+            grep -Fq 'mandatory_convergence_cleanup=true' control/SYSTEM_INDEX_V2.md
+            grep -Fq 'mandatory_convergence_cleanup=true' control/CROSS_PROJECT_PRINCIPAL_AGENT_OPERATING_CHARTER_V1.md
+            grep -Fq 'mandatory_convergence_cleanup=true' control/CROSS_PROJECT_TWO_ROLE_GOVERNANCE_STANDARD_V1.md
+            grep -Fq 'mandatory_convergence_cleanup=true' control/PROJECT_PROMPT_INVOCATION_CONTRACT_V1.md
+            grep -Fq '## Mandatory convergence-cleanup rule' control/PROJECT_BOOTSTRAP.md
+            grep -Fq '1. `control/SYSTEM_INDEX_V2.md`;' control/PROJECT_BOOTSTRAP.md
+            grep -Fq 'bounded stale-reference and competing-authority scan' control/SYSTEM_INDEX_V2.md
+            grep -Fq 'B1 MUST treat the convergence-cleanup invariant as part of completeness' control/CROSS_PROJECT_TWO_ROLE_GOVERNANCE_STANDARD_V1.md
+            ! grep -Fq '1. `control/SYSTEM_INDEX.md`' control/PROJECT_BOOTSTRAP.md
+            ! grep -Fq '2. `control/CURRENT_STATE.md`' control/PROJECT_BOOTSTRAP.md
+            ! grep -Fq '3. `control/NEXT_ACTIONS.md`' control/PROJECT_BOOTSTRAP.md
+
+            for f in \
+              .github/workflows/control-manual-run-delivery.yml \
+              .github/workflows/control-zero-relay-dispatch.yml \
+              .github/workflows/control-zero-relay-implementation.yml \
+              .github/workflows/control-zero-relay-assurance.yml \
+              .github/workflows/control-zero-relay-provider-preflight.yml; do
+              grep -Fq '[RETIRED]' "$f"
+              grep -Fq 'permissions:' "$f"
+              grep -Fq 'contents: read' "$f"
+              ! grep -Fq 'contents: write' "$f"
+              ! grep -Fq 'actions: write' "$f"
+              grep -Fq 'exit 1' "$f"
+            done
           ) >"$log" 2>&1
           rc=$?
           set -e
+
           if [ "$rc" -ne 0 ]; then
-            echo 'CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=FAIL'
+            echo "CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=FAIL profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA"
             exit 1
           fi
-          echo "CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS candidate_sha=$CANDIDATE_SHA"
+          echo "CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA"
