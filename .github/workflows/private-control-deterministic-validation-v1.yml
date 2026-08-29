@@ -73,7 +73,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate exact private Control Minimal Core candidate without source leakage
+      - name: Fetch exact private candidate
         shell: bash
         env:
           CONTROL_GITHUB_READ_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -84,9 +84,8 @@ jobs:
           echo "::add-mask::$CONTROL_GITHUB_READ_TOKEN"
           root="$RUNNER_TEMP/private-control-validation"
           repo="$root/control-plane"
-          log="$root/private-validation.log"
-          mkdir -p "$repo" "$root/test-home" "$root/test-tmp"
-          trap 'rm -rf "$root"' EXIT
+          rm -rf "$root"
+          mkdir -p "$repo"
 
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CONTROL_GITHUB_READ_TOKEN" | base64 -w0)"
           git -C "$repo" init -q
@@ -95,9 +94,23 @@ jobs:
           git -C "$repo" checkout --detach --quiet FETCH_HEAD
           test "$(git -C "$repo" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
-          # The private credential is fetch-only. Candidate code/tests never inherit it.
-          unset CONTROL_GITHUB_READ_TOKEN auth_header
+      - name: Validate exact private Control Minimal Core candidate without source leakage
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          root="$RUNNER_TEMP/private-control-validation"
+          repo="$root/control-plane"
+          log="$root/private-validation.log"
+          test -d "$repo/.git"
+          test "$(git -C "$repo" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          mkdir -p "$root/test-home" "$root/test-tmp"
+          trap 'rm -rf "$root"' EXIT
 
+          # This step never receives the private read token. Candidate-controlled
+          # processes therefore cannot recover it from this shell's /proc environ.
           set +e
           (
             # Re-enable fail-fast inside the captured validation subprocess. Without
@@ -106,8 +119,6 @@ jobs:
             cd "$repo"
 
             # Trusted/static checks run before any candidate-controlled Python test.
-            # Candidate tests therefore cannot rewrite the trusted public validator
-            # or private source in-memory and make a later structural check pass.
             python "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py" \
               .github/workflows/control-manual-run-delivery.yml \
               .github/workflows/control-zero-relay-dispatch.yml \
@@ -152,9 +163,7 @@ jobs:
             test -f tests/test_mission_contract_v1.py
             test -f tests/test_control_minimal_mission_feed_v1.py
 
-            # Strip the GitHub runner environment before executing private tests.
-            # No token, GITHUB_OUTPUT/ENV/PATH/SUMMARY file or other runner secret is
-            # intentionally exposed to candidate-controlled Python.
+            # Strip the remaining GitHub runner environment before executing private tests.
             env -i \
               PATH="$PATH" \
               HOME="$root/test-home" \
