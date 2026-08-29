@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Fail-closed validator for private Control workflow authority.
 
-Retired entrypoints must match the tiny inert retirement-stub shape. Workflow
-filenames stay exactly bound to trusted private `main`. Ordinary active workflows
-must remain byte-identical to trusted main. A small, explicit set of existing
-validation-only workflows may change during Minimal Core convergence, but only
-under a strict read-only/no-secrets/no-schedule authority policy.
+The complete workflow filename inventory is bound to trusted private `main`.
+Retired semantic entrypoints must satisfy the tiny inert retirement-stub shape.
+Every other active workflow must remain blob-identical to trusted main, except
+for seven one-time Minimal Core convergence migrations whose exact trusted-main
+source blob and frozen PR #208 target blob are pinned below. Once those target
+blobs become private main, the exception cannot be replayed.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Mapping
 
 
 class RetiredWorkflowError(ValueError):
@@ -27,20 +29,36 @@ RETIRED_WORKFLOW_PATHS = (
     ".github/workflows/control-zero-relay-provider-preflight.yml",
 )
 
-CONVERGENCE_VALIDATION_WORKFLOW_PATHS = (
-    ".github/workflows/audit-control-state-freshness.yml",
-    ".github/workflows/control-provider-preflight-bootstrap.yml",
-    ".github/workflows/validate-agentic-runtime.yml",
-    ".github/workflows/validate-provider-preflight-bootstrap.yml",
-    ".github/workflows/validate-terminal-worker-completion.yml",
-    ".github/workflows/validate-work-claim-lifecycle-standard.yml",
-    ".github/workflows/validate-zero-relay-runtime.yml",
-)
-
-_ALLOWED_CONVERGENCE_TRIGGERS = {
-    "pull_request",
-    "push",
-    "workflow_dispatch",
+# path -> (trusted private-main source blob, frozen PR #208 target blob)
+CONVERGENCE_WORKFLOW_TRANSITIONS: dict[str, tuple[str, str]] = {
+    ".github/workflows/audit-control-state-freshness.yml": (
+        "97462e16d722e69f6170068e2b9e7d11eaa7e0c4",
+        "eaab0e71bc7fcfcfe9aa0bf061e0bcd8c167be3c",
+    ),
+    ".github/workflows/control-provider-preflight-bootstrap.yml": (
+        "4fdb9663ce16da55de65f7466e1f200ade398b69",
+        "f021b705026dc18b5c6cf0323b0e97d913411ecc",
+    ),
+    ".github/workflows/validate-agentic-runtime.yml": (
+        "727d85aec8d029ccf826d2c4c6dd758ecb608dd4",
+        "ee98bd5a4c4378dea62890d22b65c99d7ee066c7",
+    ),
+    ".github/workflows/validate-provider-preflight-bootstrap.yml": (
+        "e804414ee380731db0d41cfdf43288460ab0aae5",
+        "d9ebd3f59a140be55863dee63ac118603e4d2835",
+    ),
+    ".github/workflows/validate-terminal-worker-completion.yml": (
+        "1554419e64b3da0eeecb0df858574bbf4876f1b1",
+        "984188d1d407c00588628977cfd0ae1801167804",
+    ),
+    ".github/workflows/validate-work-claim-lifecycle-standard.yml": (
+        "a926886b75b5c04df20d9bdf07a8ed380ff6664b",
+        "f2cb92f67e046ca8a346f259105119eae5b53c7c",
+    ),
+    ".github/workflows/validate-zero-relay-runtime.yml": (
+        "5f2325281fed4afbb58648cde4d893209a8bfedf",
+        "9ad04ce6d8775daf25030768f65573f14cef35c7",
+    ),
 }
 
 
@@ -89,10 +107,7 @@ def validate_retired_workflow(path: Path) -> None:
         for line in lines
         if line and not line.startswith(" ") and not line.startswith("#") and ":" in line
     ]
-    _require(
-        top_level == ["name", "on", "permissions", "jobs"],
-        "unexpected top-level workflow authority",
-    )
+    _require(top_level == ["name", "on", "permissions", "jobs"], "unexpected top-level workflow authority")
 
     try:
         on_index = lines.index("on:")
@@ -102,28 +117,16 @@ def validate_retired_workflow(path: Path) -> None:
         raise RetiredWorkflowError("missing canonical retirement section") from exc
 
     on_block = _block(lines, on_index, 0)
+    _require(_direct(on_block, 2) == ["workflow_dispatch:"], "only workflow_dispatch trigger is allowed")
     _require(
-        _direct(on_block, 2) == ["workflow_dispatch:"],
-        "only workflow_dispatch trigger is allowed",
-    )
-    _require(
-        not any(
-            line.strip() and not line.lstrip().startswith("#") and _indent(line) > 2
-            for line in on_block
-        ),
+        not any(line.strip() and not line.lstrip().startswith("#") and _indent(line) > 2 for line in on_block),
         "workflow_dispatch inputs/options are forbidden",
     )
 
     permissions_block = _block(lines, permissions_index, 0)
+    _require(_direct(permissions_block, 2) == ["contents: read"], "permissions must be exactly contents: read")
     _require(
-        _direct(permissions_block, 2) == ["contents: read"],
-        "permissions must be exactly contents: read",
-    )
-    _require(
-        not any(
-            line.strip() and not line.lstrip().startswith("#") and _indent(line) > 2
-            for line in permissions_block
-        ),
+        not any(line.strip() and not line.lstrip().startswith("#") and _indent(line) > 2 for line in permissions_block),
         "nested permission grants are forbidden",
     )
 
@@ -136,118 +139,31 @@ def validate_retired_workflow(path: Path) -> None:
         "retired job may contain only runner and steps",
     )
 
-    step_markers = [
-        line.strip()
-        for line in retired_block
-        if _indent(line) == 6 and line.strip().startswith("- ")
-    ]
-    _require(
-        len(step_markers) == 1 and step_markers[0].startswith("- name: "),
-        "exactly one rejection step is required",
-    )
+    step_markers = [line.strip() for line in retired_block if _indent(line) == 6 and line.strip().startswith("- ")]
+    _require(len(step_markers) == 1 and step_markers[0].startswith("- name: "), "exactly one rejection step is required")
 
     step_index = next(
-        i
-        for i in range(retired_index + 1, len(lines))
+        i for i in range(retired_index + 1, len(lines))
         if _indent(lines[i]) == 6 and lines[i].strip().startswith("- name: ")
     )
     step_block = _block(lines, step_index, 6)
-    _require(
-        _direct(step_block, 8) == ["shell: bash", "run: |"],
-        "rejection step may contain only bash shell and run block",
-    )
+    _require(_direct(step_block, 8) == ["shell: bash", "run: |"], "rejection step may contain only bash shell and run block")
 
     run_index = next(
-        i
-        for i in range(step_index + 1, len(lines))
+        i for i in range(step_index + 1, len(lines))
         if _indent(lines[i]) == 8 and lines[i].strip() == "run: |"
     )
-    run_block = _block(lines, run_index, 8)
-    commands = [
-        line.strip()
-        for line in run_block
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    commands = [line.strip() for line in _block(lines, run_index, 8) if line.strip() and not line.lstrip().startswith("#")]
     _require(len(commands) >= 2, "rejection run block is incomplete")
     _require(commands[0] == "set -euo pipefail", "rejection must start fail-fast")
     _require(commands[-1] == "exit 1", "rejection must terminate with exit 1")
     for command in commands[1:-1]:
-        _require(
-            re.fullmatch(r"echo '[^']*'", command) is not None,
-            "only one literal single-quoted explanatory echo is allowed per command",
-        )
-
-
-def validate_read_only_convergence_workflow(path: Path) -> None:
-    """Validate the authority envelope for a mutable validation-only workflow."""
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    _require("\t" not in text, "tabs are not allowed in convergence validation workflow")
-    _require("write-all" not in text, "write-all permission is forbidden")
-    _require(
-        not re.search(r"(?m)^\s*[A-Za-z0-9_-]+:\s*write\s*$", text),
-        "write permission is forbidden",
-    )
-    _require("${{ secrets." not in text, "secrets are forbidden in convergence validation workflow")
-    _require("${{ vars." not in text, "repository variables are forbidden in convergence validation workflow")
-    _require("${{ github.token }}" not in text, "explicit GitHub token use is forbidden")
-    _require("CONTROL_PLANE_GITHUB_TOKEN" not in text, "private token use is forbidden")
-    _require("persist-credentials: true" not in text, "checkout credentials may not persist")
-    _require("actions/upload-artifact" not in text, "artifact upload is forbidden")
-    _require("actions/download-artifact" not in text, "artifact download is forbidden")
-    _require(
-        re.search(r"(?i)\b(?:curl|wget|scp|rsync)\b", text) is None,
-        "network transfer command is forbidden",
-    )
-    _require(re.search(r"(?i)\bgit\s+push\b", text) is None, "git push is forbidden")
-    _require(re.search(r"(?i)\bgit\s+remote\b", text) is None, "git remote mutation is forbidden")
-
-    try:
-        on_index = lines.index("on:")
-        permissions_index = lines.index("permissions:")
-        lines.index("jobs:")
-    except ValueError as exc:
-        raise RetiredWorkflowError("missing convergence validation workflow section") from exc
-
-    permission_headers = [i for i, line in enumerate(lines) if line.strip() == "permissions:"]
-    _require(permission_headers == [permissions_index], "job/step permission overrides are forbidden")
-    permissions_block = _block(lines, permissions_index, 0)
-    _require(
-        _direct(permissions_block, 2) == ["contents: read"],
-        "permissions must be exactly contents: read",
-    )
-    _require(
-        not any(
-            line.strip() and not line.lstrip().startswith("#") and _indent(line) > 2
-            for line in permissions_block
-        ),
-        "nested permission grants are forbidden",
-    )
-
-    on_block = _block(lines, on_index, 0)
-    direct_triggers = _direct(on_block, 2)
-    trigger_names = {line.split(":", 1)[0] for line in direct_triggers if ":" in line}
-    _require(bool(trigger_names), "at least one workflow trigger is required")
-    _require(
-        trigger_names <= _ALLOWED_CONVERGENCE_TRIGGERS,
-        "convergence validation workflow has forbidden trigger authority",
-    )
-
-    checkout_count = text.count("uses: actions/checkout@")
-    _require(checkout_count >= 1, "convergence validation workflow must checkout source")
-    _require(
-        checkout_count == text.count("persist-credentials: false"),
-        "every checkout must disable persisted credentials",
-    )
+        _require(re.fullmatch(r"echo '[^']*'", command) is not None, "only literal single-quoted explanatory echoes are allowed")
 
 
 def _git(repo: Path, *args: str) -> str:
     try:
-        return subprocess.check_output(
-            ["git", "-C", str(repo), *args],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True, stderr=subprocess.DEVNULL).strip()
     except subprocess.CalledProcessError as exc:
         raise RetiredWorkflowError(f"git inspection failed: {' '.join(args)}") from exc
 
@@ -255,18 +171,7 @@ def _git(repo: Path, *args: str) -> str:
 def _workflow_tree(repo: Path, revision: str) -> dict[str, tuple[str, str]]:
     try:
         raw = subprocess.check_output(
-            [
-                "git",
-                "-C",
-                str(repo),
-                "ls-tree",
-                "-r",
-                "--full-tree",
-                "-z",
-                revision,
-                "--",
-                ".github/workflows",
-            ],
+            ["git", "-C", str(repo), "ls-tree", "-r", "--full-tree", "-z", revision, "--", ".github/workflows"],
             stderr=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as exc:
@@ -297,7 +202,7 @@ def validate_control_workflow_inventory(
     repo: Path,
     trusted_main_sha: str,
     retired_paths: tuple[str, ...] = RETIRED_WORKFLOW_PATHS,
-    mutable_validation_paths: tuple[str, ...] = CONVERGENCE_VALIDATION_WORKFLOW_PATHS,
+    transitions: Mapping[str, tuple[str, str]] = CONVERGENCE_WORKFLOW_TRANSITIONS,
 ) -> None:
     _require(repo.is_dir(), "candidate repository is missing")
     _require(re.fullmatch(r"[0-9a-f]{40}", trusted_main_sha) is not None, "invalid trusted main SHA")
@@ -310,25 +215,32 @@ def validate_control_workflow_inventory(
     _require(set(candidate) == set(trusted), "workflow filename inventory differs from trusted main")
 
     retired = set(retired_paths)
-    mutable = set(mutable_validation_paths)
     _require(retired <= set(candidate), "required retired workflow is missing")
-    _require(mutable <= set(candidate), "required convergence validation workflow is missing")
-    _require(retired.isdisjoint(mutable), "retired and mutable validation workflow sets overlap")
+    _require(set(transitions).isdisjoint(retired), "retired and migration workflow sets overlap")
 
     for path, candidate_identity in candidate.items():
         if path in retired:
             validate_retired_workflow(repo / path)
-        elif candidate_identity != trusted[path]:
-            _require(path in mutable, f"active workflow differs from trusted main: {path}")
-            validate_read_only_convergence_workflow(repo / path)
+            continue
+        if candidate_identity == trusted[path]:
+            continue
+
+        _require(path in transitions, f"active workflow differs from trusted main: {path}")
+        source_blob, target_blob = transitions[path]
+        _require(
+            trusted[path] == ("100644", source_blob),
+            f"migration source workflow identity differs from pinned trusted main: {path}",
+        )
+        _require(
+            candidate_identity == ("100644", target_blob),
+            f"migration target workflow identity differs from frozen candidate: {path}",
+        )
 
 
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[0] == "--repo":
-        repo = Path(argv[1])
-        trusted_main_sha = argv[2]
         try:
-            validate_control_workflow_inventory(repo, trusted_main_sha)
+            validate_control_workflow_inventory(Path(argv[1]), argv[2])
         except (OSError, RetiredWorkflowError) as exc:
             print(f"PRIVATE_CONTROL_WORKFLOW_VALIDATION=FAIL:{exc}", file=sys.stderr)
             return 1
@@ -336,10 +248,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     if not argv:
-        print(
-            "usage: validate_retired_control_workflows.py --repo <repo> <trusted-main-sha> | <workflow> [...]",
-            file=sys.stderr,
-        )
+        print("usage: validate_retired_control_workflows.py --repo <repo> <trusted-main-sha> | <workflow> [...]", file=sys.stderr)
         return 2
     try:
         for raw in argv:
