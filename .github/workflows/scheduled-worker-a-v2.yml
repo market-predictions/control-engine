@@ -1,6 +1,6 @@
 name: Control Minimal Core lifecycle actuator
 
-# CONTROL #206 / #207
+# CONTROL #206 / #207 / #82
 # Deterministic lifecycle plumbing only. This workflow never performs semantic
 # implementation, assurance, repair, integration, merge or release work.
 # The existing ChatGPT scheduled role workers are the worker wake surface;
@@ -26,6 +26,7 @@ jobs:
       (github.event_name != 'issue_comment' ||
        (github.event.comment.user.login == 'market-predictions' &&
         (github.event.comment.body == 'CONTROL_CORE_RECONCILE_V1' ||
+         github.event.comment.body == 'CONTROL_CORE_FEED_V1' ||
          startsWith(github.event.comment.body, 'CONTROL_CORE_CLAIM_V1 ') ||
          startsWith(github.event.comment.body, 'CONTROL_CORE_RECORD_V1 '))))
     runs-on: ubuntu-latest
@@ -67,6 +68,7 @@ jobs:
           python -m py_compile \
             control_engine/minimal_core.py \
             scripts/private_minimal_core_apply.py \
+            scripts/private_minimal_core_feed.py \
             scripts/project_integration_executor.py
 
       - name: Apply exact Minimal Core lifecycle command
@@ -85,6 +87,9 @@ jobs:
           case "$COMMENT_BODY" in
             CONTROL_CORE_RECONCILE_V1)
               python scripts/private_minimal_core_apply.py reconcile
+              ;;
+            CONTROL_CORE_FEED_V1)
+              python scripts/private_minimal_core_feed.py
               ;;
             "CONTROL_CORE_CLAIM_V1 A1"|"CONTROL_CORE_CLAIM_V1 A1 AUTO")
               python scripts/private_minimal_core_apply.py claim --worker-instance A1 --task-id AUTO
@@ -146,6 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           echo 'CONTROL_MINIMAL_CORE_V1=true'
+          echo 'CONTROL_MISSION_FEED_V1=DETERMINISTIC_PLUMBING_ONLY'
           echo 'GITHUB_ACTIONS_SEMANTIC_IMPLEMENTATION=false'
           echo 'GITHUB_ACTIONS_SEMANTIC_ASSURANCE=false'
           echo 'CONTROL_GITHUB_ROLE=DETERMINISTIC_LIFECYCLE_ONLY'
