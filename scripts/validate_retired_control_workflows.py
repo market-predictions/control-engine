@@ -45,6 +45,7 @@ def validate_retired_workflow(path: Path) -> None:
     lines = text.splitlines()
     _require("\t" not in text, "tabs are not allowed")
     _require("[RETIRED]" in lines[0] if lines else False, "name must declare [RETIRED]")
+    _require("${{" not in text, "GitHub Actions expressions are forbidden in retired stubs")
     _require("write-all" not in text, "write-all permission is forbidden")
     _require(not re.search(r"(?m)^\s*[A-Za-z0-9_-]+:\s*write\s*$", text), "write permission is forbidden")
     _require(not re.search(r"(?m)^\s*uses:\s*", text), "actions/uses steps are forbidden")
