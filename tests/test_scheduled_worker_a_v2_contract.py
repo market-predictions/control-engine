@@ -11,11 +11,11 @@ BOUNDARY = ROOT / "docs" / "PUBLIC_PRIVATE_BOUNDARY_V1.md"
 ACTUATOR = ROOT / "docs" / "PRIVATE_RUNTIME_ACTUATOR_V1.md"
 
 
-def test_workflow_is_deterministic_actuator_not_worker_scheduler() -> None:
+def test_workflow_is_deterministic_actuator_not_semantic_worker_scheduler() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "name: Control Minimal Core lifecycle actuator" in text
-    assert "schedule:" not in text
-    assert "cron:" not in text
+    assert text.count("schedule:") == 1
+    assert text.count("cron: '25 * * * *'") == 1
     assert "push:" not in text
     assert "workflow_dispatch:" in text
     assert "issue_comment:" in text
@@ -25,8 +25,12 @@ def test_workflow_is_deterministic_actuator_not_worker_scheduler() -> None:
     assert "persist-credentials: false" in text
     assert "actions/upload-artifact" not in text
     assert "actions/cache" not in text
+    assert "GITHUB_ACTIONS_DETERMINISTIC_FEED_SCHEDULE=true" in text
     assert "GITHUB_ACTIONS_WORKER_SCHEDULER=false" in text
     assert "CHATGPT_ROLE_WORKERS_WAKE=true" in text
+    scheduled_block = text.split('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', 1)[1].split("fi", 1)[0]
+    assert scheduled_block.index("private_minimal_core_apply.py reconcile") < scheduled_block.index("private_minimal_core_feed.py")
+    assert " claim " not in scheduled_block
 
 
 def test_workflow_has_private_state_credentials_but_no_semantic_provider_credentials() -> None:
