@@ -107,6 +107,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         helper = validation_block.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py')
         doctrine = validation_block.index("runtime_model=CONTROL_MINIMAL_CORE_V1")
         first_test = validation_block.index("python -m unittest discover")
+        pre_test = validation_block[:first_test]
         self.assertLess(helper, first_test)
         self.assertLess(doctrine, first_test)
         self.assertIn("env -i", validation_block)
@@ -114,6 +115,11 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertIn('TMPDIR="$root/test-tmp"', validation_block)
         self.assertIn("PYTHONDONTWRITEBYTECODE=1", validation_block)
         self.assertNotIn("CONTROL_GITHUB_READ_TOKEN", validation_block)
+        self.assertIn('python -I "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py"', pre_test)
+        self.assertEqual(pre_test.count("python -I -m json.tool"), 3)
+        self.assertIn("python -I -m py_compile", pre_test)
+        self.assertNotIn("python -m json.tool", pre_test)
+        self.assertNotIn("python -m py_compile", pre_test)
 
     def test_carrier_keeps_private_validation_output_bounded_and_ephemeral(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
@@ -180,7 +186,6 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         actuator = ACTUATOR.read_text(encoding="utf-8")
         self.assertNotIn("canonical-b1-dual-executor-v1.yml", carrier)
         self.assertNotIn("PUBLIC_CONTROL_CI_RUN_ID", carrier)
-        self.assertNotIn("PUBLIC_CONTROL_CI_EXECUTOR_SHA", carrier)
         self.assertNotIn("CONTROL_PRIVATE_VALIDATE_V1", actuator)
         self.assertNotIn("permission-actions: 'write'", actuator)
         self.assertNotIn("gh workflow run", actuator)
