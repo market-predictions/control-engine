@@ -173,15 +173,37 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _workflow_tree(repo: Path, revision: str) -> dict[str, tuple[str, str]]:
-    raw = _git(repo, "ls-tree", "-r", "--full-tree", revision, "--", ".github/workflows")
+    try:
+        raw = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "ls-tree",
+                "-r",
+                "--full-tree",
+                "-z",
+                revision,
+                "--",
+                ".github/workflows",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RetiredWorkflowError("git workflow tree inspection failed") from exc
+
     result: dict[str, tuple[str, str]] = {}
-    if not raw:
-        return result
-    for line in raw.splitlines():
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
         try:
-            meta, path = line.split("\t", 1)
-            mode, object_type, object_sha = meta.split(" ", 2)
-        except ValueError as exc:
+            meta, raw_path = record.split(b"\t", 1)
+            mode_raw, object_type_raw, object_sha_raw = meta.split(b" ", 2)
+            mode = mode_raw.decode("ascii")
+            object_type = object_type_raw.decode("ascii")
+            object_sha = object_sha_raw.decode("ascii")
+            path = raw_path.decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
             raise RetiredWorkflowError("unexpected git workflow tree entry") from exc
         if not path.endswith((".yml", ".yaml")):
             continue
