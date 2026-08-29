@@ -25,6 +25,7 @@ RUNTIME_REF = integration.CONTROL_RUNTIME_REF
 MAIN_REF = "main"
 QUEUE_REL = "control/DISPATCH_QUEUE.json"
 PRIVATE_FEED_REL = "tools/control_minimal_mission_feed_v1.py"
+PRIVATE_FEED_MODULE = "tools.control_minimal_mission_feed_v1"
 MISSION_DIR_REL = "control/missions"
 
 
@@ -85,7 +86,8 @@ def command_feed(token: str) -> int:
             result = integration._run(
                 [
                     sys.executable,
-                    str(feed_script),
+                    "-m",
+                    PRIVATE_FEED_MODULE,
                     "--mission-dir",
                     str(mission_dir),
                     "--queue",
