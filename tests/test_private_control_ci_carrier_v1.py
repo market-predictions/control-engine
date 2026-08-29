@@ -54,7 +54,7 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         capture_start = text.index("set +e")
         inner_fail_fast = text.index("set -euo pipefail", capture_start + len("set +e"))
         first_private_check = text.index("python -m py_compile", capture_start)
-        capture_end = text.index(')>"$log" 2>&1', capture_start)
+        capture_end = text.index(') >"$log" 2>&1', capture_start)
 
         self.assertLess(capture_start, inner_fail_fast)
         self.assertLess(inner_fail_fast, first_private_check)
