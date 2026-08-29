@@ -85,7 +85,7 @@ jobs:
           root="$RUNNER_TEMP/private-control-validation"
           repo="$root/control-plane"
           log="$root/private-validation.log"
-          mkdir -p "$repo"
+          mkdir -p "$repo" "$root/test-home" "$root/test-tmp"
           trap 'rm -rf "$root"' EXIT
 
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CONTROL_GITHUB_READ_TOKEN" | base64 -w0)"
@@ -105,14 +105,15 @@ jobs:
             set -euo pipefail
             cd "$repo"
 
-            python -m py_compile \
-              tools/control_minimal_mission_feed_v1.py \
-              tools/mission_contract_v1.py
-
-            test -f tests/test_mission_contract_v1.py
-            test -f tests/test_control_minimal_mission_feed_v1.py
-            python -m unittest discover -s tests -p 'test_mission_contract_v1.py' -v
-            python -m unittest discover -s tests -p 'test_control_minimal_mission_feed_v1.py' -v
+            # Trusted/static checks run before any candidate-controlled Python test.
+            # Candidate tests therefore cannot rewrite the trusted public validator
+            # or private source in-memory and make a later structural check pass.
+            python "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py" \
+              .github/workflows/control-manual-run-delivery.yml \
+              .github/workflows/control-zero-relay-dispatch.yml \
+              .github/workflows/control-zero-relay-implementation.yml \
+              .github/workflows/control-zero-relay-assurance.yml \
+              .github/workflows/control-zero-relay-provider-preflight.yml
 
             python -m json.tool control/missions/SOLIDSECURITY.mission.json >/dev/null
             python -m json.tool control/missions/SOLID_PRIVACY_PLATFORM.mission.json >/dev/null
@@ -142,12 +143,30 @@ jobs:
             ! grep -Fq '2. `control/CURRENT_STATE.md`' control/PROJECT_BOOTSTRAP.md
             ! grep -Fq '3. `control/NEXT_ACTIONS.md`' control/PROJECT_BOOTSTRAP.md
 
-            python "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py" \
-              .github/workflows/control-manual-run-delivery.yml \
-              .github/workflows/control-zero-relay-dispatch.yml \
-              .github/workflows/control-zero-relay-implementation.yml \
-              .github/workflows/control-zero-relay-assurance.yml \
-              .github/workflows/control-zero-relay-provider-preflight.yml
+            # Compilation does not execute candidate modules. The only candidate-
+            # controlled execution is the final focused unit-test phase below.
+            python -m py_compile \
+              tools/control_minimal_mission_feed_v1.py \
+              tools/mission_contract_v1.py
+
+            test -f tests/test_mission_contract_v1.py
+            test -f tests/test_control_minimal_mission_feed_v1.py
+
+            # Strip the GitHub runner environment before executing private tests.
+            # No token, GITHUB_OUTPUT/ENV/PATH/SUMMARY file or other runner secret is
+            # intentionally exposed to candidate-controlled Python.
+            env -i \
+              PATH="$PATH" \
+              HOME="$root/test-home" \
+              TMPDIR="$root/test-tmp" \
+              PYTHONDONTWRITEBYTECODE=1 \
+              python -m unittest discover -s tests -p 'test_mission_contract_v1.py' -v
+            env -i \
+              PATH="$PATH" \
+              HOME="$root/test-home" \
+              TMPDIR="$root/test-tmp" \
+              PYTHONDONTWRITEBYTECODE=1 \
+              python -m unittest discover -s tests -p 'test_control_minimal_mission_feed_v1.py' -v
           ) >"$log" 2>&1
           rc=$?
           set -e
