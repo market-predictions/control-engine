@@ -36,6 +36,12 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
     def test_carrier_is_private_read_only_exact_candidate_bound_and_credential_bounded(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
         top_permissions = text.split("permissions:", 1)[1].split("concurrency:", 1)[0]
+        fetch_block = text.split("- name: Fetch exact private candidate", 1)[1].split(
+            "- name: Validate exact private Control Minimal Core candidate without source leakage", 1
+        )[0]
+        validation_block = text.split(
+            "- name: Validate exact private Control Minimal Core candidate without source leakage", 1
+        )[1]
 
         self.assertIn("market-predictions/control-plane.git", text)
         self.assertIn("permission-contents: 'read'", text)
@@ -45,10 +51,14 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertNotIn("actions: write", top_permissions)
         self.assertNotIn("pull-requests: write", top_permissions)
         self.assertIn("[[ \"$CANDIDATE_SHA\" =~ ^[0-9a-f]{40}$ ]]", text)
-        self.assertIn("git -C \"$repo\" checkout --detach --quiet FETCH_HEAD", text)
-        self.assertIn("test \"$(git -C \"$repo\" rev-parse HEAD)\" = \"$CANDIDATE_SHA\"", text)
-        self.assertIn("unset CONTROL_GITHUB_READ_TOKEN auth_header", text)
-        self.assertLess(text.index("unset CONTROL_GITHUB_READ_TOKEN auth_header"), text.index("python -m py_compile"))
+        self.assertIn("git -C \"$repo\" checkout --detach --quiet FETCH_HEAD", fetch_block)
+        self.assertIn("test \"$(git -C \"$repo\" rev-parse HEAD)\" = \"$CANDIDATE_SHA\"", fetch_block)
+        self.assertIn("CONTROL_GITHUB_READ_TOKEN: ${{ steps.app-token.outputs.token }}", fetch_block)
+        self.assertNotIn("CONTROL_GITHUB_READ_TOKEN", validation_block)
+        self.assertLess(
+            text.index("- name: Fetch exact private candidate"),
+            text.index("- name: Validate exact private Control Minimal Core candidate without source leakage"),
+        )
 
     def test_carrier_runs_current_minimal_core_validation_profile_not_retired_runtime_tests(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
@@ -75,29 +85,35 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
 
     def test_carrier_captured_validation_subprocess_is_fail_fast(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
-        capture_start = text.index("set +e")
-        inner_fail_fast = text.index("set -euo pipefail", capture_start + len("set +e"))
-        first_private_check = text.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', capture_start)
-        capture_end = text.index(') >"$log" 2>&1', capture_start)
+        validation_block = text.split(
+            "- name: Validate exact private Control Minimal Core candidate without source leakage", 1
+        )[1]
+        capture_start = validation_block.index("set +e")
+        inner_fail_fast = validation_block.index("set -euo pipefail", capture_start + len("set +e"))
+        first_private_check = validation_block.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', capture_start)
+        capture_end = validation_block.index(') >"$log" 2>&1', capture_start)
 
         self.assertLess(capture_start, inner_fail_fast)
         self.assertLess(inner_fail_fast, first_private_check)
         self.assertLess(first_private_check, capture_end)
-        self.assertIn("rc=$?", text[capture_end:])
-        self.assertIn('if [ "$rc" -ne 0 ]; then', text[capture_end:])
+        self.assertIn("rc=$?", validation_block[capture_end:])
+        self.assertIn('if [ "$rc" -ne 0 ]; then', validation_block[capture_end:])
 
     def test_trusted_source_checks_run_before_sanitized_candidate_tests(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
-        helper = text.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py')
-        doctrine = text.index("runtime_model=CONTROL_MINIMAL_CORE_V1")
-        first_test = text.index("python -m unittest discover")
+        validation_block = text.split(
+            "- name: Validate exact private Control Minimal Core candidate without source leakage", 1
+        )[1]
+        helper = validation_block.index('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py')
+        doctrine = validation_block.index("runtime_model=CONTROL_MINIMAL_CORE_V1")
+        first_test = validation_block.index("python -m unittest discover")
         self.assertLess(helper, first_test)
         self.assertLess(doctrine, first_test)
-        self.assertIn("env -i", text)
-        self.assertIn('HOME="$root/test-home"', text)
-        self.assertIn('TMPDIR="$root/test-tmp"', text)
-        self.assertIn("PYTHONDONTWRITEBYTECODE=1", text)
-        self.assertLess(text.index("unset CONTROL_GITHUB_READ_TOKEN auth_header"), first_test)
+        self.assertIn("env -i", validation_block)
+        self.assertIn('HOME="$root/test-home"', validation_block)
+        self.assertIn('TMPDIR="$root/test-tmp"', validation_block)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", validation_block)
+        self.assertNotIn("CONTROL_GITHUB_READ_TOKEN", validation_block)
 
     def test_carrier_keeps_private_validation_output_bounded_and_ephemeral(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
