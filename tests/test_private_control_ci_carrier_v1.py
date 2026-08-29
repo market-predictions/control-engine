@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
-from scripts.validate_retired_control_workflows import RetiredWorkflowError, validate_retired_workflow
+from scripts.validate_retired_control_workflows import (
+    RetiredWorkflowError,
+    validate_control_workflow_inventory,
+    validate_retired_workflow,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CARRIER = ROOT / ".github" / "workflows" / "private-control-deterministic-validation-v1.yml"
 ACTUATOR = ROOT / ".github" / "workflows" / "scheduled-worker-a-v2.yml"
+VALIDATOR = ROOT / "scripts" / "validate_retired_control_workflows.py"
 
 VALID_RETIRED_STUB = """name: Example retired workflow [RETIRED]
 
@@ -58,6 +64,26 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertLess(
             text.index("- name: Fetch exact private candidate"),
             text.index("- name: Validate exact private Control Minimal Core candidate without source leakage"),
+        )
+
+    def test_carrier_fences_complete_private_workflow_authority_to_trusted_main(self) -> None:
+        text = CARRIER.read_text(encoding="utf-8")
+        fetch_block = text.split("- name: Fetch exact private candidate", 1)[1].split(
+            "- name: Validate exact private Control Minimal Core candidate without source leakage", 1
+        )[0]
+        validation_block = text.split(
+            "- name: Validate exact private Control Minimal Core candidate without source leakage", 1
+        )[1]
+
+        self.assertIn('fetch --quiet --depth=1 origin main', fetch_block)
+        self.assertIn('git -C "$repo" update-ref refs/control/trusted-main "$trusted_main_sha"', fetch_block)
+        self.assertIn('trusted-main-sha', fetch_block)
+        self.assertIn('trusted_main_sha="$(cat "$root/trusted-main-sha")"', validation_block)
+        self.assertIn('rev-parse refs/control/trusted-main', validation_block)
+        self.assertIn('--repo "$repo" "$trusted_main_sha"', validation_block)
+        self.assertLess(
+            validation_block.index('--repo "$repo" "$trusted_main_sha"'),
+            validation_block.index("python -m unittest discover"),
         )
 
     def test_carrier_runs_current_minimal_core_validation_profile_not_retired_runtime_tests(self) -> None:
@@ -132,8 +158,9 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
         self.assertIn("CONTROL_PRIVATE_DETERMINISTIC_VALIDATION=PASS profile=CONTROL_MINIMAL_CORE_V1 candidate_sha=$CANDIDATE_SHA", text)
 
     def test_carrier_uses_trusted_structural_retirement_validator(self) -> None:
-        text = CARRIER.read_text(encoding="utf-8")
-        self.assertIn('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', text)
+        carrier = CARRIER.read_text(encoding="utf-8")
+        validator = VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn('$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py', carrier)
         for path in (
             ".github/workflows/control-manual-run-delivery.yml",
             ".github/workflows/control-zero-relay-dispatch.yml",
@@ -141,10 +168,12 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
             ".github/workflows/control-zero-relay-assurance.yml",
             ".github/workflows/control-zero-relay-provider-preflight.yml",
         ):
-            self.assertIn(path, text)
-        self.assertNotIn("grep -Fq '[RETIRED]'", text)
-        self.assertNotIn("! grep -Fq 'contents: write'", text)
-        self.assertNotIn("! grep -Fq 'actions: write'", text)
+            self.assertIn(path, validator)
+        self.assertIn("workflow filename inventory differs from trusted main", validator)
+        self.assertIn("active workflow differs from trusted main", validator)
+        self.assertNotIn("grep -Fq '[RETIRED]'", carrier)
+        self.assertNotIn("! grep -Fq 'contents: write'", carrier)
+        self.assertNotIn("! grep -Fq 'actions: write'", carrier)
 
     def test_retirement_validator_rejects_authority_and_shell_escape_classes(self) -> None:
         mutations = {
@@ -167,6 +196,52 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
                 with self.subTest(name=name):
                     with self.assertRaises(RetiredWorkflowError):
                         validate_retired_workflow(path)
+
+    def test_workflow_inventory_rejects_extra_rename_and_active_mutation(self) -> None:
+        retired_rel = ".github/workflows/retired.yml"
+        active_rel = ".github/workflows/active.yml"
+        active_text = "name: Active\non: workflow_dispatch\njobs: {}\n"
+
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Control Test"], check=True)
+
+            retired = repo / retired_rel
+            active = repo / active_rel
+            retired.parent.mkdir(parents=True)
+            retired.write_text(VALID_RETIRED_STUB, encoding="utf-8")
+            active.write_text(active_text, encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", ".github/workflows"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "trusted"], check=True)
+            trusted_sha = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+
+            validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+
+            extra = repo / ".github/workflows/extra.yml"
+            extra.write_text(active_text, encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", str(extra)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "extra"], check=True)
+            with self.assertRaises(RetiredWorkflowError):
+                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+
+            subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", trusted_sha], check=True)
+            active.write_text(active_text + "permissions: write-all\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", str(active)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "mutate-active"], check=True)
+            with self.assertRaises(RetiredWorkflowError):
+                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
+
+            subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", trusted_sha], check=True)
+            renamed_rel = ".github/workflows/renamed.yml"
+            subprocess.run(["git", "-C", str(repo), "mv", retired_rel, renamed_rel], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "rename-retired"], check=True)
+            with self.assertRaises(RetiredWorkflowError):
+                validate_control_workflow_inventory(repo, trusted_sha, (retired_rel,))
 
     def test_carrier_has_connector_compatible_trusted_comment_launch(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
