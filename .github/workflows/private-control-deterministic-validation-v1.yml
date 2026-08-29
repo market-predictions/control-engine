@@ -73,7 +73,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Fetch exact private candidate
+      - name: Fetch exact private candidate and trusted main authority
         shell: bash
         env:
           CONTROL_GITHUB_READ_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -90,6 +90,15 @@ jobs:
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CONTROL_GITHUB_READ_TOKEN" | base64 -w0)"
           git -C "$repo" init -q
           git -C "$repo" remote add origin 'https://github.com/market-predictions/control-plane.git'
+
+          # Capture the current canonical private-main workflow authority before the
+          # candidate checkout. The subsequent validation step has no read token.
+          git -c "http.https://github.com/.extraheader=$auth_header" -C "$repo" fetch --quiet --depth=1 origin main
+          trusted_main_sha="$(git -C "$repo" rev-parse FETCH_HEAD)"
+          [[ "$trusted_main_sha" =~ ^[0-9a-f]{40}$ ]]
+          git -C "$repo" update-ref refs/control/trusted-main "$trusted_main_sha"
+          printf '%s\n' "$trusted_main_sha" > "$root/trusted-main-sha"
+
           git -c "http.https://github.com/.extraheader=$auth_header" -C "$repo" fetch --quiet --depth=1 origin "$CANDIDATE_SHA"
           git -C "$repo" checkout --detach --quiet FETCH_HEAD
           test "$(git -C "$repo" rev-parse HEAD)" = "$CANDIDATE_SHA"
@@ -104,8 +113,11 @@ jobs:
           root="$RUNNER_TEMP/private-control-validation"
           repo="$root/control-plane"
           log="$root/private-validation.log"
+          trusted_main_sha="$(cat "$root/trusted-main-sha")"
+          [[ "$trusted_main_sha" =~ ^[0-9a-f]{40}$ ]]
           test -d "$repo/.git"
           test "$(git -C "$repo" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C "$repo" rev-parse refs/control/trusted-main)" = "$trusted_main_sha"
           mkdir -p "$root/test-home" "$root/test-tmp"
           trap 'rm -rf "$root"' EXIT
 
@@ -118,15 +130,14 @@ jobs:
             set -euo pipefail
             cd "$repo"
 
-            # Trusted/static checks run before any candidate-controlled Python test.
+            # Before any candidate-controlled Python executes, compare the complete
+            # workflow authority to current trusted private main. Active workflows
+            # must retain identical names/modes/blob SHAs; the five canonical retired
+            # stubs may differ only if they still satisfy the inert structural contract.
             # Isolated mode prevents the candidate checkout from shadowing stdlib or
             # otherwise influencing trusted Python module resolution.
             python -I "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py" \
-              .github/workflows/control-manual-run-delivery.yml \
-              .github/workflows/control-zero-relay-dispatch.yml \
-              .github/workflows/control-zero-relay-implementation.yml \
-              .github/workflows/control-zero-relay-assurance.yml \
-              .github/workflows/control-zero-relay-provider-preflight.yml
+              --repo "$repo" "$trusted_main_sha"
 
             python -I -m json.tool control/missions/SOLIDSECURITY.mission.json >/dev/null
             python -I -m json.tool control/missions/SOLID_PRIVACY_PLATFORM.mission.json >/dev/null
