@@ -15,7 +15,8 @@ def test_workflow_is_deterministic_actuator_not_semantic_worker_scheduler() -> N
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "name: Control Minimal Core lifecycle actuator" in text
     assert text.count("schedule:") == 1
-    assert text.count("cron: '25 * * * *'") == 1
+    assert text.count("cron: '20 * * * *'") == 1
+    assert "cron: '25 * * * *'" not in text
     assert "push:" not in text
     assert "workflow_dispatch:" in text
     assert "issue_comment:" in text
@@ -28,6 +29,7 @@ def test_workflow_is_deterministic_actuator_not_semantic_worker_scheduler() -> N
     assert "GITHUB_ACTIONS_DETERMINISTIC_FEED_SCHEDULE=true" in text
     assert "GITHUB_ACTIONS_WORKER_SCHEDULER=false" in text
     assert "CHATGPT_ROLE_WORKERS_WAKE=true" in text
+    assert "Canonical semantic cadence is A1 :30, A2 :35, B1 :55 Europe/Amsterdam." in text
     scheduled_block = text.split('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', 1)[1].split("fi", 1)[0]
     assert scheduled_block.index("private_minimal_core_apply.py reconcile") < scheduled_block.index("private_minimal_core_feed.py")
     assert " claim " not in scheduled_block
