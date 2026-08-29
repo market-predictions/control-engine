@@ -31,21 +31,26 @@ def test_builtin_token_is_read_only_and_private_writes_use_ephemeral_app_token()
     assert "CONTROL_GITHUB_WRITE_TOKEN: ${{ secrets.CONTROL_GITHUB_WRITE_TOKEN }}" not in text
 
 
-def test_minimal_core_actuator_is_trusted_bounded_and_not_a_scheduler() -> None:
+def test_minimal_core_actuator_is_trusted_bounded_and_not_a_semantic_worker_scheduler() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "schedule:" not in text
-    assert "cron:" not in text
+    assert text.count("schedule:") == 1
+    assert text.count("cron: '25 * * * *'") == 1
     assert "push:" not in text
     assert "workflow_dispatch:" in text
     assert "issue_comment:" in text
     assert "github.event.comment.user.login == 'market-predictions'" in text
     assert "CONTROL_CORE_RECONCILE_V1" in text
+    assert "CONTROL_CORE_FEED_V1" in text
     assert "CONTROL_CORE_CLAIM_V1 " in text
     assert "CONTROL_CORE_RECORD_V1 " in text
     assert "ref: main" in text
     assert "pull_request:" not in text
+    assert "GITHUB_ACTIONS_DETERMINISTIC_FEED_SCHEDULE=true" in text
     assert "GITHUB_ACTIONS_WORKER_SCHEDULER=false" in text
     assert "CHATGPT_ROLE_WORKERS_WAKE=true" in text
+    scheduled_block = text.split('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', 1)[1].split("fi", 1)[0]
+    assert scheduled_block.index("private_minimal_core_apply.py reconcile") < scheduled_block.index("private_minimal_core_feed.py")
+    assert " claim " not in scheduled_block
 
 
 def test_public_workflow_contains_no_semantic_compute_or_provider_credentials() -> None:
