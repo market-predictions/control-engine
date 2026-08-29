@@ -58,8 +58,9 @@ def test_minimal_bridge_replaces_three_active_lifecycle_surfaces_with_one_queue_
     assert "control/claim-completions" not in bridge
     assert "CONTROL_GITHUB_APP_PRIVATE_KEY" in workflow
     assert "permission-contents: 'write'" in workflow
-    assert "schedule:" not in workflow
-    assert "cron:" not in workflow
+    assert workflow.count("schedule:") == 1
+    assert workflow.count("cron: '25 * * * *'") == 1
+    assert "GITHUB_ACTIONS_DETERMINISTIC_FEED_SCHEDULE=true" in workflow
     assert "GITHUB_ACTIONS_WORKER_SCHEDULER=false" in workflow
     assert "CHATGPT_ROLE_WORKERS_WAKE=true" in workflow
     for token in (
