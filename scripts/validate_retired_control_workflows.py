@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fail-closed validator for private Control workflow authority.
 
-Retired entrypoints must match the tiny inert retirement-stub shape. Every other
-workflow is active authority and must remain byte-identical to trusted private
-`main`; candidates may not add, remove, rename or mutate active workflows through
-this deterministic validation carrier.
+Retired entrypoints must match the tiny inert retirement-stub shape. Workflow
+filenames stay exactly bound to trusted private `main`. Ordinary active workflows
+must remain byte-identical to trusted main. A small, explicit set of existing
+validation-only workflows may change during Minimal Core convergence, but only
+under a strict read-only/no-secrets/no-schedule authority policy.
 """
 from __future__ import annotations
 
@@ -25,6 +26,22 @@ RETIRED_WORKFLOW_PATHS = (
     ".github/workflows/control-zero-relay-assurance.yml",
     ".github/workflows/control-zero-relay-provider-preflight.yml",
 )
+
+CONVERGENCE_VALIDATION_WORKFLOW_PATHS = (
+    ".github/workflows/audit-control-state-freshness.yml",
+    ".github/workflows/control-provider-preflight-bootstrap.yml",
+    ".github/workflows/validate-agentic-runtime.yml",
+    ".github/workflows/validate-provider-preflight-bootstrap.yml",
+    ".github/workflows/validate-terminal-worker-completion.yml",
+    ".github/workflows/validate-work-claim-lifecycle-standard.yml",
+    ".github/workflows/validate-zero-relay-runtime.yml",
+)
+
+_ALLOWED_CONVERGENCE_TRIGGERS = {
+    "pull_request",
+    "push",
+    "workflow_dispatch",
+}
 
 
 def _require(condition: bool, message: str) -> None:
@@ -161,6 +178,69 @@ def validate_retired_workflow(path: Path) -> None:
         )
 
 
+def validate_read_only_convergence_workflow(path: Path) -> None:
+    """Validate the authority envelope for a mutable validation-only workflow."""
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    _require("\t" not in text, "tabs are not allowed in convergence validation workflow")
+    _require("write-all" not in text, "write-all permission is forbidden")
+    _require(
+        not re.search(r"(?m)^\s*[A-Za-z0-9_-]+:\s*write\s*$", text),
+        "write permission is forbidden",
+    )
+    _require("${{ secrets." not in text, "secrets are forbidden in convergence validation workflow")
+    _require("${{ vars." not in text, "repository variables are forbidden in convergence validation workflow")
+    _require("${{ github.token }}" not in text, "explicit GitHub token use is forbidden")
+    _require("CONTROL_PLANE_GITHUB_TOKEN" not in text, "private token use is forbidden")
+    _require("persist-credentials: true" not in text, "checkout credentials may not persist")
+    _require("actions/upload-artifact" not in text, "artifact upload is forbidden")
+    _require("actions/download-artifact" not in text, "artifact download is forbidden")
+    _require(
+        re.search(r"(?i)\b(?:curl|wget|scp|rsync)\b", text) is None,
+        "network transfer command is forbidden",
+    )
+    _require(re.search(r"(?i)\bgit\s+push\b", text) is None, "git push is forbidden")
+    _require(re.search(r"(?i)\bgit\s+remote\b", text) is None, "git remote mutation is forbidden")
+
+    try:
+        on_index = lines.index("on:")
+        permissions_index = lines.index("permissions:")
+        lines.index("jobs:")
+    except ValueError as exc:
+        raise RetiredWorkflowError("missing convergence validation workflow section") from exc
+
+    permission_headers = [i for i, line in enumerate(lines) if line.strip() == "permissions:"]
+    _require(permission_headers == [permissions_index], "job/step permission overrides are forbidden")
+    permissions_block = _block(lines, permissions_index, 0)
+    _require(
+        _direct(permissions_block, 2) == ["contents: read"],
+        "permissions must be exactly contents: read",
+    )
+    _require(
+        not any(
+            line.strip() and not line.lstrip().startswith("#") and _indent(line) > 2
+            for line in permissions_block
+        ),
+        "nested permission grants are forbidden",
+    )
+
+    on_block = _block(lines, on_index, 0)
+    direct_triggers = _direct(on_block, 2)
+    trigger_names = {line.split(":", 1)[0] for line in direct_triggers if ":" in line}
+    _require(bool(trigger_names), "at least one workflow trigger is required")
+    _require(
+        trigger_names <= _ALLOWED_CONVERGENCE_TRIGGERS,
+        "convergence validation workflow has forbidden trigger authority",
+    )
+
+    checkout_count = text.count("uses: actions/checkout@")
+    _require(checkout_count >= 1, "convergence validation workflow must checkout source")
+    _require(
+        checkout_count == text.count("persist-credentials: false"),
+        "every checkout must disable persisted credentials",
+    )
+
+
 def _git(repo: Path, *args: str) -> str:
     try:
         return subprocess.check_output(
@@ -217,6 +297,7 @@ def validate_control_workflow_inventory(
     repo: Path,
     trusted_main_sha: str,
     retired_paths: tuple[str, ...] = RETIRED_WORKFLOW_PATHS,
+    mutable_validation_paths: tuple[str, ...] = CONVERGENCE_VALIDATION_WORKFLOW_PATHS,
 ) -> None:
     _require(repo.is_dir(), "candidate repository is missing")
     _require(re.fullmatch(r"[0-9a-f]{40}", trusted_main_sha) is not None, "invalid trusted main SHA")
@@ -229,16 +310,17 @@ def validate_control_workflow_inventory(
     _require(set(candidate) == set(trusted), "workflow filename inventory differs from trusted main")
 
     retired = set(retired_paths)
+    mutable = set(mutable_validation_paths)
     _require(retired <= set(candidate), "required retired workflow is missing")
+    _require(mutable <= set(candidate), "required convergence validation workflow is missing")
+    _require(retired.isdisjoint(mutable), "retired and mutable validation workflow sets overlap")
 
     for path, candidate_identity in candidate.items():
         if path in retired:
             validate_retired_workflow(repo / path)
-        else:
-            _require(
-                candidate_identity == trusted[path],
-                f"active workflow differs from trusted main: {path}",
-            )
+        elif candidate_identity != trusted[path]:
+            _require(path in mutable, f"active workflow differs from trusted main: {path}")
+            validate_read_only_convergence_workflow(repo / path)
 
 
 def main(argv: list[str]) -> int:
