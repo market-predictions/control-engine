@@ -11,7 +11,8 @@ class PrivateMinimalCoreFeedCarrierTests(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("github.event.comment.body == 'CONTROL_CORE_FEED_V1'", text)
         self.assertIn("CONTROL_CORE_FEED_V1)\n              python scripts/private_minimal_core_feed.py", text)
-        self.assertEqual(text.count("cron: '25 * * * *'"), 1)
+        self.assertEqual(text.count("cron: '20 * * * *'"), 1)
+        self.assertNotIn("cron: '25 * * * *'", text)
         self.assertIn('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', text)
         scheduled_block = text.split('if [ "${GITHUB_EVENT_NAME}" = schedule ]; then', 1)[1].split("fi", 1)[0]
         self.assertLess(
@@ -23,6 +24,7 @@ class PrivateMinimalCoreFeedCarrierTests(unittest.TestCase):
         self.assertIn("GITHUB_ACTIONS_WORKER_SCHEDULER=false", text)
         self.assertIn("GITHUB_ACTIONS_SEMANTIC_IMPLEMENTATION=false", text)
         self.assertIn("GITHUB_ACTIONS_SEMANTIC_ASSURANCE=false", text)
+        self.assertIn("Canonical semantic cadence is A1 :30, A2 :35, B1 :55 Europe/Amsterdam.", text)
 
     def test_carrier_executes_private_main_policy_against_only_runtime_queue(self):
         text = SCRIPT.read_text(encoding="utf-8")
