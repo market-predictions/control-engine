@@ -131,11 +131,12 @@ jobs:
             cd "$repo"
 
             # Before any candidate-controlled Python executes, compare the complete
-            # workflow authority to current trusted private main. Active workflows
-            # must retain identical names/modes/blob SHAs; the five canonical retired
-            # stubs may differ only if they still satisfy the inert structural contract.
-            # Isolated mode prevents the candidate checkout from shadowing stdlib or
-            # otherwise influencing trusted Python module resolution.
+            # workflow filename authority to current trusted private main. Ordinary
+            # active workflows retain exact trusted-main blobs. Only the explicitly
+            # named Minimal Core convergence validators may change, and then only
+            # inside the trusted read-only/no-secrets/no-schedule authority envelope.
+            # The five canonical retired stubs remain structurally inert. Isolated
+            # mode prevents candidate-controlled Python module resolution here.
             python -I "$GITHUB_WORKSPACE/scripts/validate_retired_control_workflows.py" \
               --repo "$repo" "$trusted_main_sha"
 
