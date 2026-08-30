@@ -100,6 +100,13 @@ def test_trusted_public_schemas_are_valid_draft_2020_12_contracts():
     assert authority["additionalProperties"] is False
 
 
+def test_schema_mirror_comparison_is_byte_exact_not_python_value_equal():
+    trusted = b'{"minItems":1}\n'
+    validator.require_exact_schema_bytes(trusted, trusted, label="Mission")
+    with pytest.raises(validator.ValidationError, match="byte-for-byte"):
+        validator.require_exact_schema_bytes(b'{"minItems":true}\n', trusted, label="Mission")
+
+
 def test_trusted_schema_rejects_missing_required_mission_contract_fields():
     mission_schema = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
     with pytest.raises(validator.ValidationError, match="violates trusted schema"):
