@@ -169,17 +169,18 @@ def gap_satisfied_by_fact(queue: Mapping[str, Any], mission_id: str, revision: s
 def feed(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], now: datetime) -> tuple[dict[str, Any], list[str]]:
     """Run the existing pure Feed with ephemeral shadows for inert migration facts.
 
-    Shadows exist only in memory to reuse the proven dependency selector and are
-    stripped before the queue is returned/persisted. The canonical queue never
-    retains legacy lifecycle task objects after migration.
+    Each shadow uses the exact deterministic root id so Feed treats that migrated
+    gap as already observed. It also has the legacy completed-integration shape
+    so downstream dependencies see the fact as satisfied. Shadows exist only in
+    memory and are removed before the queue is returned or persisted.
     """
     q = deepcopy(queue)
     core.validate(q)
     validate_migration_facts(q)
     shadows: list[dict[str, Any]] = []
-    for index, fact in enumerate(q.get("migration_facts", [])):
+    for fact in q.get("migration_facts", []):
         shadows.append({
-            "task_id": f"{core.deterministic_root_id(fact['mission_id'], fact['mission_revision'], fact['gap_id'])}--MIGRATION-SHADOW-{index}",
+            "task_id": core.deterministic_root_id(fact["mission_id"], fact["mission_revision"], fact["gap_id"]),
             "operation": "PROJECT_INTEGRATION",
             "status": "TERMINAL",
             "outcome": "COMPLETED",
