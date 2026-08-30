@@ -1,0 +1,88 @@
+name: Validate Private Control V3.1
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: >-
+      github.repository == 'market-predictions/control-engine' &&
+      github.event.issue.number == 87 &&
+      github.event.comment.user.login == 'market-predictions' &&
+      startsWith(github.event.comment.body, 'CONTROL_PRIVATE_V31_VALIDATE ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted validator from public main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Parse exact private candidate SHA
+        id: candidate
+        shell: bash
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          sha="${BODY#CONTROL_PRIVATE_V31_VALIDATE }"
+          sha="$(printf '%s' "$sha" | tr -d '[:space:]')"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight GitHub App read capability
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create read-only private candidate capability
+        id: private-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: read
+
+      - name: Checkout exact private candidate as data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: market-predictions/control-plane
+          ref: ${{ steps.candidate.outputs.sha }}
+          token: ${{ steps.private-token.outputs.token }}
+          path: private-candidate
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Checkout current private main as comparison data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: market-predictions/control-plane
+          ref: main
+          token: ${{ steps.private-token.outputs.token }}
+          path: private-base
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate candidate with trusted public code only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/validate_private_control_v31.py
+          python scripts/validate_private_control_v31.py private-candidate private-base
+
+      - name: Prove read-only carrier boundary
+        if: always()
+        run: |
+          echo 'CONTROL_PRIVATE_CANDIDATE_EXECUTION=false'
+          echo 'CONTROL_PRIVATE_RUNTIME_MUTATION=false'
+          echo 'CONTROL_PRIVATE_VALIDATOR_SOURCE=PUBLIC_MAIN'
