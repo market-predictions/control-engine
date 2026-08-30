@@ -15,7 +15,7 @@
   ],
   "properties": {
     "protocol_id": {"const": "CONTROL_REPOSITORY_AUTHORITY_V3_1"},
-    "repository": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+    "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
     "integration_policy": {"enum": ["AUTO_AFTER_PASS", "HOLD_AFTER_PASS"]},
     "control_auto_profile": {"enum": ["CONTROL_AUTO_V1", "NONE"]},
     "integration_enabled": {"type": "boolean"},
