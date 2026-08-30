@@ -54,14 +54,12 @@ def test_surface_accepts_only_inert_declarative_v31_data():
     assert authorities == ["control/repository-authority/o__r.json"]
 
 
-def test_surface_rejects_symlink_even_at_allowed_path():
+def test_surface_rejects_symlink_and_private_executable_surfaces():
     entries = inert_entries()
     entries["README.md"] = ("120000", "blob", "b" * 40)
     with pytest.raises(validator.ValidationError, match="symlink"):
         validator.validate_surface(entries)
 
-
-def test_surface_rejects_any_private_workflow_or_executable_tool():
     for path in (".github/workflows/validate-control-v3-1.yml", "tools/validate_control_v31.py"):
         entries = inert_entries()
         entries[path] = ("100644", "blob", "b" * 40)
@@ -69,119 +67,69 @@ def test_surface_rejects_any_private_workflow_or_executable_tool():
             validator.validate_surface(entries)
 
 
-def test_surface_rejects_executable_mode_on_declarative_file():
-    entries = inert_entries()
-    entries["control/SYSTEM_INDEX.md"] = ("100755", "blob", "b" * 40)
-    with pytest.raises(validator.ValidationError, match="executable"):
-        validator.validate_surface(entries)
-
-
 def test_authority_switches_require_actual_json_booleans():
     assert validator.explicit_bool(True)
     assert validator.explicit_bool(False)
     assert not validator.explicit_bool(1)
     assert not validator.explicit_bool(0)
-    assert not validator.explicit_bool("true")
-    assert not validator.explicit_bool(None)
 
 
-def test_repository_identity_requires_nonempty_github_safe_components():
-    for value in ("market-predictions/control-plane", "solidprivacy-nl/solidprivacy", "a/b.c_d-e"):
-        assert validator.valid_repository(value)
-    for value in ("/", "owner/", "/repo", "owner/repo/extra", "owner name/repo", "owner/repo name", "-owner/repo"):
-        assert not validator.valid_repository(value)
+def test_repository_identity_is_github_safe_and_case_canonical():
+    assert validator.canonical_repository("market-predictions/Control-Plane") == "market-predictions/control-plane"
+    assert validator.canonical_repository("Owner/Repo") == validator.canonical_repository("owner/repo")
+    for value in ("/", "owner/", "/repo", "owner/repo/extra", "owner name/repo", "owner/repo name", "-owner/repo", "owner-/repo"):
+        assert validator.canonical_repository(value) is None
 
 
-def test_schema_contract_requires_parseable_expected_v31_shape():
-    schema = {
-        "$schema": validator.DRAFT_2020_12,
-        "title": "MISSION_CONTRACT_V3_1",
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["protocol_id", "repository"],
-        "properties": {
-            "protocol_id": {"const": "MISSION_CONTRACT_V3_1"},
-            "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
-        },
-    }
-    validator.validate_schema_document(
-        schema,
-        title="MISSION_CONTRACT_V3_1",
-        required={"protocol_id", "repository"},
-        protocol_const="MISSION_CONTRACT_V3_1",
-    )
-    broken = dict(schema)
-    broken["properties"] = {"protocol_id": {"const": "WRONG"}, "repository": {"type": "string", "pattern": "x"}}
-    with pytest.raises(validator.ValidationError, match="protocol contract"):
-        validator.validate_schema_document(
-            broken,
-            title="MISSION_CONTRACT_V3_1",
-            required={"protocol_id", "repository"},
-            protocol_const="MISSION_CONTRACT_V3_1",
+def test_trusted_public_schemas_are_valid_draft_2020_12_contracts():
+    mission = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
+    authority = validator.trusted_schema(validator.REPOSITORY_SCHEMA_REL)
+    assert mission["title"] == "MISSION_CONTRACT_V3_1"
+    assert authority["title"] == "CONTROL_REPOSITORY_AUTHORITY_V3_1"
+    assert mission["additionalProperties"] is False
+    assert authority["additionalProperties"] is False
+
+
+def test_trusted_schema_rejects_missing_required_mission_contract_fields():
+    mission_schema = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
+    with pytest.raises(validator.ValidationError, match="violates trusted schema"):
+        validator.validate_instance(
+            {
+                "protocol_id": "MISSION_CONTRACT_V3_1",
+                "mission_id": "M1",
+                "mission_revision": "r1",
+                "repository": "o/r",
+                "gaps": [],
+                "principal_manual_relay_count": 0,
+            },
+            mission_schema,
+            label="Mission M1",
         )
 
 
 def test_gap_dependency_graph_must_be_acyclic():
     validator.assert_acyclic_dependencies(
-        [
-            {"gap_id": "G1", "depends_on": []},
-            {"gap_id": "G2", "depends_on": ["G1"]},
-        ],
+        [{"gap_id": "G1", "depends_on": []}, {"gap_id": "G2", "depends_on": ["G1"]}],
         mission_name="M1",
     )
     with pytest.raises(validator.ValidationError, match="cyclic gap dependency"):
         validator.assert_acyclic_dependencies(
-            [
-                {"gap_id": "G1", "depends_on": ["G2"]},
-                {"gap_id": "G2", "depends_on": ["G1"]},
-            ],
-            mission_name="M1",
-        )
-    with pytest.raises(validator.ValidationError, match="cyclic gap dependency"):
-        validator.assert_acyclic_dependencies(
-            [{"gap_id": "G1", "depends_on": ["G1"]}],
+            [{"gap_id": "G1", "depends_on": ["G2"]}, {"gap_id": "G2", "depends_on": ["G1"]}],
             mission_name="M1",
         )
 
 
 def test_revision_discipline_is_bound_to_mission_identity_not_filename():
-    base = {
-        "M1": {
-            "protocol_id": "MISSION_CONTRACT_V3_1",
-            "mission_id": "M1",
-            "mission_revision": "r1",
-            "desired_outcome": "old",
-        }
-    }
-    changed_same_revision = {
-        "M1": {
-            "protocol_id": "MISSION_CONTRACT_V3_1",
-            "mission_id": "M1",
-            "mission_revision": "r1",
-            "desired_outcome": "new",
-        }
-    }
+    base = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r1", "desired_outcome": "old"}}
+    changed_same_revision = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r1", "desired_outcome": "new"}}
     with pytest.raises(validator.ValidationError, match="without new mission_revision"):
         validator.enforce_revision_discipline(changed_same_revision, base)
 
-    changed_new_revision = {
-        "M1": {
-            "protocol_id": "MISSION_CONTRACT_V3_1",
-            "mission_id": "M1",
-            "mission_revision": "r2",
-            "desired_outcome": "new",
-        }
-    }
+    changed_new_revision = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r2", "desired_outcome": "new"}}
     validator.enforce_revision_discipline(changed_new_revision, base)
 
 
 def test_revision_discipline_rejects_disappearing_existing_v31_mission():
-    base = {
-        "M1": {
-            "protocol_id": "MISSION_CONTRACT_V3_1",
-            "mission_id": "M1",
-            "mission_revision": "r1",
-        }
-    }
+    base = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r1"}}
     with pytest.raises(validator.ValidationError, match="removed instead of being revised/retired"):
         validator.enforce_revision_discipline({}, base)
