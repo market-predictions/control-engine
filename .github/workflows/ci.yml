@@ -50,7 +50,7 @@ jobs:
           PY
       - name: Compile active engine
         run: |
-          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/assurance_capsule.py control_engine/kernel_v31.py scripts/control_kernel_v31.py
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/assurance_capsule.py control_engine/kernel_v31.py control_engine/migration_v31.py scripts/control_kernel_v31.py
           bash -n scripts/github_app_preflight.sh
       - name: Verify immutable consumer bundle
         run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort)" = $'ci.yml\ncontrol-kernel-v3-1.yml'
-          test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nassurance_capsule.py\nbundle.py\nkernel_v31.py\ntimeline.py'
+          test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nassurance_capsule.py\nbundle.py\nkernel_v31.py\nmigration_v31.py\ntimeline.py'
           test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh'
           forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' \) -print)"
           test -z "$forbidden"
