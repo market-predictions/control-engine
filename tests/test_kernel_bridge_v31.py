@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 
@@ -11,6 +12,8 @@ spec = importlib.util.spec_from_file_location("control_kernel_v31", SCRIPT)
 bridge = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(bridge)
+
+NOW = datetime(2026, 8, 30, 22, 0, tzinfo=timezone.utc)
 
 
 def authority(*, policy="AUTO_AFTER_PASS", enabled=True, profile="CONTROL_AUTO_V1", checks=()):
@@ -37,6 +40,34 @@ def task():
     }
 
 
+def integration_task():
+    return {
+        **task(),
+        "lifecycle_model": bridge.core.PROTOCOL_ID,
+        "task_id": "MISSION-M1-r1-G1--ASSURANCE-aaaaaaaaaaaa",
+        "operation": "ASSURANCE",
+        "role": bridge.core.ROLE_B,
+        "status": bridge.core.STATUS_TERMINAL,
+        "outcome": "PASS",
+        "claim": None,
+        "result_ref": "control/worker-results/result.json",
+        "terminal_run_id": "run-b1",
+        "attempt_count": 1,
+        "last_execution_error": None,
+        "principal_manual_relay_count": 0,
+        "created_at": "2026-08-30T20:00:00Z",
+        "updated_at": "2026-08-30T21:00:00Z",
+        "candidate": {
+            "candidate_sha": "a" * 40,
+            "candidate_pr_number": 7,
+            "candidate_head_branch": "control/candidate",
+            "expected_base_branch": "main",
+            "expected_base_sha": "b" * 40,
+        },
+        "integration_state": "PENDING",
+    }
+
+
 def mission_wrapper():
     return {
         "mission": {
@@ -51,13 +82,12 @@ def mission_wrapper():
 
 
 def test_live_repository_authority_blob_change_does_not_revoke_semantic_claim_authority():
-    # The task keeps its frozen digest. Current repository authority may change to
-    # a more restrictive document without forcing re-feed or invalidating intent.
     bridge._assert_live_task_authority(task(), [mission_wrapper()], {"o/r": authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")})
 
 
 def test_integration_requires_frozen_and_live_auto_authority():
     t = task()
+    assert bridge._frozen_integration_authorized(t, authority()) is True
     assert bridge._integration_authorized(t, authority(), authority()) is True
     assert bridge._integration_authorized(t, authority(policy="HOLD_AFTER_PASS"), authority()) is False
     assert bridge._integration_authorized(t, authority(), authority(policy="HOLD_AFTER_PASS")) is False
@@ -70,6 +100,7 @@ def test_integration_requires_frozen_and_live_auto_authority():
 def test_live_auto_cannot_expand_task_frozen_hold():
     t = task()
     t["integration_policy"] = "HOLD_AFTER_PASS"
+    assert bridge._frozen_integration_authorized(t, authority()) is False
     assert bridge._integration_authorized(t, authority(), authority()) is False
 
 
@@ -84,3 +115,79 @@ def test_required_checks_fail_closed_on_invalid_shape():
     bad["required_check_runs"] = "ci/a"
     with pytest.raises(bridge.BridgeError, match="required checks"):
         bridge._effective_required_checks(bad, authority())
+
+
+def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monkeypatch):
+    t = integration_task()
+    queue = {"tasks": [t]}
+    live = authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")
+    frozen = authority()
+    calls = []
+
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: frozen)
+
+    def fake_api(_token, method, path, body=None):
+        calls.append((method, path, body))
+        assert method == "GET"
+        return {
+            "state": "closed",
+            "merged": True,
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "main"},
+            "merge_commit_sha": "c" * 40,
+        }
+
+    monkeypatch.setattr(bridge, "_api", fake_api)
+    marked = {}
+
+    def fake_mark(queue_arg, *, assurance_task_id, merge_sha, merged_at):
+        marked.update(task_id=assurance_task_id, merge_sha=merge_sha, merged_at=merged_at)
+        return {**queue_arg, "reconciled": True}
+
+    monkeypatch.setattr(bridge.core, "mark_integrated", fake_mark)
+    q, report = bridge._integrate_one(queue, {"o/r": live}, "control", "target", "o/r", NOW)
+
+    assert q["reconciled"] is True
+    assert report["integration"] == "RECONCILED_MERGED"
+    assert report["merge_sha"] == "c" * 40
+    assert marked["task_id"] == t["task_id"]
+    assert len(calls) == 1
+
+
+def test_already_merged_candidate_never_legitimizes_missing_frozen_auto_authority(monkeypatch):
+    t = integration_task()
+    queue = {"tasks": [t]}
+    frozen = authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: frozen)
+    monkeypatch.setattr(
+        bridge,
+        "_api",
+        lambda *_args, **_kwargs: {
+            "state": "closed",
+            "merged": True,
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "main"},
+            "merge_commit_sha": "c" * 40,
+        },
+    )
+    with pytest.raises(bridge.BridgeError, match="lacks frozen AUTO authority"):
+        bridge._integrate_one(queue, {"o/r": authority()}, "control", "target", "o/r", NOW)
+
+
+def test_already_merged_candidate_requires_exact_frozen_identity(monkeypatch):
+    t = integration_task()
+    queue = {"tasks": [t]}
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
+    monkeypatch.setattr(
+        bridge,
+        "_api",
+        lambda *_args, **_kwargs: {
+            "state": "closed",
+            "merged": True,
+            "head": {"sha": "d" * 40},
+            "base": {"ref": "main"},
+            "merge_commit_sha": "c" * 40,
+        },
+    )
+    with pytest.raises(bridge.BridgeError, match="exact PASS candidate"):
+        bridge._integrate_one(queue, {"o/r": authority()}, "control", "target", "o/r", NOW)
