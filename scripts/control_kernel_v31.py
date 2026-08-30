@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from control_engine import kernel_v31 as core
+from control_engine import migration_v31 as migration
 
 CONTROL_REPOSITORY = "market-predictions/control-plane"
 RUNTIME_REF = "control-runtime-state"
@@ -188,6 +189,13 @@ def _assert_live_task_authority(task: dict[str, Any], missions: list[dict[str, A
         raise BridgeError("task frozen Mission authority digest no longer matches active revision")
     if not core._sha(task.get("repository_authority_blob_sha")):
         raise BridgeError("task frozen repository authority digest is invalid")
+
+
+def _require_v31_queue(queue: dict[str, Any]) -> None:
+    if queue.get("version") != "3.1":
+        raise BridgeError("canonical runtime queue requires one-time V3.1 TICK migration")
+    core.validate(queue)
+    migration.validate_migration_facts(queue)
 
 
 def _with_runtime(token: str, mutate, *, message: str):
@@ -356,6 +364,7 @@ def command_claim(token: str, *, role: str, worker: str, task_id: str) -> int:
             raise BridgeError("Control runtime is disabled")
         queue_path = runtime / QUEUE_REL
         q = _load(queue_path)
+        _require_v31_queue(q)
         q, _ = core.reconcile(q, now=_now(), active_missions=_active_revisions(missions))
         chosen = task_id
         if chosen == "AUTO":
@@ -387,6 +396,7 @@ def command_claim(token: str, *, role: str, worker: str, task_id: str) -> int:
 def command_release(token: str, *, role: str, worker: str, task_id: str, run_id: str, reason: str) -> int:
     def mutate(runtime, global_auth, missions, repo_auth):
         q = _load(runtime / QUEUE_REL)
+        _require_v31_queue(q)
         task = next((t for t in q.get("tasks", []) if t.get("task_id") == task_id), None)
         if not isinstance(task, dict):
             raise BridgeError("release target missing")
@@ -407,6 +417,7 @@ def command_record(token: str, *, role: str, worker: str, task_id: str, run_id: 
         if global_auth.get("control_runtime_enabled") is not True:
             raise BridgeError("Control runtime is disabled")
         q = _load(runtime / QUEUE_REL)
+        _require_v31_queue(q)
         task = next((t for t in q.get("tasks", []) if t.get("task_id") == task_id), None)
         if not isinstance(task, dict):
             raise BridgeError("record target missing")
@@ -457,7 +468,8 @@ def command_plan_tick(token: str) -> int:
         _fetch_ref(token, runtime, RUNTIME_REF)
         q = _load(runtime / QUEUE_REL)
         target = ""
-        if global_auth.get("integration_enabled") is True:
+        if q.get("version") == "3.1" and global_auth.get("integration_enabled") is True:
+            _require_v31_queue(q)
             for task in _integration_candidates(q):
                 live = repo_auth.get(task["repository"], {})
                 frozen = _frozen_repository_authority(token, task)
@@ -473,6 +485,14 @@ def command_tick(token: str, *, target_token: str, target_repository: str) -> in
         queue_path = runtime / QUEUE_REL
         q = _load(queue_path)
         now = _now()
+        source_version = q.get("version")
+        q, imported_facts = migration.migrate(q, missions=missions, now=now)
+        migration_report = {
+            "performed": source_version != "3.1",
+            "from_version": source_version,
+            "to_version": "3.1",
+            "imported_fact_count": len(imported_facts),
+        }
         q, reconcile_report = core.reconcile(q, now=now, active_missions=_active_revisions(missions))
         integration_report: dict[str, Any] = {"integration": "DISABLED"}
         if global_auth.get("integration_enabled") is True and target_repository:
@@ -481,12 +501,18 @@ def command_tick(token: str, *, target_token: str, target_repository: str) -> in
             q, integration_report = _integrate_one(q, repo_auth, token, target_token, target_repository, now)
         created: list[str] = []
         if global_auth.get("control_runtime_enabled") is True:
-            q, created = core.feed(q, missions=missions, now=now)
+            q, created = migration.feed(q, missions=missions, now=now)
         _write(queue_path, q)
-        return {"reconcile": reconcile_report, "integration": integration_report, "feed": created}, {QUEUE_REL}
+        return {
+            "migration": migration_report,
+            "reconcile": reconcile_report,
+            "integration": integration_report,
+            "feed": created,
+        }, {QUEUE_REL}
 
     captured, _, attempt = _with_runtime(token, mutate, message="runtime: Control V3.1 TICK")
     print("CONTROL_KERNEL_TICK=SUCCESS")
+    print(f"CONTROL_KERNEL_MIGRATION={json.dumps(captured['migration'], separators=(',', ':'))}")
     print(f"CONTROL_KERNEL_RECONCILE={json.dumps(captured['reconcile'], separators=(',', ':'))}")
     print(f"CONTROL_KERNEL_INTEGRATION={json.dumps(captured['integration'], separators=(',', ':'))}")
     print(f"CONTROL_KERNEL_FEED={json.dumps(captured['feed'], separators=(',', ':'))}")
