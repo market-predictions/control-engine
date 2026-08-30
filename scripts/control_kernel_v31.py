@@ -259,12 +259,18 @@ def _frozen_repository_authority(control_token: str, task: dict[str, Any]) -> di
     return doc
 
 
-def _integration_authorized(task: dict[str, Any], frozen_repo: dict[str, Any], live_repo: dict[str, Any]) -> bool:
+def _frozen_integration_authorized(task: dict[str, Any], frozen_repo: dict[str, Any]) -> bool:
     return (
         task.get("integration_policy") == "AUTO_AFTER_PASS"
         and frozen_repo.get("integration_policy") == "AUTO_AFTER_PASS"
         and frozen_repo.get("integration_enabled") is True
         and frozen_repo.get("control_auto_profile") == "CONTROL_AUTO_V1"
+    )
+
+
+def _integration_authorized(task: dict[str, Any], frozen_repo: dict[str, Any], live_repo: dict[str, Any]) -> bool:
+    return (
+        _frozen_integration_authorized(task, frozen_repo)
         and live_repo.get("integration_policy") == "AUTO_AFTER_PASS"
         and live_repo.get("integration_enabled") is True
         and live_repo.get("control_auto_profile") == "CONTROL_AUTO_V1"
@@ -329,16 +335,30 @@ def _integrate_one(
     task = pending[0]
     live = repo_auth.get(target_repository, {})
     frozen = _frozen_repository_authority(control_token, task)
-    if not _integration_authorized(task, frozen, live):
-        return queue, {"integration": "HOLD", "task_id": task["task_id"]}
     candidate = task["candidate"]
     sha = candidate["candidate_sha"]
     pr_number = candidate["candidate_pr_number"]
     pr = _api(target_token, "GET", f"repos/{target_repository}/pulls/{pr_number}")
-    if pr.get("state") != "open" or pr.get("merged") is True or pr.get("head", {}).get("sha") != sha:
+
+    if pr.get("head", {}).get("sha") != sha:
         raise BridgeError("live PR no longer matches exact PASS candidate")
     if pr.get("base", {}).get("ref") != candidate["expected_base_branch"]:
         raise BridgeError("live PR base branch mismatch")
+
+    if pr.get("merged") is True:
+        if not _frozen_integration_authorized(task, frozen):
+            raise BridgeError("already-merged candidate lacks frozen AUTO authority")
+        merge_sha = pr.get("merge_commit_sha")
+        if not core._sha(merge_sha):
+            raise BridgeError("already-merged exact candidate has invalid merge SHA")
+        q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=merge_sha, merged_at=now)
+        return q, {"integration": "RECONCILED_MERGED", "task_id": task["task_id"], "merge_sha": merge_sha}
+
+    if pr.get("state") != "open":
+        raise BridgeError("live PR is neither open nor merged")
+    if not _integration_authorized(task, frozen, live):
+        return queue, {"integration": "HOLD", "task_id": task["task_id"]}
+
     base = _api(target_token, "GET", f"repos/{target_repository}/branches/{urllib.parse.quote(candidate['expected_base_branch'], safe='')}")
     current_base = base.get("commit", {}).get("sha")
     if current_base != candidate["expected_base_sha"]:
@@ -354,6 +374,8 @@ def _integrate_one(
     post = _api(target_token, "GET", f"repos/{target_repository}/pulls/{pr_number}")
     if post.get("merged") is not True:
         raise BridgeError("post-merge readback does not prove merge")
+    if post.get("head", {}).get("sha") != sha or post.get("base", {}).get("ref") != candidate["expected_base_branch"]:
+        raise BridgeError("post-merge exact candidate identity mismatch")
     q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=merged["sha"], merged_at=now)
     return q, {"integration": "MERGED", "task_id": task["task_id"], "merge_sha": merged["sha"]}
 
