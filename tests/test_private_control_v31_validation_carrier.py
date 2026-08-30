@@ -142,23 +142,36 @@ def test_gap_dependency_graph_must_be_acyclic_without_recursion_limit():
     validator.assert_acyclic_dependencies(chain, mission_name="LONG")
 
 
-def test_gap_auto_integration_must_not_exceed_global_or_repository_authority():
+def test_gap_auto_integration_requires_runtime_integration_and_repository_authority():
     auto = {
         "integration_policy": "AUTO_AFTER_PASS",
         "integration_enabled": True,
         "control_auto_profile": "CONTROL_AUTO_V1",
     }
     validator.assert_gap_integration_authorized(
-        "AUTO_AFTER_PASS", auto, global_integration_enabled=True, label="M1:G1"
+        "AUTO_AFTER_PASS",
+        auto,
+        global_runtime_enabled=True,
+        global_integration_enabled=True,
+        label="M1:G1",
     )
     validator.assert_gap_integration_authorized(
-        "HOLD_AFTER_PASS", auto, global_integration_enabled=False, label="M1:G1"
+        "HOLD_AFTER_PASS",
+        auto,
+        global_runtime_enabled=False,
+        global_integration_enabled=False,
+        label="M1:G1",
     )
 
-    with pytest.raises(validator.ValidationError, match="exceeds Control authority"):
-        validator.assert_gap_integration_authorized(
-            "AUTO_AFTER_PASS", auto, global_integration_enabled=False, label="M1:G1"
-        )
+    for runtime_enabled, integration_enabled in ((False, True), (True, False), (False, False)):
+        with pytest.raises(validator.ValidationError, match="exceeds Control authority"):
+            validator.assert_gap_integration_authorized(
+                "AUTO_AFTER_PASS",
+                auto,
+                global_runtime_enabled=runtime_enabled,
+                global_integration_enabled=integration_enabled,
+                label="M1:G1",
+            )
 
     for authority in (
         {**auto, "integration_policy": "HOLD_AFTER_PASS"},
@@ -167,10 +180,18 @@ def test_gap_auto_integration_must_not_exceed_global_or_repository_authority():
     ):
         with pytest.raises(validator.ValidationError, match="exceeds Control authority"):
             validator.assert_gap_integration_authorized(
-                "AUTO_AFTER_PASS", authority, global_integration_enabled=True, label="M1:G1"
+                "AUTO_AFTER_PASS",
+                authority,
+                global_runtime_enabled=True,
+                global_integration_enabled=True,
+                label="M1:G1",
             )
         validator.assert_gap_integration_authorized(
-            "HOLD_AFTER_PASS", authority, global_integration_enabled=False, label="M1:G1"
+            "HOLD_AFTER_PASS",
+            authority,
+            global_runtime_enabled=False,
+            global_integration_enabled=False,
+            label="M1:G1",
         )
 
 
