@@ -1,36 +1,39 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from control_engine import migration_v31 as migration
 
 NOW = datetime(2026, 8, 30, 22, 0, tzinfo=timezone.utc)
 
 
-def wrapped_mission():
+def wrapped_mission(gaps=None):
+    gaps = gaps or [
+        {
+            "gap_id": "GAP-10",
+            "gap_state": "OPEN",
+            "depends_on": [],
+            "repository": "o/r",
+            "operation": "IMPLEMENTATION",
+            "acceptance": ["done"],
+            "integration_policy": "HOLD_AFTER_PASS",
+        },
+        {
+            "gap_id": "GAP-20",
+            "gap_state": "OPEN",
+            "depends_on": ["GAP-10"],
+            "repository": "o/r",
+            "operation": "IMPLEMENTATION",
+            "acceptance": ["next"],
+            "integration_policy": "HOLD_AFTER_PASS",
+        },
+    ]
     return {
         "mission": {
             "mission_id": "M1",
             "mission_revision": "2026-08-16-r2",
             "repository": "o/r",
-            "gaps": [
-                {
-                    "gap_id": "GAP-10",
-                    "gap_state": "OPEN",
-                    "depends_on": [],
-                    "repository": "o/r",
-                    "operation": "IMPLEMENTATION",
-                    "acceptance": ["done"],
-                    "integration_policy": "HOLD_AFTER_PASS",
-                },
-                {
-                    "gap_id": "GAP-20",
-                    "gap_state": "OPEN",
-                    "depends_on": ["GAP-10"],
-                    "repository": "o/r",
-                    "operation": "IMPLEMENTATION",
-                    "acceptance": ["next"],
-                    "integration_policy": "HOLD_AFTER_PASS",
-                },
-            ],
+            "gaps": gaps,
         },
         "mission_contract_blob_sha": "1" * 40,
         "repository_authority_blob_sha": "2" * 40,
@@ -52,7 +55,7 @@ def legacy_integration(gap="GAP-10", outcome="COMPLETED", status="TERMINAL"):
 
 
 def legacy_queue(*tasks):
-    return {"version": "1.0", "principal_manual_relay_count": 0, "tasks": list(tasks)}
+    return {"version": migration.LEGACY_QUEUE_VERSION, "principal_manual_relay_count": 0, "tasks": list(tasks)}
 
 
 def test_migration_imports_only_completed_integration_for_current_mission_gap():
@@ -124,3 +127,42 @@ def test_fact_identity_is_exact_and_duplicate_free():
     q, _ = migration.migrate(legacy_queue(legacy_integration()), missions=[wrapped_mission()], now=NOW)
     assert migration.gap_satisfied_by_fact(q, "M1", "2026-08-16-r2", "GAP-10")
     assert not migration.gap_satisfied_by_fact(q, "M1", "2026-08-16-r2", "GAP-20")
+
+
+def test_migration_rejects_missing_malformed_or_future_queue_versions():
+    for version in (None, "", "0.9", "2.0", "4.0"):
+        queue = {"principal_manual_relay_count": 0, "tasks": []}
+        if version is not None:
+            queue["version"] = version
+        with pytest.raises(migration.MigrationError, match="unsupported queue version"):
+            migration.migrate(queue, missions=[wrapped_mission()], now=NOW)
+
+
+def test_legacy_root_matching_does_not_collide_on_gap_prefixes():
+    gaps = [
+        {
+            "gap_id": "GAP-1",
+            "gap_state": "OPEN",
+            "depends_on": [],
+            "repository": "o/r",
+            "operation": "IMPLEMENTATION",
+            "acceptance": ["one"],
+            "integration_policy": "HOLD_AFTER_PASS",
+        },
+        {
+            "gap_id": "GAP-10",
+            "gap_state": "OPEN",
+            "depends_on": [],
+            "repository": "o/r",
+            "operation": "IMPLEMENTATION",
+            "acceptance": ["ten"],
+            "integration_policy": "HOLD_AFTER_PASS",
+        },
+    ]
+    q, facts = migration.migrate(
+        legacy_queue(legacy_integration("GAP-10")),
+        missions=[wrapped_mission(gaps)],
+        now=NOW,
+    )
+    assert q["tasks"] == []
+    assert [fact["gap_id"] for fact in facts] == ["GAP-10"]
