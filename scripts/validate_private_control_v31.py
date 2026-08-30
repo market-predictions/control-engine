@@ -233,6 +233,7 @@ def assert_gap_integration_authorized(
     gap_policy: str,
     repository_authority: Mapping[str, Any],
     *,
+    global_runtime_enabled: bool,
     global_integration_enabled: bool,
     label: str,
 ) -> None:
@@ -242,7 +243,8 @@ def assert_gap_integration_authorized(
     if gap_policy != "AUTO_AFTER_PASS":
         raise ValidationError(f"gap integration policy invalid: {label}")
     if not (
-        global_integration_enabled is True
+        global_runtime_enabled is True
+        and global_integration_enabled is True
         and repository_authority.get("integration_policy") == "AUTO_AFTER_PASS"
         and repository_authority.get("integration_enabled") is True
         and repository_authority.get("control_auto_profile") == "CONTROL_AUTO_V1"
@@ -307,6 +309,7 @@ def validate_candidate(root: Path) -> None:
             assert_gap_integration_authorized(
                 gap["integration_policy"],
                 repo_authority,
+                global_runtime_enabled=global_auth["control_runtime_enabled"],
                 global_integration_enabled=global_auth["integration_enabled"],
                 label=f"{name}:{gid}",
             )
