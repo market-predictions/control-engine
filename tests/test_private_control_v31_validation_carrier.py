@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+
+from scripts import validate_private_control_v31 as validator
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "private-control-v3-1-validation.yml"
 VALIDATOR = ROOT / "scripts" / "validate_private_control_v31.py"
@@ -18,9 +22,55 @@ def test_private_v31_carrier_is_read_only_and_trusted_main_only():
     assert "python scripts/validate_private_control_v31.py private-candidate private-base" in workflow
 
 
-def test_private_v31_validator_never_executes_candidate_code():
+def test_private_v31_validator_reads_committed_git_objects_only():
     text = VALIDATOR.read_text(encoding="utf-8")
-    for forbidden in ("subprocess", "importlib", "runpy", "exec(", "eval(", "os.system", "Popen"):
-        assert forbidden not in text
+    assert '"ls-tree", "-rz", "--full-tree", "HEAD"' in text
+    assert '"cat-file", "blob", oid' in text
     assert "PRIVATE_CANDIDATE_EXECUTION=false" in text
     assert "PRIVATE_RUNTIME_MUTATION=false" in text
+    for forbidden in ("importlib", "runpy", "exec(", "eval(", "os.system", "Popen", "shell=True"):
+        assert forbidden not in text
+
+
+def inert_entries():
+    paths = {
+        "README.md",
+        "control/CHANGELOG.md",
+        "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
+        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+        "control/SYSTEM_INDEX.md",
+        "control/missions/README.md",
+        "control/missions/M1.mission.json",
+        "control/repository-authority/o__r.json",
+        "schemas/mission_contract_v31.schema.json",
+        "schemas/repository_authority_v31.schema.json",
+    }
+    return {path: ("100644", "blob", "a" * 40) for path in paths}
+
+
+def test_surface_accepts_only_inert_declarative_v31_data():
+    missions, authorities = validator.validate_surface(inert_entries())
+    assert missions == ["control/missions/M1.mission.json"]
+    assert authorities == ["control/repository-authority/o__r.json"]
+
+
+def test_surface_rejects_symlink_even_at_allowed_path():
+    entries = inert_entries()
+    entries["README.md"] = ("120000", "blob", "b" * 40)
+    with pytest.raises(validator.ValidationError, match="symlink"):
+        validator.validate_surface(entries)
+
+
+def test_surface_rejects_any_private_workflow_or_executable_tool():
+    for path in (".github/workflows/validate-control-v3-1.yml", "tools/validate_control_v31.py"):
+        entries = inert_entries()
+        entries[path] = ("100644", "blob", "b" * 40)
+        with pytest.raises(validator.ValidationError, match="non-V3.1 active surface"):
+            validator.validate_surface(entries)
+
+
+def test_surface_rejects_executable_mode_on_declarative_file():
+    entries = inert_entries()
+    entries["control/SYSTEM_INDEX.md"] = ("100755", "blob", "b" * 40)
+    with pytest.raises(validator.ValidationError, match="executable"):
+        validator.validate_surface(entries)
