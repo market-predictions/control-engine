@@ -20,7 +20,7 @@
     "mission_revision": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
     "effective_at": {"type": "string", "minLength": 1},
-    "repository": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+    "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
     "project_governance_ref": {"type": "string", "minLength": 1},
     "desired_outcome": {"type": "string", "minLength": 1},
     "success_criteria": {
@@ -61,7 +61,7 @@
             "items": {"type": "string", "minLength": 1},
             "uniqueItems": true
           },
-          "repository": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+          "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
           "operation": {"const": "IMPLEMENTATION"},
           "acceptance": {
             "type": "array",
