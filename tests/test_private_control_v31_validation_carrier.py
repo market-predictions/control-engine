@@ -85,6 +85,65 @@ def test_authority_switches_require_actual_json_booleans():
     assert not validator.explicit_bool(None)
 
 
+def test_repository_identity_requires_nonempty_github_safe_components():
+    for value in ("market-predictions/control-plane", "solidprivacy-nl/solidprivacy", "a/b.c_d-e"):
+        assert validator.valid_repository(value)
+    for value in ("/", "owner/", "/repo", "owner/repo/extra", "owner name/repo", "owner/repo name", "-owner/repo"):
+        assert not validator.valid_repository(value)
+
+
+def test_schema_contract_requires_parseable_expected_v31_shape():
+    schema = {
+        "$schema": validator.DRAFT_2020_12,
+        "title": "MISSION_CONTRACT_V3_1",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["protocol_id", "repository"],
+        "properties": {
+            "protocol_id": {"const": "MISSION_CONTRACT_V3_1"},
+            "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+        },
+    }
+    validator.validate_schema_document(
+        schema,
+        title="MISSION_CONTRACT_V3_1",
+        required={"protocol_id", "repository"},
+        protocol_const="MISSION_CONTRACT_V3_1",
+    )
+    broken = dict(schema)
+    broken["properties"] = {"protocol_id": {"const": "WRONG"}, "repository": {"type": "string", "pattern": "x"}}
+    with pytest.raises(validator.ValidationError, match="protocol contract"):
+        validator.validate_schema_document(
+            broken,
+            title="MISSION_CONTRACT_V3_1",
+            required={"protocol_id", "repository"},
+            protocol_const="MISSION_CONTRACT_V3_1",
+        )
+
+
+def test_gap_dependency_graph_must_be_acyclic():
+    validator.assert_acyclic_dependencies(
+        [
+            {"gap_id": "G1", "depends_on": []},
+            {"gap_id": "G2", "depends_on": ["G1"]},
+        ],
+        mission_name="M1",
+    )
+    with pytest.raises(validator.ValidationError, match="cyclic gap dependency"):
+        validator.assert_acyclic_dependencies(
+            [
+                {"gap_id": "G1", "depends_on": ["G2"]},
+                {"gap_id": "G2", "depends_on": ["G1"]},
+            ],
+            mission_name="M1",
+        )
+    with pytest.raises(validator.ValidationError, match="cyclic gap dependency"):
+        validator.assert_acyclic_dependencies(
+            [{"gap_id": "G1", "depends_on": ["G1"]}],
+            mission_name="M1",
+        )
+
+
 def test_revision_discipline_is_bound_to_mission_identity_not_filename():
     base = {
         "M1": {
