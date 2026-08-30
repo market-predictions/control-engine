@@ -23,7 +23,7 @@ from jsonschema.exceptions import SchemaError, ValidationError as JsonSchemaVali
 PUBLIC_ROOT = Path(__file__).resolve().parents[1]
 MISSION_SCHEMA_REL = "schemas/mission_contract_v31.schema.json"
 REPOSITORY_SCHEMA_REL = "schemas/repository_authority_v31.schema.json"
-OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+OWNER_RE = re.compile(r"^(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 
@@ -228,19 +228,21 @@ def assert_gap_integration_authorized(
     gap_policy: str,
     repository_authority: Mapping[str, Any],
     *,
+    global_integration_enabled: bool,
     label: str,
 ) -> None:
-    """Fail closed when a Mission asks for more merge authority than the repo grants."""
+    """Fail closed when a Mission asks for more merge authority than Control grants."""
     if gap_policy == "HOLD_AFTER_PASS":
         return
     if gap_policy != "AUTO_AFTER_PASS":
         raise ValidationError(f"gap integration policy invalid: {label}")
     if not (
-        repository_authority.get("integration_policy") == "AUTO_AFTER_PASS"
+        global_integration_enabled is True
+        and repository_authority.get("integration_policy") == "AUTO_AFTER_PASS"
         and repository_authority.get("integration_enabled") is True
         and repository_authority.get("control_auto_profile") == "CONTROL_AUTO_V1"
     ):
-        raise ValidationError(f"gap integration policy exceeds repository authority: {label}")
+        raise ValidationError(f"gap integration policy exceeds Control authority: {label}")
 
 
 def validate_candidate(root: Path) -> None:
@@ -300,6 +302,7 @@ def validate_candidate(root: Path) -> None:
             assert_gap_integration_authorized(
                 gap["integration_policy"],
                 repo_authority,
+                global_integration_enabled=global_auth["integration_enabled"],
                 label=f"{name}:{gid}",
             )
         assert_acyclic_dependencies(gaps, mission_name=name)
