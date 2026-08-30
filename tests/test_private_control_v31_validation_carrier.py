@@ -107,7 +107,7 @@ def test_trusted_schema_rejects_missing_required_mission_contract_fields():
         )
 
 
-def test_gap_dependency_graph_must_be_acyclic():
+def test_gap_dependency_graph_must_be_acyclic_without_recursion_limit():
     validator.assert_acyclic_dependencies(
         [{"gap_id": "G1", "depends_on": []}, {"gap_id": "G2", "depends_on": ["G1"]}],
         mission_name="M1",
@@ -117,6 +117,31 @@ def test_gap_dependency_graph_must_be_acyclic():
             [{"gap_id": "G1", "depends_on": ["G2"]}, {"gap_id": "G2", "depends_on": ["G1"]}],
             mission_name="M1",
         )
+
+    chain = [
+        {"gap_id": f"G{i}", "depends_on": [] if i == 0 else [f"G{i - 1}"]}
+        for i in range(1500)
+    ]
+    validator.assert_acyclic_dependencies(chain, mission_name="LONG")
+
+
+def test_gap_auto_integration_must_not_exceed_repository_authority():
+    auto = {
+        "integration_policy": "AUTO_AFTER_PASS",
+        "integration_enabled": True,
+        "control_auto_profile": "CONTROL_AUTO_V1",
+    }
+    validator.assert_gap_integration_authorized("AUTO_AFTER_PASS", auto, label="M1:G1")
+    validator.assert_gap_integration_authorized("HOLD_AFTER_PASS", auto, label="M1:G1")
+
+    for authority in (
+        {**auto, "integration_policy": "HOLD_AFTER_PASS"},
+        {**auto, "integration_enabled": False},
+        {**auto, "control_auto_profile": "NONE"},
+    ):
+        with pytest.raises(validator.ValidationError, match="exceeds repository authority"):
+            validator.assert_gap_integration_authorized("AUTO_AFTER_PASS", authority, label="M1:G1")
+        validator.assert_gap_integration_authorized("HOLD_AFTER_PASS", authority, label="M1:G1")
 
 
 def test_revision_discipline_is_bound_to_mission_identity_not_filename():
