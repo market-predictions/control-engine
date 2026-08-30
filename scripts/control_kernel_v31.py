@@ -182,15 +182,12 @@ def _assert_live_task_authority(task: dict[str, Any], missions: list[dict[str, A
     if len(gaps) != 1 or gaps[0].get("gap_state") != "OPEN":
         raise BridgeError("task gap is retired or missing")
     repository = task.get("repository")
-    auth = repo_auth.get(repository)
-    if not auth:
+    if repository not in repo_auth:
         raise BridgeError("task repository authority missing")
     if task.get("mission_contract_blob_sha") != wrapped["mission_contract_blob_sha"]:
         raise BridgeError("task frozen Mission authority digest no longer matches active revision")
-    if task.get("repository_authority_blob_sha") != wrapped["repository_authority_blob_sha"]:
-        # Repository authority can become more restrictive without invalidating historic intent.
-        # Expansion is never accepted silently; exact current blob is required for new CLAIM.
-        raise BridgeError("task repository authority digest changed; re-feed under current authority")
+    if not core._sha(task.get("repository_authority_blob_sha")):
+        raise BridgeError("task frozen repository authority digest is invalid")
 
 
 def _with_runtime(token: str, mutate, *, message: str):
@@ -232,6 +229,50 @@ def _api(token: str, method: str, path: str, body: dict[str, Any] | None = None)
         raise TransientError("GitHub API unavailable") from exc
 
 
+def _frozen_repository_authority(control_token: str, task: dict[str, Any]) -> dict[str, Any]:
+    sha = task.get("repository_authority_blob_sha")
+    if not core._sha(sha):
+        raise BridgeError("frozen repository authority digest is invalid")
+    blob = _api(control_token, "GET", f"repos/{CONTROL_REPOSITORY}/git/blobs/{sha}")
+    if blob.get("encoding") != "base64" or not isinstance(blob.get("content"), str):
+        raise BridgeError("frozen repository authority blob is unreadable")
+    try:
+        raw = base64.b64decode(blob["content"].replace("\n", ""), validate=True).decode("utf-8")
+        doc = json.loads(raw)
+    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BridgeError("frozen repository authority blob is invalid") from exc
+    if (
+        not isinstance(doc, dict)
+        or doc.get("protocol_id") != "CONTROL_REPOSITORY_AUTHORITY_V3_1"
+        or doc.get("repository") != task.get("repository")
+        or doc.get("principal_manual_relay_count") != 0
+    ):
+        raise BridgeError("frozen repository authority identity mismatch")
+    return doc
+
+
+def _integration_authorized(task: dict[str, Any], frozen_repo: dict[str, Any], live_repo: dict[str, Any]) -> bool:
+    return (
+        task.get("integration_policy") == "AUTO_AFTER_PASS"
+        and frozen_repo.get("integration_policy") == "AUTO_AFTER_PASS"
+        and frozen_repo.get("integration_enabled") is True
+        and frozen_repo.get("control_auto_profile") == "CONTROL_AUTO_V1"
+        and live_repo.get("integration_policy") == "AUTO_AFTER_PASS"
+        and live_repo.get("integration_enabled") is True
+        and live_repo.get("control_auto_profile") == "CONTROL_AUTO_V1"
+    )
+
+
+def _effective_required_checks(frozen_repo: dict[str, Any], live_repo: dict[str, Any]) -> list[str]:
+    frozen = frozen_repo.get("required_check_runs", [])
+    live = live_repo.get("required_check_runs", [])
+    if not isinstance(frozen, list) or not isinstance(live, list):
+        raise BridgeError("repository required checks are invalid")
+    if any(not isinstance(item, str) or not item for item in frozen + live):
+        raise BridgeError("repository required check identity is invalid")
+    return sorted(set(frozen) | set(live))
+
+
 def _required_checks_green(token: str, repository: str, sha: str, required: list[str]) -> bool:
     if not required:
         return True
@@ -266,17 +307,22 @@ def _integration_candidates(queue: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
-def _integrate_one(queue: dict[str, Any], repo_auth: dict[str, dict[str, Any]], target_token: str, target_repository: str, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
+def _integrate_one(
+    queue: dict[str, Any],
+    repo_auth: dict[str, dict[str, Any]],
+    control_token: str,
+    target_token: str,
+    target_repository: str,
+    now: datetime,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     pending = [t for t in _integration_candidates(queue) if t.get("repository") == target_repository]
     if not pending:
         return queue, {"integration": "NONE"}
     task = pending[0]
-    frozen = task.get("integration_policy")
     live = repo_auth.get(target_repository, {})
-    if frozen != "AUTO_AFTER_PASS" or live.get("integration_policy") != "AUTO_AFTER_PASS" or not live.get("integration_enabled"):
+    frozen = _frozen_repository_authority(control_token, task)
+    if not _integration_authorized(task, frozen, live):
         return queue, {"integration": "HOLD", "task_id": task["task_id"]}
-    if live.get("control_auto_profile") != "CONTROL_AUTO_V1":
-        raise BridgeError("AUTO integration requires CONTROL_AUTO_V1")
     candidate = task["candidate"]
     sha = candidate["candidate_sha"]
     pr_number = candidate["candidate_pr_number"]
@@ -290,7 +336,8 @@ def _integrate_one(queue: dict[str, Any], repo_auth: dict[str, dict[str, Any]], 
     if current_base != candidate["expected_base_sha"]:
         q, repair_id = core.materialize_base_drift_repair(queue, assurance_task_id=task["task_id"], now=now)
         return q, {"integration": "BASE_DRIFT", "task_id": task["task_id"], "repair_task_id": repair_id}
-    if not _required_checks_green(target_token, target_repository, sha, list(live.get("required_check_runs", []))):
+    required_checks = _effective_required_checks(frozen, live)
+    if not _required_checks_green(target_token, target_repository, sha, required_checks):
         return queue, {"integration": "WAIT_CHECKS", "task_id": task["task_id"]}
     _publish_assurance_status(target_token, target_repository, sha)
     merged = _api(target_token, "PUT", f"repos/{target_repository}/pulls/{pr_number}/merge", {"sha": sha, "merge_method": "merge"})
@@ -357,6 +404,8 @@ def command_release(token: str, *, role: str, worker: str, task_id: str, run_id:
 
 def command_record(token: str, *, role: str, worker: str, task_id: str, run_id: str, payload: dict[str, Any]) -> int:
     def mutate(runtime, global_auth, missions, repo_auth):
+        if global_auth.get("control_runtime_enabled") is not True:
+            raise BridgeError("Control runtime is disabled")
         q = _load(runtime / QUEUE_REL)
         task = next((t for t in q.get("tasks", []) if t.get("task_id") == task_id), None)
         if not isinstance(task, dict):
@@ -411,7 +460,8 @@ def command_plan_tick(token: str) -> int:
         if global_auth.get("integration_enabled") is True:
             for task in _integration_candidates(q):
                 live = repo_auth.get(task["repository"], {})
-                if live.get("integration_enabled") is True and live.get("integration_policy") == "AUTO_AFTER_PASS":
+                frozen = _frozen_repository_authority(token, task)
+                if _integration_authorized(task, frozen, live):
                     target = task["repository"]
                     break
         print(f"CONTROL_KERNEL_TARGET_REPOSITORY={target}")
@@ -428,7 +478,7 @@ def command_tick(token: str, *, target_token: str, target_repository: str) -> in
         if global_auth.get("integration_enabled") is True and target_repository:
             if not target_token:
                 raise BridgeError("target token required for enabled integration")
-            q, integration_report = _integrate_one(q, repo_auth, target_token, target_repository, now)
+            q, integration_report = _integrate_one(q, repo_auth, token, target_token, target_repository, now)
         created: list[str] = []
         if global_auth.get("control_runtime_enabled") is True:
             q, created = core.feed(q, missions=missions, now=now)
