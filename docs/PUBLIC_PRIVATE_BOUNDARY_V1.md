@@ -1,138 +1,42 @@
-# Control Engine Public/Private Boundary V1
+# Public / Private Boundary — Control Autonomy V3.1
 
-## Purpose
+## Authority
 
-`market-predictions/control-engine` is the public deterministic execution and CI layer for the private `market-predictions/control-plane`.
+The private repository `market-predictions/control-plane` is the sole Control planning/authority and runtime-state plane.
 
-The separation exists for two reasons:
+The public repository `market-predictions/control-engine` contains deterministic code and the single trusted runtime-mutating workflow. It must not persist private Control runtime state.
 
-1. deterministic validation and bounded orchestration compute can execute on public GitHub-hosted runners without consuming private-repository Actions minutes; and
-2. Control runtime state, project evidence and governance authority remain private.
+## Runtime writer
 
-## Core rule
+Exactly one normal GitHub Actions workflow may mutate canonical Control runtime state:
 
-```text
-PUBLIC CODE != PUBLIC STATE
-PUBLIC RUNNER != SECOND CONTROL AUTHORITY
-```
+`/.github/workflows/control-kernel-v3-1.yml`
 
-The public repository may contain only public-safe executable code, schemas, synthetic fixtures, tests and documentation. It must never become a durable mirror of private Control state.
+The workflow may transiently clone private Control state into an ephemeral runner and may persist only bounded V3.1 mutations to `control-runtime-state` using the trusted Control Kernel capability.
 
-A trusted default-branch actuator may, however, **transiently process private Control state in an ephemeral runner** when all requirements in `PRIVATE_RUNTIME_ACTUATOR_V1.md` are satisfied. This distinction is essential: repository visibility governs stored code/data, not whether a trusted compute process may use a secret credential to operate an authoritative private system.
+Semantic workers A1 and B1 never receive canonical runtime write credentials. They request `CLAIM`, `RECORD`, or `RELEASE`; the kernel authenticates caller capability, validates the current claim and live authority, and performs any canonical mutation itself.
 
-## Public engine — allowed
+## Private state
 
-- deterministic compilers and validators;
-- generic schemas and state-transition helpers;
-- generic rendering and orchestration models;
-- tests and synthetic fixtures;
-- public-safe documentation;
-- CI workflows that require no private state;
-- trusted `main` scheduled/manual actuator workflows that transiently access private state using least-privilege Actions secrets;
-- bounded private-state reads and writes only when the private repository remains the sole authoritative state plane and exact CAS/postcondition rules are enforced;
-- version/manifest metadata.
+Canonical runtime state is limited to:
 
-## Public engine — forbidden durable content
+- `control/DISPATCH_QUEUE.json`;
+- `control/worker-results/<task-id>--<run-id>.json`.
 
-The following may never be committed, mirrored, cached, artifacted or intentionally logged in this public repository/execution plane:
+Git history is the mutation audit trail.
 
-- `control-runtime-state` or copies of that branch;
-- dispatch queues, work claims or live run state;
-- handovers or worker-result ledgers from private Control;
-- private mission/project intake payloads;
-- private project registries copied from Control;
-- customer, client, patient, employee or other real-person data;
-- raw private-repository source/evidence bundles;
-- API tokens, private keys, credentials or secret values;
-- provider/account bindings that require secrecy.
+## Semantic boundary
 
-The public repository's own `GITHUB_TOKEN` must never become private Control authority.
+A1 owns only `IMPLEMENTATION` and `REPAIR` semantic execution. B1 owns only `ASSURANCE` semantic judgment. The kernel performs no semantic inference.
 
-## Trusted transient actuator exception
+B1 is candidate-read-only and has no merge or candidate mutation authority. The authenticated caller capability, not a supplied role string, determines whether a caller may operate as A1 or B1.
 
-`NO_PRIVATE_RUNTIME_STATE` means **no private runtime state is persisted or exposed in the public plane**. It does not prohibit a trusted, ephemeral `main` Actions job from reading and updating the private authoritative repository through a separately provisioned least-privilege secret credential.
+## Deterministic integration
 
-Such a workflow is valid only when it:
+`TICK` performs `RECONCILE -> INTEGRATE -> FEED`. Integration is deterministic GitHub mutation, not semantic worker work. It is permitted only when frozen candidate authority and current live restrictions both allow it and exact GitHub facts still match.
 
-1. is executable solely from trusted `main`; PR/fork execution cannot reach private state;
-2. keeps the repository-level `GITHUB_TOKEN` read-only;
-3. receives private access through a separately provisioned secret credential;
-4. stores private inputs/output only under ephemeral runner storage with restrictive permissions;
-5. sends no private state to public logs, artifacts or caches;
-6. verifies exact immutable Control code identity before processing private state;
-7. computes transitions against an exact observed private runtime ref + exact queue blob;
-8. discards/recomputes on any state movement and uses ordinary non-force persistence only;
-9. enforces bounded private write scopes and canonical postcondition readback;
-10. treats public-run success as non-authoritative unless the exact intended state is durably visible in private Control.
+## Removed architecture
 
-The current contract is `docs/PRIVATE_RUNTIME_ACTUATOR_V1.md`.
+V3.1 has no normal provider fallback, no A2 baseline, no semantic integration task, no project-intake routing database, no mandatory handover projection, no worker-direct result write, no secondary queue and no private runtime-mutating workflow.
 
-## Private Control responsibilities
-
-The private `control-plane` remains authoritative for:
-
-- project scope and registry;
-- runtime queues and claims;
-- worker/assurance state;
-- handovers and worker results;
-- mission contracts and private evidence;
-- provider bindings and credential authorization;
-- merge/release/deploy/delivery/financial authority;
-- all canonical state against which an actuator must prove its transition.
-
-Running the actuator in the public repository does not transfer any of these authorities to public repository state.
-
-## Consumption model
-
-Private Control may consume deterministic public-engine modules by an **exact immutable Git commit SHA**.
-
-Forbidden authority references:
-
-```text
-main
-latest
-HEAD
-floating tag
-unverified branch name
-```
-
-A Control engine pin is eligible only when:
-
-1. repository is exactly `market-predictions/control-engine`;
-2. commit is a full 40-character SHA;
-3. the public commit has successful engine CI;
-4. the private pin records the engine manifest version where bundle consumption is used; and
-5. changing a private engine pin is an explicit governed Control change.
-
-This bundle-consumption rule is separate from Scheduled Worker A V2: the scheduled actuator itself executes only when its workflow is integrated into trusted public `main`, while it independently pins the private Control state-machine implementation it invokes by exact 40-character SHA.
-
-## Data-flow rule
-
-Ordinary public CI uses only code and synthetic fixtures stored in this repository.
-
-Private Control data is not uploaded into ordinary CI. The only permitted private-data path is a specifically authorized trusted actuator governed by the transient rules above. Private payloads remain ephemeral and non-exportable.
-
-## Dashboard placement
-
-The deterministic retained-progress compiler and event schema live in the public engine. The real project registry and canonical retained-progress event ledger remain private Control data.
-
-Thus:
-
-```text
-public engine = scoring/validation/render-model semantics + bounded trusted compute
-private Control = project identity + evidence + canonical state + authority
-```
-
-## Authority boundary
-
-The public repository is computational infrastructure. A public CI result by itself cannot:
-
-- fabricate a Control claim;
-- issue assurance PASS/FAIL;
-- merge a private PR;
-- declare a mission satisfied;
-- release/deploy/deliver;
-- select a paid provider;
-- spend funds.
-
-A trusted Scheduled Worker A actuator may create a real A1 claim only by successfully writing and reading it back from the private canonical Control queue under the existing claim contract. Its authority is therefore derived from, bounded by and evidenced in private state; never from the public run record alone.
+Historical implementations are provenance in Git history and are not part of the active source or authority surface.
