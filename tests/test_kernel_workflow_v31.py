@@ -21,6 +21,24 @@ def test_kernel_uses_exact_pinned_ephemeral_app_token_after_preflight():
     assert value.index('bash scripts/github_app_preflight.sh') < value.index('Create exact private-runtime capability')
 
 
+def test_kernel_fails_closed_before_any_runtime_operation_when_runtime_branch_is_unprotected():
+    value = text()
+    assert 'Enforce protected canonical runtime branch' in value
+    assert "branches/control-runtime-state" in value
+    assert "branch.get('protected') is not True" in value
+    assert 'CONTROL_RUNTIME_PROTECTION=FAIL_CLOSED_UNPROTECTED' in value
+    assert 'CONTROL_RUNTIME_PROTECTION_REQUIRED=true' in value
+    protection = value.index('Enforce protected canonical runtime branch')
+    for later in (
+        'Plan deterministic TICK target capability',
+        'Execute deterministic TICK',
+        'Execute authenticated CLAIM',
+        'Execute authenticated atomic RECORD',
+        'Execute authenticated RELEASE',
+    ):
+        assert protection < value.index(later)
+
+
 def test_runtime_and_target_capabilities_are_separate_and_repository_scoped():
     value = text()
     assert 'repositories: control-plane' in value
