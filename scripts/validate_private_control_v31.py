@@ -1,70 +1,145 @@
 #!/usr/bin/env python3
 """Trusted static validator for an exact private Control V3.1 candidate.
 
-The candidate repository is data only. This validator never imports or executes
-candidate-controlled Python, shell, workflows, actions, or hooks.
+The private candidate is treated strictly as Git data. This validator never
+imports, executes, sources, checks out, or follows candidate-controlled code,
+workflows, hooks, symlinks, or filesystem paths.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
-
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+from typing import Any
 
 
 class ValidationError(ValueError):
     pass
 
 
-def load(root: Path, rel: str):
-    path = root / rel
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise ValidationError(f"invalid JSON: {rel}") from exc
-
-
-def zero(value):
+def zero(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value == 0
 
 
-def files(directory: Path) -> set[str]:
-    return {p.name for p in directory.iterdir() if p.is_file()}
+def git_bytes(root: Path, *args: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            cwd=root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValidationError(f"trusted Git read failed: {' '.join(args)}") from exc
+    return result.stdout
 
 
-def dirs(directory: Path) -> set[str]:
-    return {p.name for p in directory.iterdir() if p.is_dir()}
+def committed_tree(root: Path) -> dict[str, tuple[str, str, str]]:
+    raw = git_bytes(root, "ls-tree", "-rz", "--full-tree", "HEAD")
+    entries: dict[str, tuple[str, str, str]] = {}
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode_b, type_b, oid_b = metadata.split(b" ", 2)
+            path = raw_path.decode("utf-8", "strict")
+            mode = mode_b.decode("ascii")
+            obj_type = type_b.decode("ascii")
+            oid = oid_b.decode("ascii")
+        except Exception as exc:
+            raise ValidationError("private Git tree contains an unsupported path/object record") from exc
+        if path in entries:
+            raise ValidationError(f"duplicate committed path: {path}")
+        entries[path] = (mode, obj_type, oid)
+    return entries
+
+
+def blob_bytes(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -> bytes:
+    entry = entries.get(rel)
+    if entry is None:
+        raise ValidationError(f"required committed file missing: {rel}")
+    mode, obj_type, oid = entry
+    if mode != "100644" or obj_type != "blob":
+        raise ValidationError(f"committed path is not inert regular data: {rel}")
+    return git_bytes(root, "cat-file", "blob", oid)
+
+
+def text(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -> str:
+    try:
+        return blob_bytes(root, entries, rel).decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValidationError(f"committed file is not UTF-8: {rel}") from exc
+
+
+def load(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text(root, entries, rel))
+    except Exception as exc:
+        if isinstance(exc, ValidationError):
+            raise
+        raise ValidationError(f"invalid JSON: {rel}") from exc
+    if not isinstance(value, dict):
+        raise ValidationError(f"JSON root must be an object: {rel}")
+    return value
+
+
+def _single_child(path: str, prefix: str) -> str | None:
+    if not path.startswith(prefix):
+        return None
+    tail = path[len(prefix):]
+    if not tail or "/" in tail:
+        return None
+    return tail
+
+
+def validate_surface(entries: dict[str, tuple[str, str, str]]) -> tuple[list[str], list[str]]:
+    fixed = {
+        "README.md",
+        "control/CHANGELOG.md",
+        "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
+        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+        "control/SYSTEM_INDEX.md",
+        "control/missions/README.md",
+        "schemas/mission_contract_v31.schema.json",
+        "schemas/repository_authority_v31.schema.json",
+    }
+    mission_paths: list[str] = []
+    authority_paths: list[str] = []
+
+    for path, (mode, obj_type, _oid) in entries.items():
+        if mode != "100644" or obj_type != "blob":
+            raise ValidationError(f"private candidate contains executable, symlink, submodule, or non-blob object: {path}")
+        if path in fixed:
+            continue
+        mission_name = _single_child(path, "control/missions/")
+        if mission_name and mission_name.endswith(".mission.json"):
+            mission_paths.append(path)
+            continue
+        authority_name = _single_child(path, "control/repository-authority/")
+        if authority_name and authority_name.endswith(".json"):
+            authority_paths.append(path)
+            continue
+        raise ValidationError(f"private candidate contains non-V3.1 active surface: {path}")
+
+    missing = fixed.difference(entries)
+    if missing:
+        raise ValidationError(f"private V3.1 fixed surface missing: {sorted(missing)}")
+    if not mission_paths:
+        raise ValidationError("Mission registry is empty")
+    if not authority_paths:
+        raise ValidationError("repository authority registry is empty")
+    return sorted(mission_paths), sorted(authority_paths)
 
 
 def validate_candidate(root: Path) -> None:
-    if files(root) != {"README.md"}:
-        raise ValidationError("private root must contain only README.md as a non-dot file")
-    if dirs(root) != {".github", "control", "schemas", "tools"}:
-        raise ValidationError("private root directory surface is not V3.1-minimal")
-    if files(root / ".github" / "workflows") != {"validate-control-v3-1.yml"}:
-        raise ValidationError("private workflow surface is not read-only V3.1 validation only")
-    if files(root / "tools") != {"validate_control_v31.py"}:
-        raise ValidationError("private executable tool surface is not V3.1-minimal")
-    if files(root / "schemas") != {"mission_contract_v31.schema.json", "repository_authority_v31.schema.json"}:
-        raise ValidationError("private schema surface contains legacy contracts")
-    if files(root / "control") != {
-        "CHANGELOG.md",
-        "CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
-        "CONTROL_RUNTIME_AUTHORITY_V3_1.json",
-        "SYSTEM_INDEX.md",
-    }:
-        raise ValidationError("private Control authority surface contains legacy doctrine/state")
-    if dirs(root / "control") != {"missions", "repository-authority"}:
-        raise ValidationError("private Control directory surface contains legacy projections/state")
+    entries = committed_tree(root)
+    mission_paths, authority_paths = validate_surface(entries)
 
-    workflow = (root / ".github" / "workflows" / "validate-control-v3-1.yml").read_text(encoding="utf-8")
-    forbidden_workflow = ("control-runtime-state", "DISPATCH_QUEUE.json", "worker-results/", "contents: write", "pull-requests: write")
-    if any(token in workflow for token in forbidden_workflow):
-        raise ValidationError("private validation workflow has runtime/write authority")
-
-    global_auth = load(root, "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json")
+    global_auth = load(root, entries, "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json")
     if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1" or not zero(global_auth.get("principal_manual_relay_count")):
         raise ValidationError("global V3.1 authority invalid")
     if global_auth.get("semantic_claim_lease_seconds") != 5400:
@@ -72,99 +147,101 @@ def validate_candidate(root: Path) -> None:
     if global_auth.get("control_runtime_enabled") not in {True, False} or global_auth.get("integration_enabled") not in {True, False}:
         raise ValidationError("break-glass authority must be explicit booleans")
 
-    repository_authority: dict[str, dict] = {}
-    auth_dir = root / "control" / "repository-authority"
-    for path in sorted(auth_dir.glob("*.json")):
-        doc = load(root, path.relative_to(root).as_posix())
+    repository_authority: dict[str, dict[str, Any]] = {}
+    for path in authority_paths:
+        doc = load(root, entries, path)
+        name = path.rsplit("/", 1)[-1]
         if doc.get("protocol_id") != "CONTROL_REPOSITORY_AUTHORITY_V3_1" or not zero(doc.get("principal_manual_relay_count")):
-            raise ValidationError(f"repository authority invalid: {path.name}")
+            raise ValidationError(f"repository authority invalid: {name}")
         repository = doc.get("repository")
         if not isinstance(repository, str) or repository.count("/") != 1 or repository in repository_authority:
-            raise ValidationError(f"repository authority identity invalid: {path.name}")
+            raise ValidationError(f"repository authority identity invalid: {name}")
         if doc.get("integration_policy") not in {"AUTO_AFTER_PASS", "HOLD_AFTER_PASS"}:
-            raise ValidationError(f"repository integration policy invalid: {path.name}")
+            raise ValidationError(f"repository integration policy invalid: {name}")
         if doc.get("control_auto_profile") not in {"CONTROL_AUTO_V1", "NONE"}:
-            raise ValidationError(f"repository AUTO profile invalid: {path.name}")
+            raise ValidationError(f"repository AUTO profile invalid: {name}")
         if doc.get("integration_enabled") not in {True, False}:
-            raise ValidationError(f"repository integration_enabled invalid: {path.name}")
+            raise ValidationError(f"repository integration_enabled invalid: {name}")
         checks = doc.get("required_check_runs")
         if not isinstance(checks, list) or len(checks) != len(set(checks)) or any(not isinstance(x, str) or not x for x in checks):
-            raise ValidationError(f"required_check_runs invalid: {path.name}")
+            raise ValidationError(f"required_check_runs invalid: {name}")
         repository_authority[repository] = doc
-    if not repository_authority:
-        raise ValidationError("repository authority registry is empty")
 
-    mission_dir = root / "control" / "missions"
-    mission_paths = sorted(mission_dir.glob("*.mission.json"))
-    if not mission_paths or files(mission_dir) != {"README.md", *(p.name for p in mission_paths)}:
-        raise ValidationError("Mission registry surface invalid")
     seen_missions: set[str] = set()
     for path in mission_paths:
-        mission = load(root, path.relative_to(root).as_posix())
+        mission = load(root, entries, path)
+        name = path.rsplit("/", 1)[-1]
         if mission.get("protocol_id") != "MISSION_CONTRACT_V3_1" or not zero(mission.get("principal_manual_relay_count")):
-            raise ValidationError(f"Mission protocol/relay invalid: {path.name}")
+            raise ValidationError(f"Mission protocol/relay invalid: {name}")
         mission_id = mission.get("mission_id")
         revision = mission.get("mission_revision")
         repository = mission.get("repository")
         if not isinstance(mission_id, str) or not mission_id or mission_id in seen_missions or not isinstance(revision, str) or not revision:
-            raise ValidationError(f"Mission identity invalid: {path.name}")
+            raise ValidationError(f"Mission identity invalid: {name}")
         seen_missions.add(mission_id)
         if repository not in repository_authority:
-            raise ValidationError(f"Mission repository has no authority: {path.name}")
+            raise ValidationError(f"Mission repository has no authority: {name}")
         if any(key in mission for key in ("state", "priority", "next_action", "worker", "provider", "schedule")):
-            raise ValidationError(f"Mission contains mutable/routing state: {path.name}")
+            raise ValidationError(f"Mission contains mutable/routing state: {name}")
         gaps = mission.get("gaps")
         if not isinstance(gaps, list) or not gaps:
-            raise ValidationError(f"Mission gaps invalid: {path.name}")
-        ids = [g.get("gap_id") for g in gaps]
-        if any(not isinstance(x, str) or not x for x in ids) or len(ids) != len(set(ids)):
-            raise ValidationError(f"Mission gap identity invalid: {path.name}")
+            raise ValidationError(f"Mission gaps invalid: {name}")
+        ids = [g.get("gap_id") for g in gaps if isinstance(g, dict)]
+        if len(ids) != len(gaps) or any(not isinstance(x, str) or not x for x in ids) or len(ids) != len(set(ids)):
+            raise ValidationError(f"Mission gap identity invalid: {name}")
         idset = set(ids)
         for gap in gaps:
             gid = gap.get("gap_id")
             if gap.get("gap_state") not in {"OPEN", "RETIRED"}:
-                raise ValidationError(f"gap_state invalid: {path.name}:{gid}")
+                raise ValidationError(f"gap_state invalid: {name}:{gid}")
             if gap.get("repository") != repository or gap.get("operation") != "IMPLEMENTATION":
-                raise ValidationError(f"gap execution identity invalid: {path.name}:{gid}")
+                raise ValidationError(f"gap execution identity invalid: {name}:{gid}")
             if gap.get("integration_policy") not in {"AUTO_AFTER_PASS", "HOLD_AFTER_PASS"}:
-                raise ValidationError(f"gap integration policy invalid: {path.name}:{gid}")
+                raise ValidationError(f"gap integration policy invalid: {name}:{gid}")
             deps = gap.get("depends_on")
             if not isinstance(deps, list) or len(deps) != len(set(deps)) or any(dep not in idset for dep in deps):
-                raise ValidationError(f"gap dependency invalid: {path.name}:{gid}")
+                raise ValidationError(f"gap dependency invalid: {name}:{gid}")
             acceptance = gap.get("acceptance")
             if not isinstance(acceptance, list) or not acceptance or any(not isinstance(x, str) or not x for x in acceptance):
-                raise ValidationError(f"gap acceptance invalid: {path.name}:{gid}")
+                raise ValidationError(f"gap acceptance invalid: {name}:{gid}")
             forbidden = {"state", "satisfied", "status", "priority", "instruction", "worker", "provider", "retry", "schedule"}
             if forbidden.intersection(gap):
-                raise ValidationError(f"gap contains planning/execution state: {path.name}:{gid}")
+                raise ValidationError(f"gap contains planning/execution state: {name}:{gid}")
 
-    index = (root / "control" / "SYSTEM_INDEX.md").read_text(encoding="utf-8")
-    for marker in ("CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md", "MISSION DEFINES INTENT", "REPOSITORY PROVIDES FACTS", "no A2 baseline", "no normal provider fallback"):
+    index = text(root, entries, "control/SYSTEM_INDEX.md")
+    for marker in (
+        "CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
+        "MISSION DEFINES INTENT",
+        "REPOSITORY PROVIDES FACTS",
+        "no A2 baseline",
+        "no normal provider fallback",
+    ):
         if marker not in index:
             raise ValidationError(f"canonical SYSTEM_INDEX missing {marker}")
 
 
 def validate_revision_discipline(candidate: Path, base: Path) -> None:
-    base_dir = base / "control" / "missions"
-    candidate_dir = candidate / "control" / "missions"
-    if not base_dir.exists():
-        return
-    for candidate_path in sorted(candidate_dir.glob("*.mission.json")):
-        base_path = base_dir / candidate_path.name
-        if not base_path.is_file() or candidate_path.read_bytes() == base_path.read_bytes():
+    candidate_entries = committed_tree(candidate)
+    base_entries = committed_tree(base)
+    for path, candidate_entry in sorted(candidate_entries.items()):
+        mission_name = _single_child(path, "control/missions/")
+        if not mission_name or not mission_name.endswith(".mission.json"):
             continue
-        candidate_doc = json.loads(candidate_path.read_text(encoding="utf-8"))
+        base_entry = base_entries.get(path)
+        if base_entry is None or candidate_entry[2] == base_entry[2]:
+            continue
+        candidate_doc = load(candidate, candidate_entries, path)
         try:
-            base_doc = json.loads(base_path.read_text(encoding="utf-8"))
-        except Exception:
+            base_doc = load(base, base_entries, path)
+        except ValidationError:
             continue
         if base_doc.get("protocol_id") == "MISSION_CONTRACT_V3_1" and candidate_doc.get("mission_revision") == base_doc.get("mission_revision"):
-            raise ValidationError(f"execution-relevant Mission changed without new mission_revision: {candidate_path.name}")
+            raise ValidationError(f"execution-relevant Mission changed without new mission_revision: {mission_name}")
 
 
 def main() -> int:
     if len(sys.argv) != 3:
-        raise ValidationError("usage: validate_private_control_v31.py CANDIDATE_ROOT BASE_ROOT")
+        raise ValidationError("usage: validate_private_control_v31.py CANDIDATE_GIT_REPO BASE_GIT_REPO")
     candidate = Path(sys.argv[1]).resolve()
     base = Path(sys.argv[2]).resolve()
     validate_candidate(candidate)
