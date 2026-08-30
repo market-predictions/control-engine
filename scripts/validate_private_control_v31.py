@@ -197,25 +197,50 @@ def validate_trusted_schema_mirrors(root: Path, entries: Mapping[str, tuple[str,
 
 
 def assert_acyclic_dependencies(gaps: list[dict[str, Any]], *, mission_name: str) -> None:
+    """Validate the dependency graph without Python recursion depth coupling."""
     graph = {gap["gap_id"]: list(gap.get("depends_on", [])) for gap in gaps}
-    visiting: set[str] = set()
-    visited: set[str] = set()
+    state: dict[str, int] = {}  # 1=visiting, 2=done
 
-    def visit(gap_id: str) -> None:
-        if gap_id in visited:
-            return
-        if gap_id in visiting:
-            raise ValidationError(f"cyclic gap dependency: {mission_name}:{gap_id}")
-        visiting.add(gap_id)
-        for dependency in graph[gap_id]:
+    for start in graph:
+        if state.get(start) == 2:
+            continue
+        state[start] = 1
+        stack: list[tuple[str, Any]] = [(start, iter(graph[start]))]
+        while stack:
+            node, dependencies = stack[-1]
+            try:
+                dependency = next(dependencies)
+            except StopIteration:
+                state[node] = 2
+                stack.pop()
+                continue
             if dependency not in graph:
                 raise ValidationError(f"unknown gap dependency: {mission_name}:{dependency}")
-            visit(dependency)
-        visiting.remove(gap_id)
-        visited.add(gap_id)
+            dependency_state = state.get(dependency, 0)
+            if dependency_state == 1:
+                raise ValidationError(f"cyclic gap dependency: {mission_name}:{dependency}")
+            if dependency_state == 0:
+                state[dependency] = 1
+                stack.append((dependency, iter(graph[dependency])))
 
-    for gap_id in graph:
-        visit(gap_id)
+
+def assert_gap_integration_authorized(
+    gap_policy: str,
+    repository_authority: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    """Fail closed when a Mission asks for more merge authority than the repo grants."""
+    if gap_policy == "HOLD_AFTER_PASS":
+        return
+    if gap_policy != "AUTO_AFTER_PASS":
+        raise ValidationError(f"gap integration policy invalid: {label}")
+    if not (
+        repository_authority.get("integration_policy") == "AUTO_AFTER_PASS"
+        and repository_authority.get("integration_enabled") is True
+        and repository_authority.get("control_auto_profile") == "CONTROL_AUTO_V1"
+    ):
+        raise ValidationError(f"gap integration policy exceeds repository authority: {label}")
 
 
 def validate_candidate(root: Path) -> None:
@@ -260,6 +285,7 @@ def validate_candidate(root: Path) -> None:
         if mission_id in seen_missions or canonical_repo is None or canonical_repo not in repository_authority:
             raise ValidationError(f"Mission identity/repository authority invalid: {name}")
         seen_missions.add(mission_id)
+        repo_authority = repository_authority[canonical_repo]
         gaps = mission["gaps"]
         ids = [gap["gap_id"] for gap in gaps]
         if len(ids) != len(set(ids)):
@@ -271,6 +297,11 @@ def validate_candidate(root: Path) -> None:
                 raise ValidationError(f"gap repository differs from Mission repository: {name}:{gid}")
             if any(dependency not in idset for dependency in gap["depends_on"]):
                 raise ValidationError(f"gap dependency invalid: {name}:{gid}")
+            assert_gap_integration_authorized(
+                gap["integration_policy"],
+                repo_authority,
+                label=f"{name}:{gid}",
+            )
         assert_acyclic_dependencies(gaps, mission_name=name)
         if not isinstance(revision, str) or not revision:
             raise ValidationError(f"Mission revision invalid: {name}")
