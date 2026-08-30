@@ -1,0 +1,208 @@
+name: Control Kernel V3.1
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      command:
+        description: TICK, CLAIM, RECORD or RELEASE
+        required: true
+        type: choice
+        options: [TICK, CLAIM, RECORD, RELEASE]
+      task_id:
+        description: AUTO or exact canonical task id
+        required: false
+        default: AUTO
+        type: string
+      run_id:
+        description: Exact current run id for RECORD/RELEASE
+        required: false
+        type: string
+      result_payload:
+        description: Bounded JSON semantic result for RECORD
+        required: false
+        type: string
+      release_reason:
+        description: EXECUTION_UNAVAILABLE or EXECUTION_ABORTED
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: control-runtime-mutation
+  cancel-in-progress: false
+
+env:
+  CONTROL_PLANE_REPOSITORY: market-predictions/control-plane
+
+jobs:
+  kernel:
+    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact public Control kernel
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Validate kernel syntax
+        run: python -m py_compile control_engine/kernel_v31.py scripts/control_kernel_v31.py
+
+      - name: Preflight GitHub App
+        shell: bash
+        env:
+          CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          CONTROL_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+        run: bash scripts/github_app_preflight.sh
+
+      - name: Create exact private-runtime capability
+        id: runtime-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: write
+
+      - name: Resolve authenticated semantic role
+        id: semantic-role
+        if: github.event_name == 'workflow_dispatch' && inputs.command != 'TICK'
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          A1_ACTOR: ${{ vars.CONTROL_A1_GITHUB_ACTOR }}
+          B1_ACTOR: ${{ vars.CONTROL_B1_GITHUB_ACTOR }}
+        run: |
+          set -euo pipefail
+          [ -n "$A1_ACTOR" ] && [ -n "$B1_ACTOR" ]
+          [ "$A1_ACTOR" != "$B1_ACTOR" ]
+          case "$ACTOR" in
+            "$A1_ACTOR")
+              echo 'role=implementation_operations' >> "$GITHUB_OUTPUT"
+              echo 'worker=A1' >> "$GITHUB_OUTPUT"
+              ;;
+            "$B1_ACTOR")
+              echo 'role=governance_release_assurance' >> "$GITHUB_OUTPUT"
+              echo 'worker=B1' >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo '::error::Authenticated actor has no V3.1 semantic role capability.'
+              exit 1
+              ;;
+          esac
+
+      - name: Plan deterministic TICK target capability
+        id: plan
+        if: github.event_name == 'schedule' || inputs.command == 'TICK'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          output="$(python scripts/control_kernel_v31.py plan-tick)"
+          target="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_REPOSITORY=//p' | tail -n1)"
+          if [ -n "$target" ]; then
+            owner="${target%%/*}"
+            repo="${target#*/}"
+            [ "$owner" != "$target" ] && [ -n "$repo" ]
+            echo "target=$target" >> "$GITHUB_OUTPUT"
+            echo "owner=$owner" >> "$GITHUB_OUTPUT"
+            echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          else
+            echo 'target=' >> "$GITHUB_OUTPUT"
+            echo 'owner=' >> "$GITHUB_OUTPUT"
+            echo 'repo=' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create exact target-repository capability
+        id: target-token
+        if: steps.plan.outputs.target != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ steps.plan.outputs.owner }}
+          repositories: ${{ steps.plan.outputs.repo }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-checks: read
+          permission-statuses: write
+
+      - name: Execute deterministic TICK
+        if: github.event_name == 'schedule' || inputs.command == 'TICK'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_REPOSITORY: ${{ steps.plan.outputs.target }}
+        run: |
+          set -euo pipefail
+          python scripts/control_kernel_v31.py tick
+
+      - name: Execute authenticated CLAIM
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'CLAIM'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          ROLE: ${{ steps.semantic-role.outputs.role }}
+          WORKER: ${{ steps.semantic-role.outputs.worker }}
+          TASK_ID: ${{ inputs.task_id }}
+        run: |
+          set -euo pipefail
+          python scripts/control_kernel_v31.py claim --role "$ROLE" --worker "$WORKER" --task-id "${TASK_ID:-AUTO}"
+
+      - name: Execute authenticated atomic RECORD
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'RECORD'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          ROLE: ${{ steps.semantic-role.outputs.role }}
+          WORKER: ${{ steps.semantic-role.outputs.worker }}
+          TASK_ID: ${{ inputs.task_id }}
+          RUN_ID: ${{ inputs.run_id }}
+          CONTROL_RESULT_PAYLOAD: ${{ inputs.result_payload }}
+        run: |
+          set -euo pipefail
+          [ -n "$TASK_ID" ] && [ -n "$RUN_ID" ] && [ -n "$CONTROL_RESULT_PAYLOAD" ]
+          python scripts/control_kernel_v31.py record --role "$ROLE" --worker "$WORKER" --task-id "$TASK_ID" --run-id "$RUN_ID"
+
+      - name: Execute authenticated RELEASE
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'RELEASE'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          ROLE: ${{ steps.semantic-role.outputs.role }}
+          WORKER: ${{ steps.semantic-role.outputs.worker }}
+          TASK_ID: ${{ inputs.task_id }}
+          RUN_ID: ${{ inputs.run_id }}
+          RELEASE_REASON: ${{ inputs.release_reason }}
+        run: |
+          set -euo pipefail
+          [ -n "$TASK_ID" ] && [ -n "$RUN_ID" ]
+          case "$RELEASE_REASON" in EXECUTION_UNAVAILABLE|EXECUTION_ABORTED) ;; *) exit 2 ;; esac
+          python scripts/control_kernel_v31.py release --role "$ROLE" --worker "$WORKER" --task-id "$TASK_ID" --run-id "$RUN_ID" --reason "$RELEASE_REASON"
+
+      - name: Prove kernel boundary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'CONTROL_AUTONOMY_V3_1=true'
+          echo 'CONTROL_RUNTIME_WRITER=CONTROL_KERNEL'
+          echo 'CONTROL_SEMANTIC_INFERENCE=false'
+          echo 'CONTROL_A2=false'
+          echo 'CONTROL_PROVIDER_FALLBACK=false'
+          echo 'CONTROL_PROJECT_INTEGRATION_SEMANTIC_TASK=false'
