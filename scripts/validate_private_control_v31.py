@@ -2,8 +2,11 @@
 """Trusted static validator for an exact private Control V3.1 candidate.
 
 The private candidate is treated strictly as Git data. This validator never
-imports, executes, sources, checks out, or follows candidate-controlled code,
-workflows, hooks, symlinks, or filesystem paths.
+imports, executes, sources, or follows candidate-controlled code, workflows,
+hooks, symlinks, submodules, or filesystem paths.
+
+Contract semantics come from trusted schema copies in public Control main and
+are validated with the standard jsonschema Draft 2020-12 implementation.
 """
 from __future__ import annotations
 
@@ -12,10 +15,16 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Mapping
 
-REPOSITORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+$")
-DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError as JsonSchemaValidationError
+
+PUBLIC_ROOT = Path(__file__).resolve().parents[1]
+MISSION_SCHEMA_REL = "schemas/mission_contract_v31.schema.json"
+REPOSITORY_SCHEMA_REL = "schemas/repository_authority_v31.schema.json"
+OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 
 class ValidationError(ValueError):
@@ -30,8 +39,13 @@ def explicit_bool(value: object) -> bool:
     return isinstance(value, bool)
 
 
-def valid_repository(value: object) -> bool:
-    return isinstance(value, str) and bool(REPOSITORY_RE.fullmatch(value))
+def canonical_repository(value: object) -> str | None:
+    if not isinstance(value, str) or value.count("/") != 1:
+        return None
+    owner, repo = value.split("/", 1)
+    if not OWNER_RE.fullmatch(owner) or not REPO_RE.fullmatch(repo) or repo in {".", ".."}:
+        return None
+    return f"{owner.lower()}/{repo.lower()}"
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
@@ -69,7 +83,7 @@ def committed_tree(root: Path) -> dict[str, tuple[str, str, str]]:
     return entries
 
 
-def blob_bytes(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -> bytes:
+def blob_bytes(root: Path, entries: Mapping[str, tuple[str, str, str]], rel: str) -> bytes:
     entry = entries.get(rel)
     if entry is None:
         raise ValidationError(f"required committed file missing: {rel}")
@@ -79,23 +93,47 @@ def blob_bytes(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -
     return git_bytes(root, "cat-file", "blob", oid)
 
 
-def text(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -> str:
+def text(root: Path, entries: Mapping[str, tuple[str, str, str]], rel: str) -> str:
     try:
         return blob_bytes(root, entries, rel).decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
         raise ValidationError(f"committed file is not UTF-8: {rel}") from exc
 
 
-def load(root: Path, entries: dict[str, tuple[str, str, str]], rel: str) -> dict[str, Any]:
+def load(root: Path, entries: Mapping[str, tuple[str, str, str]], rel: str) -> dict[str, Any]:
     try:
         value = json.loads(text(root, entries, rel))
+    except ValidationError:
+        raise
     except Exception as exc:
-        if isinstance(exc, ValidationError):
-            raise
         raise ValidationError(f"invalid JSON: {rel}") from exc
     if not isinstance(value, dict):
         raise ValidationError(f"JSON root must be an object: {rel}")
     return value
+
+
+def trusted_schema(rel: str) -> dict[str, Any]:
+    path = PUBLIC_ROOT / rel
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValidationError(f"trusted public schema unavailable: {rel}") from exc
+    if not isinstance(value, dict):
+        raise ValidationError(f"trusted public schema root invalid: {rel}")
+    try:
+        Draft202012Validator.check_schema(value)
+    except SchemaError as exc:
+        raise ValidationError(f"trusted public schema is invalid: {rel}") from exc
+    return value
+
+
+def validate_instance(instance: Mapping[str, Any], schema: Mapping[str, Any], *, label: str) -> None:
+    try:
+        Draft202012Validator(schema).validate(instance)
+    except JsonSchemaValidationError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path)
+        suffix = f" at {location}" if location else ""
+        raise ValidationError(f"{label} violates trusted schema{suffix}: {exc.message}") from exc
 
 
 def _single_child(path: str, prefix: str) -> str | None:
@@ -107,7 +145,7 @@ def _single_child(path: str, prefix: str) -> str | None:
     return tail
 
 
-def validate_surface(entries: dict[str, tuple[str, str, str]]) -> tuple[list[str], list[str]]:
+def validate_surface(entries: Mapping[str, tuple[str, str, str]]) -> tuple[list[str], list[str]]:
     fixed = {
         "README.md",
         "control/CHANGELOG.md",
@@ -115,8 +153,8 @@ def validate_surface(entries: dict[str, tuple[str, str, str]]) -> tuple[list[str
         "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
         "control/SYSTEM_INDEX.md",
         "control/missions/README.md",
-        "schemas/mission_contract_v31.schema.json",
-        "schemas/repository_authority_v31.schema.json",
+        MISSION_SCHEMA_REL,
+        REPOSITORY_SCHEMA_REL,
     }
     mission_paths: list[str] = []
     authority_paths: list[str] = []
@@ -146,57 +184,16 @@ def validate_surface(entries: dict[str, tuple[str, str, str]]) -> tuple[list[str
     return sorted(mission_paths), sorted(authority_paths)
 
 
-def validate_schema_document(schema: dict[str, Any], *, title: str, required: set[str], protocol_const: str) -> None:
-    if schema.get("$schema") != DRAFT_2020_12 or schema.get("title") != title:
-        raise ValidationError(f"schema identity invalid: {title}")
-    if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
-        raise ValidationError(f"schema root contract invalid: {title}")
-    schema_required = schema.get("required")
-    properties = schema.get("properties")
-    if not isinstance(schema_required, list) or set(schema_required) != required or not isinstance(properties, dict):
-        raise ValidationError(f"schema required/properties contract invalid: {title}")
-    protocol = properties.get("protocol_id")
-    if not isinstance(protocol, dict) or protocol.get("const") != protocol_const:
-        raise ValidationError(f"schema protocol contract invalid: {title}")
-    repository = properties.get("repository")
-    if not isinstance(repository, dict) or repository.get("type") != "string" or not isinstance(repository.get("pattern"), str):
-        raise ValidationError(f"schema repository contract invalid: {title}")
-
-
-def validate_schemas(root: Path, entries: dict[str, tuple[str, str, str]]) -> None:
-    mission_schema = load(root, entries, "schemas/mission_contract_v31.schema.json")
-    validate_schema_document(
-        mission_schema,
-        title="MISSION_CONTRACT_V3_1",
-        required={
-            "protocol_id", "mission_id", "mission_revision", "repository",
-            "desired_outcome", "gaps", "authority_boundaries", "principal_manual_relay_count",
-        },
-        protocol_const="MISSION_CONTRACT_V3_1",
-    )
-    gap_schema = mission_schema.get("properties", {}).get("gaps", {}).get("items")
-    if not isinstance(gap_schema, dict) or gap_schema.get("type") != "object" or gap_schema.get("additionalProperties") is not False:
-        raise ValidationError("Mission gap schema contract invalid")
-    gap_required = gap_schema.get("required")
-    gap_properties = gap_schema.get("properties")
-    expected_gap = {"gap_id", "gap_state", "depends_on", "repository", "operation", "acceptance", "integration_policy"}
-    if not isinstance(gap_required, list) or set(gap_required) != expected_gap or not isinstance(gap_properties, dict):
-        raise ValidationError("Mission gap required/properties contract invalid")
-    if gap_properties.get("operation", {}).get("const") != "IMPLEMENTATION":
-        raise ValidationError("Mission gap operation schema contract invalid")
-
-    authority_schema = load(root, entries, "schemas/repository_authority_v31.schema.json")
-    validate_schema_document(
-        authority_schema,
-        title="CONTROL_REPOSITORY_AUTHORITY_V3_1",
-        required={
-            "protocol_id", "repository", "integration_policy", "control_auto_profile",
-            "integration_enabled", "required_check_runs", "principal_manual_relay_count",
-        },
-        protocol_const="CONTROL_REPOSITORY_AUTHORITY_V3_1",
-    )
-    if authority_schema.get("properties", {}).get("integration_enabled", {}).get("type") != "boolean":
-        raise ValidationError("repository authority boolean schema contract invalid")
+def validate_trusted_schema_mirrors(root: Path, entries: Mapping[str, tuple[str, str, str]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    trusted_mission = trusted_schema(MISSION_SCHEMA_REL)
+    trusted_repository = trusted_schema(REPOSITORY_SCHEMA_REL)
+    candidate_mission = load(root, entries, MISSION_SCHEMA_REL)
+    candidate_repository = load(root, entries, REPOSITORY_SCHEMA_REL)
+    if candidate_mission != trusted_mission:
+        raise ValidationError("private Mission schema differs from trusted public contract")
+    if candidate_repository != trusted_repository:
+        raise ValidationError("private repository-authority schema differs from trusted public contract")
+    return trusted_mission, trusted_repository
 
 
 def assert_acyclic_dependencies(gaps: list[dict[str, Any]], *, mission_name: str) -> None:
@@ -211,6 +208,8 @@ def assert_acyclic_dependencies(gaps: list[dict[str, Any]], *, mission_name: str
             raise ValidationError(f"cyclic gap dependency: {mission_name}:{gap_id}")
         visiting.add(gap_id)
         for dependency in graph[gap_id]:
+            if dependency not in graph:
+                raise ValidationError(f"unknown gap dependency: {mission_name}:{dependency}")
             visit(dependency)
         visiting.remove(gap_id)
         visited.add(gap_id)
@@ -222,9 +221,17 @@ def assert_acyclic_dependencies(gaps: list[dict[str, Any]], *, mission_name: str
 def validate_candidate(root: Path) -> None:
     entries = committed_tree(root)
     mission_paths, authority_paths = validate_surface(entries)
-    validate_schemas(root, entries)
+    mission_schema, repository_schema = validate_trusted_schema_mirrors(root, entries)
 
     global_auth = load(root, entries, "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json")
+    if set(global_auth) != {
+        "protocol_id",
+        "control_runtime_enabled",
+        "integration_enabled",
+        "semantic_claim_lease_seconds",
+        "principal_manual_relay_count",
+    }:
+        raise ValidationError("global V3.1 authority fields are not exact")
     if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1" or not zero(global_auth.get("principal_manual_relay_count")):
         raise ValidationError("global V3.1 authority invalid")
     if global_auth.get("semantic_claim_lease_seconds") != 5400:
@@ -236,63 +243,37 @@ def validate_candidate(root: Path) -> None:
     for path in authority_paths:
         doc = load(root, entries, path)
         name = path.rsplit("/", 1)[-1]
-        if doc.get("protocol_id") != "CONTROL_REPOSITORY_AUTHORITY_V3_1" or not zero(doc.get("principal_manual_relay_count")):
-            raise ValidationError(f"repository authority invalid: {name}")
-        repository = doc.get("repository")
-        if not valid_repository(repository) or repository in repository_authority:
-            raise ValidationError(f"repository authority identity invalid: {name}")
-        if doc.get("integration_policy") not in {"AUTO_AFTER_PASS", "HOLD_AFTER_PASS"}:
-            raise ValidationError(f"repository integration policy invalid: {name}")
-        if doc.get("control_auto_profile") not in {"CONTROL_AUTO_V1", "NONE"}:
-            raise ValidationError(f"repository AUTO profile invalid: {name}")
-        if not explicit_bool(doc.get("integration_enabled")):
-            raise ValidationError(f"repository integration_enabled must be an explicit boolean: {name}")
-        checks = doc.get("required_check_runs")
-        if not isinstance(checks, list) or len(checks) != len(set(checks)) or any(not isinstance(x, str) or not x for x in checks):
-            raise ValidationError(f"required_check_runs invalid: {name}")
-        repository_authority[repository] = doc
+        validate_instance(doc, repository_schema, label=f"repository authority {name}")
+        canonical = canonical_repository(doc.get("repository"))
+        if canonical is None or canonical in repository_authority:
+            raise ValidationError(f"repository authority identity invalid or duplicated: {name}")
+        repository_authority[canonical] = doc
 
     seen_missions: set[str] = set()
     for path in mission_paths:
         mission = load(root, entries, path)
         name = path.rsplit("/", 1)[-1]
-        if mission.get("protocol_id") != "MISSION_CONTRACT_V3_1" or not zero(mission.get("principal_manual_relay_count")):
-            raise ValidationError(f"Mission protocol/relay invalid: {name}")
-        mission_id = mission.get("mission_id")
-        revision = mission.get("mission_revision")
-        repository = mission.get("repository")
-        if not isinstance(mission_id, str) or not mission_id or mission_id in seen_missions or not isinstance(revision, str) or not revision:
-            raise ValidationError(f"Mission identity invalid: {name}")
+        validate_instance(mission, mission_schema, label=f"Mission {name}")
+        mission_id = mission["mission_id"]
+        revision = mission["mission_revision"]
+        canonical_repo = canonical_repository(mission["repository"])
+        if mission_id in seen_missions or canonical_repo is None or canonical_repo not in repository_authority:
+            raise ValidationError(f"Mission identity/repository authority invalid: {name}")
         seen_missions.add(mission_id)
-        if not valid_repository(repository) or repository not in repository_authority:
-            raise ValidationError(f"Mission repository has no valid authority: {name}")
-        if any(key in mission for key in ("state", "priority", "next_action", "worker", "provider", "schedule")):
-            raise ValidationError(f"Mission contains mutable/routing state: {name}")
-        gaps = mission.get("gaps")
-        if not isinstance(gaps, list) or not gaps:
-            raise ValidationError(f"Mission gaps invalid: {name}")
-        ids = [g.get("gap_id") for g in gaps if isinstance(g, dict)]
-        if len(ids) != len(gaps) or any(not isinstance(x, str) or not x for x in ids) or len(ids) != len(set(ids)):
-            raise ValidationError(f"Mission gap identity invalid: {name}")
+        gaps = mission["gaps"]
+        ids = [gap["gap_id"] for gap in gaps]
+        if len(ids) != len(set(ids)):
+            raise ValidationError(f"Mission gap identity duplicated: {name}")
         idset = set(ids)
         for gap in gaps:
-            gid = gap.get("gap_id")
-            if gap.get("gap_state") not in {"OPEN", "RETIRED"}:
-                raise ValidationError(f"gap_state invalid: {name}:{gid}")
-            if gap.get("repository") != repository or gap.get("operation") != "IMPLEMENTATION":
-                raise ValidationError(f"gap execution identity invalid: {name}:{gid}")
-            if gap.get("integration_policy") not in {"AUTO_AFTER_PASS", "HOLD_AFTER_PASS"}:
-                raise ValidationError(f"gap integration policy invalid: {name}:{gid}")
-            deps = gap.get("depends_on")
-            if not isinstance(deps, list) or len(deps) != len(set(deps)) or any(dep not in idset for dep in deps):
+            gid = gap["gap_id"]
+            if canonical_repository(gap["repository"]) != canonical_repo:
+                raise ValidationError(f"gap repository differs from Mission repository: {name}:{gid}")
+            if any(dependency not in idset for dependency in gap["depends_on"]):
                 raise ValidationError(f"gap dependency invalid: {name}:{gid}")
-            acceptance = gap.get("acceptance")
-            if not isinstance(acceptance, list) or not acceptance or any(not isinstance(x, str) or not x for x in acceptance):
-                raise ValidationError(f"gap acceptance invalid: {name}:{gid}")
-            forbidden = {"state", "satisfied", "status", "priority", "instruction", "worker", "provider", "retry", "schedule"}
-            if forbidden.intersection(gap):
-                raise ValidationError(f"gap contains planning/execution state: {name}:{gid}")
         assert_acyclic_dependencies(gaps, mission_name=name)
+        if not isinstance(revision, str) or not revision:
+            raise ValidationError(f"Mission revision invalid: {name}")
 
     index = text(root, entries, "control/SYSTEM_INDEX.md")
     for marker in (
@@ -306,7 +287,7 @@ def validate_candidate(root: Path) -> None:
             raise ValidationError(f"canonical SYSTEM_INDEX missing {marker}")
 
 
-def mission_documents_by_identity(root: Path, entries: dict[str, tuple[str, str, str]]) -> dict[str, dict[str, Any]]:
+def mission_documents_by_identity(root: Path, entries: Mapping[str, tuple[str, str, str]]) -> dict[str, dict[str, Any]]:
     documents: dict[str, dict[str, Any]] = {}
     for path in sorted(entries):
         name = _single_child(path, "control/missions/")
@@ -322,7 +303,7 @@ def mission_documents_by_identity(root: Path, entries: dict[str, tuple[str, str,
     return documents
 
 
-def enforce_revision_discipline(candidate_docs: dict[str, dict[str, Any]], base_docs: dict[str, dict[str, Any]]) -> None:
+def enforce_revision_discipline(candidate_docs: Mapping[str, dict[str, Any]], base_docs: Mapping[str, dict[str, Any]]) -> None:
     for mission_id, base_doc in base_docs.items():
         candidate_doc = candidate_docs.get(mission_id)
         if candidate_doc is None:
