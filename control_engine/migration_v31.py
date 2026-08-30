@@ -6,6 +6,7 @@ from typing import Any, Iterable, Mapping
 
 from control_engine import kernel_v31 as core
 
+LEGACY_QUEUE_VERSION = "1.0"
 MIGRATION_PROTOCOL_ID = "CONTROL_V3_1_MIGRATION_FACT"
 MIGRATION_FACT = "LEGACY_PROJECT_INTEGRATION_COMPLETED"
 
@@ -39,6 +40,8 @@ def _current_gap_prefixes(missions: Iterable[Mapping[str, Any]]) -> dict[str, di
             if not isinstance(gap_id, str) or not gap_id:
                 raise MigrationError("Mission gap identity is invalid")
             prefix = core.deterministic_root_id(mission_id, revision, gap_id)
+            if prefix in prefixes:
+                raise MigrationError("duplicate deterministic Mission gap identity")
             prefixes[prefix] = {
                 "mission_id": mission_id,
                 "mission_revision": revision,
@@ -59,6 +62,10 @@ def _completed_legacy_integration(task: Mapping[str, Any]) -> bool:
         and isinstance(task.get("result_ref"), str)
         and bool(task.get("result_ref"))
     )
+
+
+def _matches_legacy_root(task_id: str, root_id: str) -> bool:
+    return task_id == root_id or task_id.startswith(root_id + "--")
 
 
 def _validate_fact(fact: Mapping[str, Any]) -> None:
@@ -104,16 +111,20 @@ def validate_migration_facts(queue: Mapping[str, Any]) -> None:
 def migrate(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], now: datetime) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """One-time V1→V3.1 convergence.
 
-    Only a legacy terminal COMPLETED PROJECT_INTEGRATION for a gap in a current
-    governed Mission revision becomes an inert satisfaction fact. No legacy task
-    object survives in the active queue. BLOCKED/PASS/EXECUTING/QUEUED evidence
-    is preserved only in Git history and never upgraded into V3.1 authority.
+    Only the exact supported V1 queue format is migratable. A legacy terminal
+    COMPLETED PROJECT_INTEGRATION for a gap in a current governed Mission
+    revision becomes an inert satisfaction fact. No legacy task object survives
+    in the active queue. BLOCKED/PASS/EXECUTING/QUEUED evidence remains only in
+    Git history and is never upgraded into V3.1 authority.
     """
-    if queue.get("version") == "3.1":
+    version = queue.get("version")
+    if version == "3.1":
         q = deepcopy(queue)
         core.validate(q)
         validate_migration_facts(q)
         return q, []
+    if version != LEGACY_QUEUE_VERSION:
+        raise MigrationError("unsupported queue version for V3.1 migration")
 
     tasks = queue.get("tasks")
     relay = queue.get("principal_manual_relay_count")
@@ -126,7 +137,12 @@ def migrate(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], 
     for task in tasks:
         if not isinstance(task, Mapping) or not _completed_legacy_integration(task):
             continue
-        matches = [(prefix, authority) for prefix, authority in prefixes.items() if task["task_id"].startswith(prefix)]
+        task_id = task["task_id"]
+        matches = [
+            (prefix, authority)
+            for prefix, authority in prefixes.items()
+            if _matches_legacy_root(task_id, prefix)
+        ]
         if len(matches) != 1:
             continue
         _, authority = matches[0]
@@ -135,7 +151,7 @@ def migrate(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], 
             "protocol_id": MIGRATION_PROTOCOL_ID,
             "fact": MIGRATION_FACT,
             **authority,
-            "source_task_id": task["task_id"],
+            "source_task_id": task_id,
             "source_result_ref": task["result_ref"],
             "imported_at": imported_at,
             "principal_manual_relay_count": 0,
