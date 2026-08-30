@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import Any
@@ -21,6 +20,10 @@ class ValidationError(ValueError):
 
 def zero(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value == 0
+
+
+def explicit_bool(value: object) -> bool:
+    return isinstance(value, bool)
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
@@ -144,7 +147,7 @@ def validate_candidate(root: Path) -> None:
         raise ValidationError("global V3.1 authority invalid")
     if global_auth.get("semantic_claim_lease_seconds") != 5400:
         raise ValidationError("V3.1 semantic claim lease must be exactly 5400 seconds")
-    if global_auth.get("control_runtime_enabled") not in {True, False} or global_auth.get("integration_enabled") not in {True, False}:
+    if not explicit_bool(global_auth.get("control_runtime_enabled")) or not explicit_bool(global_auth.get("integration_enabled")):
         raise ValidationError("break-glass authority must be explicit booleans")
 
     repository_authority: dict[str, dict[str, Any]] = {}
@@ -160,8 +163,8 @@ def validate_candidate(root: Path) -> None:
             raise ValidationError(f"repository integration policy invalid: {name}")
         if doc.get("control_auto_profile") not in {"CONTROL_AUTO_V1", "NONE"}:
             raise ValidationError(f"repository AUTO profile invalid: {name}")
-        if doc.get("integration_enabled") not in {True, False}:
-            raise ValidationError(f"repository integration_enabled invalid: {name}")
+        if not explicit_bool(doc.get("integration_enabled")):
+            raise ValidationError(f"repository integration_enabled must be an explicit boolean: {name}")
         checks = doc.get("required_check_runs")
         if not isinstance(checks, list) or len(checks) != len(set(checks)) or any(not isinstance(x, str) or not x for x in checks):
             raise ValidationError(f"required_check_runs invalid: {name}")
@@ -220,23 +223,37 @@ def validate_candidate(root: Path) -> None:
             raise ValidationError(f"canonical SYSTEM_INDEX missing {marker}")
 
 
+def mission_documents_by_identity(root: Path, entries: dict[str, tuple[str, str, str]]) -> dict[str, dict[str, Any]]:
+    documents: dict[str, dict[str, Any]] = {}
+    for path in sorted(entries):
+        name = _single_child(path, "control/missions/")
+        if not name or not name.endswith(".mission.json"):
+            continue
+        doc = load(root, entries, path)
+        if doc.get("protocol_id") != "MISSION_CONTRACT_V3_1":
+            continue
+        mission_id = doc.get("mission_id")
+        if not isinstance(mission_id, str) or not mission_id or mission_id in documents:
+            raise ValidationError("V3.1 Mission identity is missing or duplicated")
+        documents[mission_id] = doc
+    return documents
+
+
+def enforce_revision_discipline(candidate_docs: dict[str, dict[str, Any]], base_docs: dict[str, dict[str, Any]]) -> None:
+    for mission_id, base_doc in base_docs.items():
+        candidate_doc = candidate_docs.get(mission_id)
+        if candidate_doc is None:
+            raise ValidationError(f"existing V3.1 Mission removed instead of being revised/retired: {mission_id}")
+        if candidate_doc != base_doc and candidate_doc.get("mission_revision") == base_doc.get("mission_revision"):
+            raise ValidationError(f"execution-relevant Mission changed without new mission_revision: {mission_id}")
+
+
 def validate_revision_discipline(candidate: Path, base: Path) -> None:
     candidate_entries = committed_tree(candidate)
     base_entries = committed_tree(base)
-    for path, candidate_entry in sorted(candidate_entries.items()):
-        mission_name = _single_child(path, "control/missions/")
-        if not mission_name or not mission_name.endswith(".mission.json"):
-            continue
-        base_entry = base_entries.get(path)
-        if base_entry is None or candidate_entry[2] == base_entry[2]:
-            continue
-        candidate_doc = load(candidate, candidate_entries, path)
-        try:
-            base_doc = load(base, base_entries, path)
-        except ValidationError:
-            continue
-        if base_doc.get("protocol_id") == "MISSION_CONTRACT_V3_1" and candidate_doc.get("mission_revision") == base_doc.get("mission_revision"):
-            raise ValidationError(f"execution-relevant Mission changed without new mission_revision: {mission_name}")
+    candidate_docs = mission_documents_by_identity(candidate, candidate_entries)
+    base_docs = mission_documents_by_identity(base, base_entries)
+    enforce_revision_discipline(candidate_docs, base_docs)
 
 
 def main() -> int:
