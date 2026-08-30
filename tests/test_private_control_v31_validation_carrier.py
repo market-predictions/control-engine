@@ -77,7 +77,17 @@ def test_authority_switches_require_actual_json_booleans():
 def test_repository_identity_is_github_safe_and_case_canonical():
     assert validator.canonical_repository("market-predictions/Control-Plane") == "market-predictions/control-plane"
     assert validator.canonical_repository("Owner/Repo") == validator.canonical_repository("owner/repo")
-    for value in ("/", "owner/", "/repo", "owner/repo/extra", "owner name/repo", "owner/repo name", "-owner/repo", "owner-/repo"):
+    for value in (
+        "/",
+        "owner/",
+        "/repo",
+        "owner/repo/extra",
+        "owner name/repo",
+        "owner/repo name",
+        "-owner/repo",
+        "owner-/repo",
+        "owner--name/repo",
+    ):
         assert validator.canonical_repository(value) is None
 
 
@@ -125,23 +135,36 @@ def test_gap_dependency_graph_must_be_acyclic_without_recursion_limit():
     validator.assert_acyclic_dependencies(chain, mission_name="LONG")
 
 
-def test_gap_auto_integration_must_not_exceed_repository_authority():
+def test_gap_auto_integration_must_not_exceed_global_or_repository_authority():
     auto = {
         "integration_policy": "AUTO_AFTER_PASS",
         "integration_enabled": True,
         "control_auto_profile": "CONTROL_AUTO_V1",
     }
-    validator.assert_gap_integration_authorized("AUTO_AFTER_PASS", auto, label="M1:G1")
-    validator.assert_gap_integration_authorized("HOLD_AFTER_PASS", auto, label="M1:G1")
+    validator.assert_gap_integration_authorized(
+        "AUTO_AFTER_PASS", auto, global_integration_enabled=True, label="M1:G1"
+    )
+    validator.assert_gap_integration_authorized(
+        "HOLD_AFTER_PASS", auto, global_integration_enabled=False, label="M1:G1"
+    )
+
+    with pytest.raises(validator.ValidationError, match="exceeds Control authority"):
+        validator.assert_gap_integration_authorized(
+            "AUTO_AFTER_PASS", auto, global_integration_enabled=False, label="M1:G1"
+        )
 
     for authority in (
         {**auto, "integration_policy": "HOLD_AFTER_PASS"},
         {**auto, "integration_enabled": False},
         {**auto, "control_auto_profile": "NONE"},
     ):
-        with pytest.raises(validator.ValidationError, match="exceeds repository authority"):
-            validator.assert_gap_integration_authorized("AUTO_AFTER_PASS", authority, label="M1:G1")
-        validator.assert_gap_integration_authorized("HOLD_AFTER_PASS", authority, label="M1:G1")
+        with pytest.raises(validator.ValidationError, match="exceeds Control authority"):
+            validator.assert_gap_integration_authorized(
+                "AUTO_AFTER_PASS", authority, global_integration_enabled=True, label="M1:G1"
+            )
+        validator.assert_gap_integration_authorized(
+            "HOLD_AFTER_PASS", authority, global_integration_enabled=False, label="M1:G1"
+        )
 
 
 def test_revision_discipline_is_bound_to_mission_identity_not_filename():
