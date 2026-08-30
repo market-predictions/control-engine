@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://control.local/schemas/repository_authority_v31.schema.json",
+  "title": "CONTROL_REPOSITORY_AUTHORITY_V3_1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_id",
+    "repository",
+    "integration_policy",
+    "control_auto_profile",
+    "integration_enabled",
+    "required_check_runs",
+    "principal_manual_relay_count"
+  ],
+  "properties": {
+    "protocol_id": {"const": "CONTROL_REPOSITORY_AUTHORITY_V3_1"},
+    "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+    "integration_policy": {"enum": ["AUTO_AFTER_PASS", "HOLD_AFTER_PASS"]},
+    "control_auto_profile": {"enum": ["CONTROL_AUTO_V1", "NONE"]},
+    "integration_enabled": {"type": "boolean"},
+    "required_check_runs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "principal_manual_relay_count": {"const": 0}
+  }
+}
