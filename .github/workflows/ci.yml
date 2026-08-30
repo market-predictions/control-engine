@@ -58,10 +58,12 @@ jobs:
         run: python -m pytest -q
       - name: Prove active V3.1 surface
         run: |
+          set -euo pipefail
           test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort)" = $'ci.yml\ncontrol-kernel-v3-1.yml'
           test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nassurance_capsule.py\nbundle.py\nkernel_v31.py\ntimeline.py'
           test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh'
-          ! grep -R -nE 'cloudflare|groq|scheduled_worker|minimal_core|PROJECT_INTEGRATION' control_engine scripts .github/workflows README.md docs || true
+          forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' \) -print)"
+          test -z "$forbidden"
           echo 'CONTROL_V3_1_ACTIVE_SURFACE=PASS'
       - name: Synthetic engine smoke
         run: |
