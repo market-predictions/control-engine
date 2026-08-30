@@ -136,6 +136,11 @@ def validate_instance(instance: Mapping[str, Any], schema: Mapping[str, Any], *,
         raise ValidationError(f"{label} violates trusted schema{suffix}: {exc.message}") from exc
 
 
+def require_exact_schema_bytes(candidate: bytes, trusted: bytes, *, label: str) -> None:
+    if candidate != trusted:
+        raise ValidationError(f"private {label} schema differs byte-for-byte from trusted public contract")
+
+
 def _single_child(path: str, prefix: str) -> str | None:
     if not path.startswith(prefix):
         return None
@@ -185,15 +190,15 @@ def validate_surface(entries: Mapping[str, tuple[str, str, str]]) -> tuple[list[
 
 
 def validate_trusted_schema_mirrors(root: Path, entries: Mapping[str, tuple[str, str, str]]) -> tuple[dict[str, Any], dict[str, Any]]:
-    trusted_mission = trusted_schema(MISSION_SCHEMA_REL)
-    trusted_repository = trusted_schema(REPOSITORY_SCHEMA_REL)
-    candidate_mission = load(root, entries, MISSION_SCHEMA_REL)
-    candidate_repository = load(root, entries, REPOSITORY_SCHEMA_REL)
-    if candidate_mission != trusted_mission:
-        raise ValidationError("private Mission schema differs from trusted public contract")
-    if candidate_repository != trusted_repository:
-        raise ValidationError("private repository-authority schema differs from trusted public contract")
-    return trusted_mission, trusted_repository
+    trusted_mission_bytes = (PUBLIC_ROOT / MISSION_SCHEMA_REL).read_bytes()
+    trusted_repository_bytes = (PUBLIC_ROOT / REPOSITORY_SCHEMA_REL).read_bytes()
+    require_exact_schema_bytes(
+        blob_bytes(root, entries, MISSION_SCHEMA_REL), trusted_mission_bytes, label="Mission"
+    )
+    require_exact_schema_bytes(
+        blob_bytes(root, entries, REPOSITORY_SCHEMA_REL), trusted_repository_bytes, label="repository-authority"
+    )
+    return trusted_schema(MISSION_SCHEMA_REL), trusted_schema(REPOSITORY_SCHEMA_REL)
 
 
 def assert_acyclic_dependencies(gaps: list[dict[str, Any]], *, mission_name: str) -> None:
