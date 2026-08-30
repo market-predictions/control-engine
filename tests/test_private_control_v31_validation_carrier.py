@@ -74,3 +74,55 @@ def test_surface_rejects_executable_mode_on_declarative_file():
     entries["control/SYSTEM_INDEX.md"] = ("100755", "blob", "b" * 40)
     with pytest.raises(validator.ValidationError, match="executable"):
         validator.validate_surface(entries)
+
+
+def test_authority_switches_require_actual_json_booleans():
+    assert validator.explicit_bool(True)
+    assert validator.explicit_bool(False)
+    assert not validator.explicit_bool(1)
+    assert not validator.explicit_bool(0)
+    assert not validator.explicit_bool("true")
+    assert not validator.explicit_bool(None)
+
+
+def test_revision_discipline_is_bound_to_mission_identity_not_filename():
+    base = {
+        "M1": {
+            "protocol_id": "MISSION_CONTRACT_V3_1",
+            "mission_id": "M1",
+            "mission_revision": "r1",
+            "desired_outcome": "old",
+        }
+    }
+    changed_same_revision = {
+        "M1": {
+            "protocol_id": "MISSION_CONTRACT_V3_1",
+            "mission_id": "M1",
+            "mission_revision": "r1",
+            "desired_outcome": "new",
+        }
+    }
+    with pytest.raises(validator.ValidationError, match="without new mission_revision"):
+        validator.enforce_revision_discipline(changed_same_revision, base)
+
+    changed_new_revision = {
+        "M1": {
+            "protocol_id": "MISSION_CONTRACT_V3_1",
+            "mission_id": "M1",
+            "mission_revision": "r2",
+            "desired_outcome": "new",
+        }
+    }
+    validator.enforce_revision_discipline(changed_new_revision, base)
+
+
+def test_revision_discipline_rejects_disappearing_existing_v31_mission():
+    base = {
+        "M1": {
+            "protocol_id": "MISSION_CONTRACT_V3_1",
+            "mission_id": "M1",
+            "mission_revision": "r1",
+        }
+    }
+    with pytest.raises(validator.ValidationError, match="removed instead of being revised/retired"):
+        validator.enforce_revision_discipline({}, base)
