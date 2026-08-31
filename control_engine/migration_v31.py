@@ -9,7 +9,6 @@ from control_engine import kernel_v31 as core
 LEGACY_QUEUE_VERSION = "1.0"
 MIGRATION_PROTOCOL_ID = "CONTROL_V3_1_MIGRATION_FACT"
 MIGRATION_FACT = "LEGACY_PROJECT_INTEGRATION_COMPLETED"
-TASK_SEPARATOR = "--"
 
 
 class MigrationError(ValueError):
@@ -22,25 +21,21 @@ def _ts(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _task_identity_component(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or not value or TASK_SEPARATOR in value:
-        raise MigrationError(f"{label} is invalid or contains reserved task separator")
-    return value
+def _identity_component(value: object, *, label: str) -> str:
+    try:
+        return core._identity_component(value)
+    except core.KernelError as exc:
+        raise MigrationError(f"{label} is invalid") from exc
 
 
-def _legacy_root_id(mission_id: str, revision: str, gap_id: str) -> str:
-    """Reproduce only the retired Minimal Core V1 root for one-time import."""
-    return f"MISSION-{mission_id}-{revision}-{gap_id}"
-
-
-def _current_gap_prefixes(missions: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
-    prefixes: dict[str, dict[str, Any]] = {}
+def _current_gap_authority(missions: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
+    authorities: dict[tuple[str, str, str], dict[str, Any]] = {}
     for wrapped in missions:
         mission = wrapped.get("mission")
         if not isinstance(mission, Mapping):
             raise MigrationError("wrapped Mission is invalid")
-        mission_id = _task_identity_component(mission.get("mission_id"), label="Mission identity")
-        revision = _task_identity_component(mission.get("mission_revision"), label="Mission revision")
+        mission_id = _identity_component(mission.get("mission_id"), label="Mission identity")
+        revision = _identity_component(mission.get("mission_revision"), label="Mission revision")
         repository = mission.get("repository")
         gaps = mission.get("gaps")
         if not isinstance(repository, str) or not repository or not isinstance(gaps, list):
@@ -48,17 +43,17 @@ def _current_gap_prefixes(missions: Iterable[Mapping[str, Any]]) -> dict[str, di
         for gap in gaps:
             if not isinstance(gap, Mapping) or gap.get("gap_state") != "OPEN":
                 continue
-            gap_id = _task_identity_component(gap.get("gap_id"), label="Mission gap identity")
-            prefix = _legacy_root_id(mission_id, revision, gap_id)
-            if prefix in prefixes:
-                raise MigrationError("duplicate deterministic legacy Mission gap identity")
-            prefixes[prefix] = {
+            gap_id = _identity_component(gap.get("gap_id"), label="Mission gap identity")
+            identity = (mission_id, revision, gap_id)
+            if identity in authorities:
+                raise MigrationError("duplicate current Mission gap identity")
+            authorities[identity] = {
                 "mission_id": mission_id,
                 "mission_revision": revision,
                 "gap_id": gap_id,
                 "repository": repository,
             }
-    return prefixes
+    return authorities
 
 
 def _completed_legacy_integration(task: Mapping[str, Any]) -> bool:
@@ -74,8 +69,64 @@ def _completed_legacy_integration(task: Mapping[str, Any]) -> bool:
     )
 
 
-def _matches_legacy_root(task_id: str, root_id: str) -> bool:
-    return task_id == root_id or task_id.startswith(root_id + TASK_SEPARATOR)
+def _legacy_task_index(tasks: list[Any]) -> dict[str, Mapping[str, Any]]:
+    index: dict[str, Mapping[str, Any]] = {}
+    for task in tasks:
+        if not isinstance(task, Mapping):
+            continue
+        task_id = task.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        if task_id in index:
+            raise MigrationError("legacy task identity is not unique")
+        index[task_id] = task
+    return index
+
+
+def _explicit_legacy_identity(task: Mapping[str, Any]) -> tuple[str, str, str, str] | None:
+    values = (
+        task.get("mission_id"),
+        task.get("mission_revision"),
+        task.get("mission_gap_id", task.get("gap_id")),
+    )
+    if all(value is None for value in values):
+        return None
+    if not all(isinstance(value, str) and value for value in values):
+        return None
+    try:
+        mission_id = core._identity_component(values[0])
+        revision = core._identity_component(values[1])
+        gap_id = core._identity_component(values[2])
+    except core.KernelError:
+        return None
+    repository = task.get("repository")
+    if not isinstance(repository, str) or not repository:
+        return None
+    return mission_id, revision, gap_id, repository
+
+
+def _legacy_predecessor_identity(
+    task: Mapping[str, Any], task_index: Mapping[str, Mapping[str, Any]]
+) -> tuple[str, str, str, str] | None:
+    """Follow only explicit predecessor links; never parse ambiguous V1 task IDs."""
+    current = task
+    visited: set[str] = set()
+    for _ in range(len(task_index) + 1):
+        explicit = _explicit_legacy_identity(current)
+        if explicit is not None:
+            return explicit
+        task_id = current.get("task_id")
+        if not isinstance(task_id, str) or task_id in visited:
+            return None
+        visited.add(task_id)
+        predecessor = current.get("predecessor_task_id")
+        if not isinstance(predecessor, str) or not predecessor:
+            return None
+        next_task = task_index.get(predecessor)
+        if next_task is None:
+            return None
+        current = next_task
+    return None
 
 
 def _validate_fact(fact: Mapping[str, Any]) -> None:
@@ -99,8 +150,7 @@ def _validate_fact(fact: Mapping[str, Any]) -> None:
         if not isinstance(fact.get(key), str) or not fact[key]:
             raise MigrationError(f"migration fact {key} is invalid")
     for key in ("mission_id", "mission_revision", "gap_id"):
-        if TASK_SEPARATOR in fact[key]:
-            raise MigrationError(f"migration fact {key} contains reserved task separator")
+        _identity_component(fact[key], label=f"migration fact {key}")
     relay = fact.get("principal_manual_relay_count")
     if not isinstance(relay, int) or isinstance(relay, bool) or relay != 0:
         raise MigrationError("migration fact manual relay count must remain integer zero")
@@ -122,13 +172,13 @@ def validate_migration_facts(queue: Mapping[str, Any]) -> None:
 
 
 def migrate(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], now: datetime) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """One-time V1→V3.1 convergence.
+    """One-time V1→V3.1 convergence using only explicit legacy identity evidence.
 
-    Only the exact supported V1 queue format is migratable. A legacy terminal
-    COMPLETED PROJECT_INTEGRATION for a gap in a current governed Mission
-    revision becomes an inert satisfaction fact. No legacy task object survives
-    in the active queue. BLOCKED/PASS/EXECUTING/QUEUED evidence remains only in
-    Git history and is never upgraded into V3.1 authority.
+    A terminal COMPLETED PROJECT_INTEGRATION becomes an inert satisfaction fact
+    only when its predecessor chain contains explicit mission_id,
+    mission_revision and mission_gap_id/gap_id metadata matching a currently
+    governed OPEN gap. Ambiguous V1 task-ID text is never parsed as authority.
+    Unsupported or unverifiable legacy evidence is dropped rather than promoted.
     """
     version = queue.get("version")
     if version == "3.1":
@@ -144,27 +194,29 @@ def migrate(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], 
     if not isinstance(tasks, list) or not isinstance(relay, int) or isinstance(relay, bool) or relay != 0:
         raise MigrationError("legacy queue is not safely importable")
 
-    prefixes = _current_gap_prefixes(missions)
+    authorities = _current_gap_authority(missions)
+    task_index = _legacy_task_index(tasks)
     facts_by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
     imported_at = _ts(now)
     for task in tasks:
         if not isinstance(task, Mapping) or not _completed_legacy_integration(task):
             continue
-        task_id = task["task_id"]
-        matches = [
-            (prefix, authority)
-            for prefix, authority in prefixes.items()
-            if _matches_legacy_root(task_id, prefix)
-        ]
-        if len(matches) != 1:
+        explicit = _legacy_predecessor_identity(task, task_index)
+        if explicit is None:
             continue
-        _, authority = matches[0]
-        identity = (authority["mission_id"], authority["mission_revision"], authority["gap_id"])
+        mission_id, revision, gap_id, legacy_repository = explicit
+        identity = (mission_id, revision, gap_id)
+        authority = authorities.get(identity)
+        if authority is None:
+            continue
+        repository = task.get("repository")
+        if repository != legacy_repository or repository != authority["repository"]:
+            continue
         fact = {
             "protocol_id": MIGRATION_PROTOCOL_ID,
             "fact": MIGRATION_FACT,
             **authority,
-            "source_task_id": task_id,
+            "source_task_id": task["task_id"],
             "source_result_ref": task["result_ref"],
             "imported_at": imported_at,
             "principal_manual_relay_count": 0,
@@ -196,13 +248,7 @@ def gap_satisfied_by_fact(queue: Mapping[str, Any], mission_id: str, revision: s
 
 
 def feed(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], now: datetime) -> tuple[dict[str, Any], list[str]]:
-    """Run the existing pure Feed with ephemeral shadows for inert migration facts.
-
-    Each shadow uses the V3.1 deterministic root id so Feed treats that migrated
-    gap as already observed. It also has the legacy completed-integration shape
-    so downstream dependencies see the fact as satisfied. Shadows exist only in
-    memory and are removed before the queue is returned or persisted.
-    """
+    """Run pure Feed with ephemeral shadows for validated inert migration facts."""
     q = deepcopy(queue)
     core.validate(q)
     validate_migration_facts(q)
