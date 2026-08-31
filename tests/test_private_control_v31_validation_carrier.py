@@ -12,7 +12,8 @@ VALIDATOR = ROOT / "scripts" / "validate_private_control_v31.py"
 def test_private_v31_carrier_is_read_only_and_trusted_main_only():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "issue_comment:" in workflow
-    assert "github.event.comment.user.login == 'market-predictions'" in workflow
+    assert "github.actor == 'market-predictions'" in workflow
+    assert "github.event.comment.user.login" not in workflow
     assert "ref: main" in workflow
     assert "permission-contents: read" in workflow
     assert "permission-contents: write" not in workflow
@@ -78,7 +79,7 @@ def test_manual_relay_count_requires_exact_integer_zero():
     validator.require_zero_relay_count({"principal_manual_relay_count": 0})
     for value in (0.0, False, True, "0", None):
         with pytest.raises(validator.ValidationError, match="exact integer zero"):
-            validator.require_zero_relay_count({"principal_manual_relay_count": value})
+            validator.require_zero_relay_count({"principal_manual_relay_count": value)
 
 
 def test_repository_identity_is_github_safe_and_case_canonical():
