@@ -169,8 +169,8 @@ jobs:
           private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ steps.plan.outputs.owner }}
           repositories: ${{ steps.plan.outputs.repo }}
-          permission-contents: read
-          permission-pull-requests: write
+          permission-contents: write
+          permission-pull-requests: read
           permission-checks: read
           permission-statuses: write
 
