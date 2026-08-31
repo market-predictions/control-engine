@@ -177,10 +177,15 @@ def deterministic_root_id(mission_id: str, revision: str, gap_id: str) -> str:
 
 
 def _successor_id(predecessor_id: str, operation: str, candidate_sha: str | None = None) -> str:
-    suffix = operation
-    if candidate_sha:
-        suffix += f"-{candidate_sha[:12]}"
-    return f"{predecessor_id}{TASK_SEPARATOR}{suffix}"
+    if not isinstance(predecessor_id, str) or not predecessor_id:
+        raise KernelError("successor predecessor identity is invalid")
+    if operation not in {"ASSURANCE", "REPAIR"}:
+        raise KernelError("successor operation is invalid")
+    if not _sha(candidate_sha):
+        raise KernelError("successor candidate SHA is invalid")
+    material = "\0".join((predecessor_id, operation, candidate_sha)).encode("utf-8")
+    digest = hashlib.sha256(material).hexdigest()
+    return TASK_SEPARATOR.join(("SUCCESSOR", operation, digest))
 
 
 def select_task(queue: Mapping[str, Any], role: str) -> dict[str, Any] | None:
