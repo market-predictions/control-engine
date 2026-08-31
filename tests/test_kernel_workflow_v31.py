@@ -47,14 +47,25 @@ def test_runtime_and_target_capabilities_are_separate_and_repository_scoped():
     assert 'owner: ${{ steps.plan.outputs.owner }}' in value
 
 
-def test_semantic_role_is_derived_from_distinct_authenticated_actors_not_input():
+def test_semantic_role_uses_rerun_safe_triggering_actor_not_supplied_role_or_original_actor():
     value = text()
     assert 'CONTROL_A1_GITHUB_ACTOR' in value
     assert 'CONTROL_B1_GITHUB_ACTOR' in value
+    assert 'TRIGGERING_ACTOR: ${{ github.triggering_actor }}' in value
+    assert 'ACTOR: ${{ github.actor }}' not in value
     assert '[ "$A1_ACTOR" != "$B1_ACTOR" ]' in value
+    assert "case \"$TRIGGERING_ACTOR\" in" in value
     assert "echo 'role=implementation_operations'" in value
     assert "echo 'role=governance_release_assurance'" in value
     assert 'role:' not in value.split('workflow_dispatch:', 1)[1].split('permissions:', 1)[0]
+
+
+def test_tick_plans_and_executes_one_exact_task_identity():
+    value = text()
+    assert 'CONTROL_KERNEL_TARGET_TASK_ID=' in value
+    assert 'CONTROL_TARGET_TASK_ID: ${{ steps.plan.outputs.task_id }}' in value
+    assert '[ -n "$task_id" ]' in value
+    assert '[ -z "$task_id" ]' in value
 
 
 def test_public_kernel_has_no_semantic_provider_credentials_or_a2():
@@ -70,7 +81,7 @@ def test_schedule_only_runs_deterministic_tick_and_never_preclaims_semantic_work
     assert "cron: '*/15 * * * *'" in value
     assert "github.event_name == 'schedule' || inputs.command == 'TICK'" in value
     assert 'python scripts/control_kernel_v31.py tick' in value
-    assert 'No scheduler preclaims' not in value  # implementation rule lives in kernel, not a hidden scheduler path
+    assert 'No scheduler preclaims' not in value
 
 
 def test_record_payload_enters_only_atomic_kernel_record_path():
