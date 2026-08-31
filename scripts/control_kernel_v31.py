@@ -304,39 +304,47 @@ def _fast_forward_branch_ref(
     repository: str,
     branch: str,
     *,
+    pr_number: int,
     merge_sha: str,
     expected_base_sha: str,
 ) -> bool:
-    """Atomically move a base ref only while the frozen base is still current.
-
-    GitHub rejects a non-fast-forward update if the base moved after planning.
-    A rejection while the frozen base is still current is a real authority or
-    branch-protection blocker, not a synthetic base-drift signal.
-    """
-    path = f"repos/{repository}/git/refs/heads/{urllib.parse.quote(branch, safe='')}"
-    url = "https://api.github.com/" + path
-    body = json.dumps({"sha": merge_sha, "force": False}).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="PATCH")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "control-kernel-v3-1")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        if exc.code in {409, 422}:
+    """Move the base ref only if its remote OID still equals the frozen base SHA."""
+    with tempfile.TemporaryDirectory(prefix="control-target-ref-") as temp:
+        repo = Path(temp)
+        _init_repo(repo, repository)
+        fetched = _git(
+            token,
+            repo,
+            ["fetch", "--quiet", "--depth=1", "origin", f"refs/pull/{pr_number}/merge"],
+            check=False,
+        )
+        if fetched.returncode != 0:
+            raise TransientError("synthetic merge ref unavailable during leased integration")
+        fetched_sha = _run(["git", "rev-parse", "FETCH_HEAD"], cwd=repo).stdout.strip()
+        if fetched_sha != merge_sha:
             if _branch_sha(token, repository, branch) != expected_base_sha:
                 return False
-            raise BridgeError("atomic base ref update rejected while frozen base remained current") from exc
-        if exc.code in {429, 500, 502, 503, 504}:
-            raise TransientError(f"GitHub transient HTTP {exc.code}") from exc
-        raise BridgeError("atomic base ref update failed") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise TransientError("GitHub API unavailable") from exc
-    if payload.get("object", {}).get("sha") != merge_sha:
-        raise BridgeError("atomic base ref update returned unexpected identity")
-    return True
+            raise BridgeError("synthetic merge ref changed while frozen base remained current")
+        pushed = _git(
+            token,
+            repo,
+            [
+                "push",
+                "--quiet",
+                f"--force-with-lease=refs/heads/{branch}:{expected_base_sha}",
+                "origin",
+                f"{merge_sha}:refs/heads/{branch}",
+            ],
+            check=False,
+        )
+        if pushed.returncode == 0:
+            return True
+        current_base = _branch_sha(token, repository, branch)
+        if current_base == merge_sha:
+            return True
+        if current_base != expected_base_sha:
+            return False
+        raise BridgeError("leased base ref update rejected while frozen base remained current")
 
 
 def _frozen_repository_authority(control_token: str, task: dict[str, Any]) -> dict[str, Any]:
@@ -567,6 +575,7 @@ def _integrate_one(
         target_token,
         target_repository,
         candidate["expected_base_branch"],
+        pr_number=pr_number,
         merge_sha=merge_sha,
         expected_base_sha=candidate["expected_base_sha"],
     ):
