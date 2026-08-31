@@ -16,10 +16,10 @@ spec.loader.exec_module(bridge)
 NOW = datetime(2026, 8, 30, 22, 0, tzinfo=timezone.utc)
 
 
-def authority(*, policy="AUTO_AFTER_PASS", enabled=True, profile="CONTROL_AUTO_V1", checks=()):
+def authority(*, repository="o/r", policy="AUTO_AFTER_PASS", enabled=True, profile="CONTROL_AUTO_V1", checks=()):
     return {
         "protocol_id": "CONTROL_REPOSITORY_AUTHORITY_V3_1",
-        "repository": "o/r",
+        "repository": repository,
         "integration_policy": policy,
         "integration_enabled": enabled,
         "control_auto_profile": profile,
@@ -28,9 +28,9 @@ def authority(*, policy="AUTO_AFTER_PASS", enabled=True, profile="CONTROL_AUTO_V
     }
 
 
-def task():
+def task(*, repository="o/r"):
     return {
-        "repository": "o/r",
+        "repository": repository,
         "mission_id": "M1",
         "mission_revision": "r1",
         "gap_id": "G1",
@@ -40,11 +40,11 @@ def task():
     }
 
 
-def integration_task():
+def integration_task(*, repository="o/r", task_id="MISSION-M1-r1-G1--ASSURANCE-aaaaaaaaaaaa", updated_at="2026-08-30T21:00:00Z"):
     return {
-        **task(),
+        **task(repository=repository),
         "lifecycle_model": bridge.core.PROTOCOL_ID,
-        "task_id": "MISSION-M1-r1-G1--ASSURANCE-aaaaaaaaaaaa",
+        "task_id": task_id,
         "operation": "ASSURANCE",
         "role": bridge.core.ROLE_B,
         "status": bridge.core.STATUS_TERMINAL,
@@ -56,7 +56,7 @@ def integration_task():
         "last_execution_error": None,
         "principal_manual_relay_count": 0,
         "created_at": "2026-08-30T20:00:00Z",
-        "updated_at": "2026-08-30T21:00:00Z",
+        "updated_at": updated_at,
         "candidate": {
             "candidate_sha": "a" * 40,
             "candidate_pr_number": 7,
@@ -128,22 +128,57 @@ def test_required_checks_fail_closed_on_invalid_shape():
 
 def test_planner_uses_frozen_auto_so_post_merge_recovery_survives_live_hold(monkeypatch):
     q = v31_queue(integration_task())
-    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority(repository=_task["repository"]))
+    hold = authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": True, "integration_enabled": True},
+        {"o/r": hold},
         "control",
     ) == "o/r"
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": False, "integration_enabled": True},
+        {"o/r": hold},
         "control",
     ) == ""
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": True, "integration_enabled": False},
+        {"o/r": hold},
         "control",
     ) == ""
+
+
+def test_planner_prefers_live_auto_over_older_frozen_only_recovery_candidate(monkeypatch):
+    older_hold = integration_task(
+        repository="o/hold",
+        task_id="MISSION-M1-r1-G1--ASSURANCE-aaaaaaaaaaaa",
+        updated_at="2026-08-30T20:00:00Z",
+    )
+    later_auto = integration_task(
+        repository="o/auto",
+        task_id="MISSION-M2-r1-G1--ASSURANCE-bbbbbbbbbbbb",
+        updated_at="2026-08-30T21:00:00Z",
+    )
+    later_auto["mission_id"] = "M2"
+    q = v31_queue(older_hold, later_auto)
+
+    monkeypatch.setattr(
+        bridge,
+        "_frozen_repository_authority",
+        lambda _token, t: authority(repository=t["repository"]),
+    )
+    repo_auth = {
+        "o/hold": authority(repository="o/hold", policy="HOLD_AFTER_PASS", enabled=False, profile="NONE"),
+        "o/auto": authority(repository="o/auto"),
+    }
+    assert bridge._plan_integration_target(
+        q,
+        {"control_runtime_enabled": True, "integration_enabled": True},
+        repo_auth,
+        "control",
+    ) == "o/auto"
 
 
 def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monkeypatch):
