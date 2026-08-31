@@ -33,6 +33,14 @@ ALLOWED_SPEC_FIELDS = {
     "instruction",
     "acceptance_criteria",
 }
+ROOT_FORBIDDEN_LINEAGE_FIELDS = {
+    "predecessor_task_id",
+    "mission_id",
+    "mission_revision",
+    "mission_gap_id",
+    "mission_contract_ref",
+    "depends_on",
+}
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -146,6 +154,16 @@ def _identity_projection(task: dict) -> dict:
     return {field: deepcopy(task.get(field)) for field in fields}
 
 
+def _root_identity_projection(task: dict) -> dict:
+    present_lineage = sorted(field for field in ROOT_FORBIDDEN_LINEAGE_FIELDS if field in task)
+    if present_lineage:
+        raise RuntimeError(f"root task contains lineage metadata: {present_lineage}")
+    created_at = task.get("created_at")
+    if not isinstance(created_at, str) or not created_at:
+        raise RuntimeError("root task requires immutable created_at")
+    return {**_identity_projection(task), "created_at": created_at}
+
+
 def _assert_root_id_available(queue: dict, task_id: str) -> None:
     for other in queue.get("tasks", []):
         if other.get("status") == core.STATUS_TERMINAL:
@@ -173,15 +191,17 @@ def command_materialize(token: str, spec_b64: str) -> int:
         if matches:
             if len(matches) != 1 or _identity_projection(matches[0]) != identity:
                 raise RuntimeError("root task identity already exists with different immutable specification")
+            root_identity = _root_identity_projection(matches[0])
             core.validate(queue)
-            return {"task_id": proposed["task_id"], "created": False, "identity": identity}
+            return {"task_id": proposed["task_id"], "created": False, "root_identity": root_identity}
 
         _assert_root_id_available(queue, proposed["task_id"])
         core._assert_direct_successor_ids_available(queue, proposed)
+        root_identity = _root_identity_projection(proposed)
         queue.setdefault("tasks", []).append(proposed)
         core.validate(queue)
         bridge._write(queue_path, queue)
-        return {"task_id": proposed["task_id"], "created": True, "identity": identity}
+        return {"task_id": proposed["task_id"], "created": True, "root_identity": root_identity}
 
     captured, readback_queue, attempt = bridge._with_cas(
         token,
@@ -192,7 +212,7 @@ def command_materialize(token: str, spec_b64: str) -> int:
     if len(matches) != 1:
         raise RuntimeError("materialized root missing from authoritative readback")
     core.validate(readback_queue)
-    if _identity_projection(matches[0]) != captured["identity"]:
+    if _root_identity_projection(matches[0]) != captured["root_identity"]:
         raise RuntimeError("materialized root immutable identity drifted in authoritative readback")
     print("CONTROL_MINIMAL_CORE_MATERIALIZE=SUCCESS")
     print(f"CONTROL_MINIMAL_CORE_TASK_ID={captured['task_id']}")
