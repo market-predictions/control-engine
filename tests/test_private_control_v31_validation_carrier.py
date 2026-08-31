@@ -144,7 +144,7 @@ def test_gap_dependency_graph_must_be_acyclic_without_recursion_limit():
         )
 
     chain = [
-        {"gap_id": f"G{i}", "depends_on": [] if i == 0 else [f"G{i - 1}"]
+        {"gap_id": f"G{i}", "depends_on": [] if i == 0 else [f"G{i - 1}"]}
         for i in range(1500)
     ]
     validator.assert_acyclic_dependencies(chain, mission_name="LONG")
