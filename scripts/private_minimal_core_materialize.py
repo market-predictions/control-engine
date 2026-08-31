@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize one validated Minimal Core V1 root task into private canonical state.
+"""Materialize one exact-candidate ASSURANCE root into Minimal Core V1.
 
 This is deterministic lifecycle plumbing only. It creates no semantic verdict,
 implementation, merge, release, provider route, scheduler, queue, or state plane.
@@ -14,31 +14,22 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
+import re
 
 from control_engine import minimal_core as core
 from scripts import private_minimal_core_apply as bridge
 
 ALLOWED_SPEC_FIELDS = {
     "task_id",
-    "operation",
     "repository",
     "candidate_sha",
     "priority",
     "instruction",
     "acceptance_criteria",
-    "mission_id",
-    "mission_revision",
-    "mission_gap_id",
-    "mission_contract_ref",
-    "depends_on",
 }
-OPTIONAL_METADATA_FIELDS = {
-    "mission_id",
-    "mission_revision",
-    "mission_gap_id",
-    "mission_contract_ref",
-    "depends_on",
-}
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _ts_now() -> str:
@@ -64,45 +55,49 @@ def _decode_spec(value: str) -> dict:
     return spec
 
 
-def _validated_strings(value: object, *, field: str) -> list[str]:
+def _validated_strings(value: object) -> list[str]:
     if not isinstance(value, list) or not value:
-        raise RuntimeError(f"{field} must be a non-empty list")
+        raise RuntimeError("acceptance_criteria must be a non-empty list")
     if any(not isinstance(item, str) or not item.strip() for item in value):
-        raise RuntimeError(f"{field} must contain non-empty strings")
+        raise RuntimeError("acceptance_criteria must contain non-empty strings")
     return list(value)
 
 
 def _root_from_spec(spec: dict, now: str) -> dict:
     task_id = spec.get("task_id")
-    operation = spec.get("operation")
     repository = spec.get("repository")
-    if not isinstance(task_id, str) or not task_id or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-" for ch in task_id):
-        raise RuntimeError("task_id is invalid")
-    if operation not in core.OPERATION_ROLE:
-        raise RuntimeError("operation is unsupported")
-    if operation == "PROJECT_INTEGRATION":
-        raise RuntimeError("PROJECT_INTEGRATION may not be materialized as a root")
-    if not isinstance(repository, str) or "/" not in repository or repository.startswith("/") or repository.endswith("/"):
-        raise RuntimeError("repository must be owner/name")
+    candidate_sha = spec.get("candidate_sha")
     priority = spec.get("priority", 100)
+    instruction = spec.get("instruction")
+
+    if not isinstance(task_id, str) or TASK_ID_RE.fullmatch(task_id) is None:
+        raise RuntimeError("task_id is invalid")
+    if not isinstance(repository, str) or REPOSITORY_RE.fullmatch(repository) is None:
+        raise RuntimeError("repository must be owner/name")
+    if not isinstance(candidate_sha, str) or SHA_RE.fullmatch(candidate_sha) is None:
+        raise RuntimeError("ASSURANCE root requires exact candidate SHA")
     if not isinstance(priority, int) or isinstance(priority, bool):
         raise RuntimeError("priority must be an integer")
-    instruction = spec.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
         raise RuntimeError("instruction is required")
-    acceptance = _validated_strings(spec.get("acceptance_criteria"), field="acceptance_criteria")
+    acceptance = _validated_strings(spec.get("acceptance_criteria"))
 
-    candidate_sha = spec.get("candidate_sha")
-    if operation in {"ASSURANCE", "REPAIR"}:
-        if not isinstance(candidate_sha, str) or len(candidate_sha) != 40 or any(ch not in "0123456789abcdef" for ch in candidate_sha):
-            raise RuntimeError(f"{operation} root requires exact candidate SHA")
-    elif candidate_sha is not None:
-        if not isinstance(candidate_sha, str) or len(candidate_sha) != 40 or any(ch not in "0123456789abcdef" for ch in candidate_sha):
-            raise RuntimeError("candidate_sha must be null or exact SHA")
-
-    role = core.OPERATION_ROLE[operation]
-    if operation == "ASSURANCE":
-        successors = {
+    task = {
+        "lifecycle_model": core.PROTOCOL_ID,
+        "task_id": task_id,
+        "operation": "ASSURANCE",
+        "role": core.ROLE_B,
+        "repository": repository,
+        "priority": priority,
+        "candidate_sha": candidate_sha,
+        "status": core.STATUS_QUEUED,
+        "outcome": None,
+        "claim": None,
+        "result_ref": None,
+        "terminal_run_id": None,
+        "attempt_count": 0,
+        "last_execution_error": None,
+        "successor_by_outcome": {
             "PASS": {
                 "task_id": f"{task_id}--INTEGRATE",
                 "operation": "PROJECT_INTEGRATION",
@@ -117,49 +112,19 @@ def _root_from_spec(spec: dict, now: str) -> dict:
                 "repository": repository,
                 "candidate_sha": candidate_sha,
             },
-        }
-    else:
-        successors = {
-            "COMPLETED": {
-                "task_id": f"{task_id}--ASSURE",
-                "operation": "ASSURANCE",
-                "role": core.ROLE_B,
-                "repository": repository,
-                "candidate_sha": None,
-            }
-        }
-
-    task = {
-        "lifecycle_model": core.PROTOCOL_ID,
-        "task_id": task_id,
-        "operation": operation,
-        "role": role,
-        "repository": repository,
-        "priority": priority,
-        "candidate_sha": candidate_sha,
-        "status": core.STATUS_QUEUED,
-        "outcome": None,
-        "claim": None,
-        "result_ref": None,
-        "terminal_run_id": None,
-        "attempt_count": 0,
-        "last_execution_error": None,
-        "successor_by_outcome": successors,
+        },
         "principal_manual_relay_count": 0,
         "created_at": now,
         "updated_at": now,
         "instruction": instruction,
         "acceptance_criteria": acceptance,
     }
-    for field in OPTIONAL_METADATA_FIELDS:
-        if field in spec:
-            task[field] = deepcopy(spec[field])
     core._assert_task_shape(task)
     return task
 
 
 def _identity_projection(task: dict) -> dict:
-    fields = {
+    fields = (
         "lifecycle_model",
         "task_id",
         "operation",
@@ -171,9 +136,8 @@ def _identity_projection(task: dict) -> dict:
         "principal_manual_relay_count",
         "instruction",
         "acceptance_criteria",
-        *OPTIONAL_METADATA_FIELDS,
-    }
-    return {field: deepcopy(task.get(field)) for field in fields if field in task}
+    )
+    return {field: deepcopy(task.get(field)) for field in fields}
 
 
 def command_materialize(token: str, spec_b64: str) -> int:
@@ -184,14 +148,14 @@ def command_materialize(token: str, spec_b64: str) -> int:
         queue_path = state_dir / bridge.QUEUE_REL
         queue = bridge._load(queue_path)
         bridge._assert_cutover_safe(state_dir, queue)
-        now = _ts_now()
-        proposed = _root_from_spec(spec, now)
+        proposed = _root_from_spec(spec, _ts_now())
         matches = [task for task in queue.get("tasks", []) if task.get("task_id") == proposed["task_id"]]
         if matches:
             if len(matches) != 1 or _identity_projection(matches[0]) != _identity_projection(proposed):
                 raise RuntimeError("root task identity already exists with different immutable specification")
             core.validate(queue)
             return {"task_id": proposed["task_id"], "created": False}
+
         core._assert_direct_successor_ids_available(queue, proposed)
         queue.setdefault("tasks", []).append(proposed)
         core.validate(queue)
@@ -201,7 +165,7 @@ def command_materialize(token: str, spec_b64: str) -> int:
     captured, readback_queue, attempt = bridge._with_cas(
         token,
         mutate,
-        message=f"runtime: materialize Minimal Core root {spec.get('task_id', 'UNKNOWN')}",
+        message=f"runtime: materialize Minimal Core assurance root {spec.get('task_id', 'UNKNOWN')}",
     )
     matches = [task for task in readback_queue.get("tasks", []) if task.get("task_id") == captured["task_id"]]
     if len(matches) != 1:
@@ -215,7 +179,7 @@ def command_materialize(token: str, spec_b64: str) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Materialize one Minimal Core root task")
+    parser = argparse.ArgumentParser(description="Materialize one exact-candidate Minimal Core assurance root")
     parser.add_argument("--spec-b64", required=True)
     args = parser.parse_args()
     token = os.environ.get("CONTROL_GITHUB_WRITE_TOKEN", "")
