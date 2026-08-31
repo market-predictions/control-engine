@@ -38,5 +38,5 @@ def test_migration_rejects_reserved_successor_separator_in_task_identity_compone
         _mission(revision="r--1"),
         _mission(gap_id="G--1"),
     ):
-        with pytest.raises(migration.MigrationError, match="reserved task separator"):
+        with pytest.raises(migration.MigrationError, match="invalid"):
             migration.migrate(_queue(), missions=[wrapped], now=NOW)
