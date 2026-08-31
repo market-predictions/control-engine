@@ -36,6 +36,11 @@ def zero(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value == 0
 
 
+def require_zero_relay_count(document: Mapping[str, Any]) -> None:
+    if not zero(document.get("principal_manual_relay_count")):
+        raise ValidationError("principal manual relay count must be exact integer zero")
+
+
 def explicit_bool(value: object) -> bool:
     return isinstance(value, bool)
 
@@ -272,8 +277,9 @@ def validate_candidate(root: Path) -> None:
         "principal_manual_relay_count",
     }:
         raise ValidationError("global V3.1 authority fields are not exact")
-    if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1" or not zero(global_auth.get("principal_manual_relay_count")):
+    if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1":
         raise ValidationError("global V3.1 authority invalid")
+    require_zero_relay_count(global_auth)
     if global_auth.get("semantic_claim_lease_seconds") != 5400:
         raise ValidationError("V3.1 semantic claim lease invalid")
     if not explicit_bool(global_auth.get("control_runtime_enabled")) or not explicit_bool(global_auth.get("integration_enabled")):
@@ -283,6 +289,7 @@ def validate_candidate(root: Path) -> None:
     for path in authority_paths:
         doc = load(root, entries, path)
         validate_instance(doc, repository_schema)
+        require_zero_relay_count(doc)
         canonical = canonical_repository(doc.get("repository"))
         if canonical is None or canonical in repository_authority:
             raise ValidationError("repository authority identity invalid or duplicated")
@@ -292,6 +299,7 @@ def validate_candidate(root: Path) -> None:
     for path in mission_paths:
         mission = load(root, entries, path)
         validate_instance(mission, mission_schema)
+        require_zero_relay_count(mission)
         mission_id = mission["mission_id"]
         revision = mission["mission_revision"]
         canonical_repo = canonical_repository(mission["repository"])
