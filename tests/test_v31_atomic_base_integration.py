@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
+import subprocess
 
 from control_engine import kernel_v31 as core
 from scripts import control_kernel_v31 as bridge
@@ -78,7 +79,7 @@ def patch_common(monkeypatch, *, live_authority=True):
     monkeypatch.setattr(bridge, "_merged_commit_proves_expected_candidate", lambda *_args, **_kwargs: True)
 
 
-def test_atomic_integration_uses_exact_synthetic_merge_and_non_force_base_ref(monkeypatch):
+def test_atomic_integration_uses_exact_synthetic_merge_and_leased_base_ref(monkeypatch):
     patch_common(monkeypatch)
     branch_reads = iter([EXPECTED_BASE, MERGE])
     monkeypatch.setattr(bridge, "_branch_sha", lambda *_: next(branch_reads))
@@ -94,8 +95,8 @@ def test_atomic_integration_uses_exact_synthetic_merge_and_non_force_base_ref(mo
     monkeypatch.setattr(bridge, "_api", api)
     calls = []
 
-    def fast_forward(token, repository, branch, *, merge_sha, expected_base_sha):
-        calls.append((token, repository, branch, merge_sha, expected_base_sha))
+    def fast_forward(token, repository, branch, *, pr_number, merge_sha, expected_base_sha):
+        calls.append((token, repository, branch, pr_number, merge_sha, expected_base_sha))
         return True
 
     monkeypatch.setattr(bridge, "_fast_forward_branch_ref", fast_forward)
@@ -112,9 +113,42 @@ def test_atomic_integration_uses_exact_synthetic_merge_and_non_force_base_ref(mo
     )
 
     assert report == {"integration": "MERGED", "task_id": assurance_task()["task_id"], "merge_sha": MERGE}
-    assert calls == [("target", REPOSITORY, "main", MERGE, EXPECTED_BASE)]
+    assert calls == [("target", REPOSITORY, "main", 7, MERGE, EXPECTED_BASE)]
     assert updated["tasks"][0]["integration_state"] == "MERGED"
     assert updated["tasks"][0]["merge_sha"] == MERGE
+
+
+def test_git_ref_update_uses_exact_expected_old_sha_lease(monkeypatch):
+    git_calls = []
+    monkeypatch.setattr(bridge, "_init_repo", lambda *_: None)
+
+    def fake_git(_token, _repo, args, *, check=True):
+        git_calls.append((list(args), check))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def fake_run(cmd, *, cwd=None, check=True):
+        assert cmd == ["git", "rev-parse", "FETCH_HEAD"]
+        return subprocess.CompletedProcess(cmd, 0, MERGE + "\n", "")
+
+    monkeypatch.setattr(bridge, "_git", fake_git)
+    monkeypatch.setattr(bridge, "_run", fake_run)
+
+    assert bridge._fast_forward_branch_ref(
+        "target",
+        REPOSITORY,
+        "main",
+        pr_number=7,
+        merge_sha=MERGE,
+        expected_base_sha=EXPECTED_BASE,
+    )
+    assert git_calls[0] == (["fetch", "--quiet", "--depth=1", "origin", "refs/pull/7/merge"], False)
+    assert git_calls[1] == ([
+        "push",
+        "--quiet",
+        f"--force-with-lease=refs/heads/main:{EXPECTED_BASE}",
+        "origin",
+        f"{MERGE}:refs/heads/main",
+    ], False)
 
 
 def test_atomic_ref_race_materializes_base_drift_without_false_merge(monkeypatch):
@@ -168,4 +202,5 @@ def test_kernel_source_has_no_rest_pull_merge_side_effect():
     source = (Path(__file__).resolve().parents[1] / "scripts" / "control_kernel_v31.py").read_text(encoding="utf-8")
     assert 'pulls/{pr_number}/merge' not in source
     assert 'git/ref/pull/{pr_number}/merge' in source
-    assert '"force": False' in source
+    assert "--force-with-lease=refs/heads/" in source
+    assert '"force": False' not in source
