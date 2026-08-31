@@ -363,15 +363,32 @@ def _merged_commit_proves_expected_candidate(
     return parent_shas == [expected_base_sha, candidate_sha]
 
 
-def _plan_integration_target(queue: dict[str, Any], global_auth: dict[str, Any], control_token: str) -> str:
+def _plan_integration_target(
+    queue: dict[str, Any], global_auth: dict[str, Any], repo_auth: dict[str, dict[str, Any]], control_token: str
+) -> str:
+    """Prefer currently authorized integration; retain frozen-only recovery fallback.
+
+    Live HOLD must block a new merge, but it must not make a merge that already
+    happened unrecoverable. To avoid a frozen-AUTO/live-HOLD open PR starving
+    later live-AUTO work, select in two deterministic passes: live-authorized
+    first, frozen-only fallback second.
+    """
     if not _global_integration_enabled(global_auth):
         return ""
     _require_v31_queue(queue)
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    recovery_repository = ""
     for task in _integration_candidates(queue):
         frozen = _frozen_repository_authority(control_token, task)
-        if _frozen_integration_authorized(task, frozen):
+        if not _frozen_integration_authorized(task, frozen):
+            continue
+        candidates.append((task, frozen))
+        live = repo_auth.get(task["repository"], {})
+        if _integration_authorized(task, frozen, live):
             return task["repository"]
-    return ""
+        if not recovery_repository:
+            recovery_repository = task["repository"]
+    return recovery_repository
 
 
 def _integrate_one(
@@ -557,12 +574,12 @@ def command_plan_tick(token: str) -> int:
         _init_repo(main, CONTROL_REPOSITORY)
         _init_repo(runtime, CONTROL_REPOSITORY)
         _fetch_ref(token, main, "main")
-        global_auth, _, _ = _authority(main)
+        global_auth, _, repo_auth = _authority(main)
         _fetch_ref(token, runtime, RUNTIME_REF)
         q = _load(runtime / QUEUE_REL)
         target = ""
         if q.get("version") == "3.1":
-            target = _plan_integration_target(q, global_auth, token)
+            target = _plan_integration_target(q, global_auth, repo_auth, token)
         print(f"CONTROL_KERNEL_TARGET_REPOSITORY={target}")
     return 0
 
