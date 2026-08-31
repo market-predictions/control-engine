@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Materialize one validated Minimal Core V1 root task into private canonical state.
+
+This is deterministic lifecycle plumbing only. It creates no semantic verdict,
+implementation, merge, release, provider route, scheduler, queue, or state plane.
+The canonical private DISPATCH_QUEUE remains the sole execution authority.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+from copy import deepcopy
+from datetime import datetime, timezone
+import json
+import os
+
+from control_engine import minimal_core as core
+from scripts import private_minimal_core_apply as bridge
+
+ALLOWED_SPEC_FIELDS = {
+    "task_id",
+    "operation",
+    "repository",
+    "candidate_sha",
+    "priority",
+    "instruction",
+    "acceptance_criteria",
+    "mission_id",
+    "mission_revision",
+    "mission_gap_id",
+    "mission_contract_ref",
+    "depends_on",
+}
+OPTIONAL_METADATA_FIELDS = {
+    "mission_id",
+    "mission_revision",
+    "mission_gap_id",
+    "mission_contract_ref",
+    "depends_on",
+}
+
+
+def _ts_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _decode_spec(value: str) -> dict:
+    if not value or len(value) > 32768:
+        raise RuntimeError("root spec is missing or too large")
+    if any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for ch in value):
+        raise RuntimeError("root spec must be base64url")
+    padding = "=" * ((4 - len(value) % 4) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((value + padding).encode("ascii"))
+        spec = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("root spec is not valid base64url JSON") from exc
+    if not isinstance(spec, dict):
+        raise RuntimeError("root spec must be a JSON object")
+    unknown = set(spec) - ALLOWED_SPEC_FIELDS
+    if unknown:
+        raise RuntimeError(f"root spec contains unsupported fields: {sorted(unknown)}")
+    return spec
+
+
+def _validated_strings(value: object, *, field: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise RuntimeError(f"{field} must be a non-empty list")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise RuntimeError(f"{field} must contain non-empty strings")
+    return list(value)
+
+
+def _root_from_spec(spec: dict, now: str) -> dict:
+    task_id = spec.get("task_id")
+    operation = spec.get("operation")
+    repository = spec.get("repository")
+    if not isinstance(task_id, str) or not task_id or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-" for ch in task_id):
+        raise RuntimeError("task_id is invalid")
+    if operation not in core.OPERATION_ROLE:
+        raise RuntimeError("operation is unsupported")
+    if operation == "PROJECT_INTEGRATION":
+        raise RuntimeError("PROJECT_INTEGRATION may not be materialized as a root")
+    if not isinstance(repository, str) or "/" not in repository or repository.startswith("/") or repository.endswith("/"):
+        raise RuntimeError("repository must be owner/name")
+    priority = spec.get("priority", 100)
+    if not isinstance(priority, int) or isinstance(priority, bool):
+        raise RuntimeError("priority must be an integer")
+    instruction = spec.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise RuntimeError("instruction is required")
+    acceptance = _validated_strings(spec.get("acceptance_criteria"), field="acceptance_criteria")
+
+    candidate_sha = spec.get("candidate_sha")
+    if operation in {"ASSURANCE", "REPAIR"}:
+        if not isinstance(candidate_sha, str) or len(candidate_sha) != 40 or any(ch not in "0123456789abcdef" for ch in candidate_sha):
+            raise RuntimeError(f"{operation} root requires exact candidate SHA")
+    elif candidate_sha is not None:
+        if not isinstance(candidate_sha, str) or len(candidate_sha) != 40 or any(ch not in "0123456789abcdef" for ch in candidate_sha):
+            raise RuntimeError("candidate_sha must be null or exact SHA")
+
+    role = core.OPERATION_ROLE[operation]
+    if operation == "ASSURANCE":
+        successors = {
+            "PASS": {
+                "task_id": f"{task_id}--INTEGRATE",
+                "operation": "PROJECT_INTEGRATION",
+                "role": core.ROLE_A,
+                "repository": repository,
+                "candidate_sha": candidate_sha,
+            },
+            "FAIL": {
+                "task_id": f"{task_id}--REPAIR",
+                "operation": "REPAIR",
+                "role": core.ROLE_A,
+                "repository": repository,
+                "candidate_sha": candidate_sha,
+            },
+        }
+    else:
+        successors = {
+            "COMPLETED": {
+                "task_id": f"{task_id}--ASSURE",
+                "operation": "ASSURANCE",
+                "role": core.ROLE_B,
+                "repository": repository,
+                "candidate_sha": None,
+            }
+        }
+
+    task = {
+        "lifecycle_model": core.PROTOCOL_ID,
+        "task_id": task_id,
+        "operation": operation,
+        "role": role,
+        "repository": repository,
+        "priority": priority,
+        "candidate_sha": candidate_sha,
+        "status": core.STATUS_QUEUED,
+        "outcome": None,
+        "claim": None,
+        "result_ref": None,
+        "terminal_run_id": None,
+        "attempt_count": 0,
+        "last_execution_error": None,
+        "successor_by_outcome": successors,
+        "principal_manual_relay_count": 0,
+        "created_at": now,
+        "updated_at": now,
+        "instruction": instruction,
+        "acceptance_criteria": acceptance,
+    }
+    for field in OPTIONAL_METADATA_FIELDS:
+        if field in spec:
+            task[field] = deepcopy(spec[field])
+    core._assert_task_shape(task)
+    return task
+
+
+def _identity_projection(task: dict) -> dict:
+    fields = {
+        "lifecycle_model",
+        "task_id",
+        "operation",
+        "role",
+        "repository",
+        "priority",
+        "candidate_sha",
+        "successor_by_outcome",
+        "principal_manual_relay_count",
+        "instruction",
+        "acceptance_criteria",
+        *OPTIONAL_METADATA_FIELDS,
+    }
+    return {field: deepcopy(task.get(field)) for field in fields if field in task}
+
+
+def command_materialize(token: str, spec_b64: str) -> int:
+    spec = _decode_spec(spec_b64)
+
+    def mutate(state_dir):
+        bridge._reconcile_file(state_dir, datetime.now(timezone.utc))
+        queue_path = state_dir / bridge.QUEUE_REL
+        queue = bridge._load(queue_path)
+        bridge._assert_cutover_safe(state_dir, queue)
+        now = _ts_now()
+        proposed = _root_from_spec(spec, now)
+        matches = [task for task in queue.get("tasks", []) if task.get("task_id") == proposed["task_id"]]
+        if matches:
+            if len(matches) != 1 or _identity_projection(matches[0]) != _identity_projection(proposed):
+                raise RuntimeError("root task identity already exists with different immutable specification")
+            core.validate(queue)
+            return {"task_id": proposed["task_id"], "created": False}
+        core._assert_direct_successor_ids_available(queue, proposed)
+        queue.setdefault("tasks", []).append(proposed)
+        core.validate(queue)
+        bridge._write(queue_path, queue)
+        return {"task_id": proposed["task_id"], "created": True}
+
+    captured, readback_queue, attempt = bridge._with_cas(
+        token,
+        mutate,
+        message=f"runtime: materialize Minimal Core root {spec.get('task_id', 'UNKNOWN')}",
+    )
+    matches = [task for task in readback_queue.get("tasks", []) if task.get("task_id") == captured["task_id"]]
+    if len(matches) != 1:
+        raise RuntimeError("materialized root missing from authoritative readback")
+    core.validate(readback_queue)
+    print("CONTROL_MINIMAL_CORE_MATERIALIZE=SUCCESS")
+    print(f"CONTROL_MINIMAL_CORE_TASK_ID={captured['task_id']}")
+    print(f"CONTROL_MINIMAL_CORE_CREATED={'true' if captured['created'] else 'false'}")
+    print(f"CONTROL_MINIMAL_CORE_CAS_ATTEMPT={attempt}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Materialize one Minimal Core root task")
+    parser.add_argument("--spec-b64", required=True)
+    args = parser.parse_args()
+    token = os.environ.get("CONTROL_GITHUB_WRITE_TOKEN", "")
+    if not token:
+        print("CONTROL_MINIMAL_CORE=NO_TOKEN")
+        return 78
+    try:
+        return command_materialize(token, args.spec_b64)
+    except Exception as exc:
+        print(f"CONTROL_MINIMAL_CORE=FAILED:{type(exc).__name__}:{str(exc)[-1200:]}")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
