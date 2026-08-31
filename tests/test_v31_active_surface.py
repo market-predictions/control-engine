@@ -1,14 +1,18 @@
 from pathlib import Path
 
 
-def test_only_ci_and_v31_kernel_remain_active_workflows():
+def test_only_v31_runtime_and_read_only_validation_workflows_remain_active():
     names = sorted(p.name for p in Path('.github/workflows').glob('*.yml'))
-    assert names == ['ci.yml', 'control-kernel-v3-1.yml']
+    assert names == ['ci.yml', 'control-kernel-v3-1.yml', 'private-control-v3-1-validation.yml']
 
 
 def test_kernel_is_only_runtime_mutating_workflow():
     workflows = {p.name: p.read_text(encoding='utf-8') for p in Path('.github/workflows').glob('*.yml')}
     assert 'control-runtime-state' not in workflows['ci.yml']
+    validator = workflows['private-control-v3-1-validation.yml']
+    assert 'control-runtime-state' not in validator
+    assert 'permission-contents: write' not in validator
+    assert 'CONTROL_PRIVATE_RUNTIME_MUTATION=false' in validator
     kernel = workflows['control-kernel-v3-1.yml']
     assert 'control-runtime-mutation' in kernel
     assert 'CONTROL_RUNTIME_WRITER=CONTROL_KERNEL' in kernel

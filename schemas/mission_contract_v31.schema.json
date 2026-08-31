@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://control.local/schemas/mission_contract_v31.schema.json",
+  "title": "MISSION_CONTRACT_V3_1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_id",
+    "mission_id",
+    "mission_revision",
+    "repository",
+    "desired_outcome",
+    "gaps",
+    "authority_boundaries",
+    "principal_manual_relay_count"
+  ],
+  "properties": {
+    "protocol_id": {"const": "MISSION_CONTRACT_V3_1"},
+    "mission_id": {"type": "string", "minLength": 1, "pattern": "^(?!.*--)(?!.*[\\r\\n])[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$"},
+    "mission_revision": {"type": "string", "pattern": "^(?!.*[\\r\\n])[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"},
+    "project_id": {"type": "string", "minLength": 1},
+    "effective_at": {"type": "string", "minLength": 1},
+    "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+    "project_governance_ref": {"type": "string", "minLength": 1},
+    "desired_outcome": {"type": "string", "minLength": 1},
+    "success_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion_id", "description", "required"],
+        "properties": {
+          "criterion_id": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"}
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gap_id",
+          "gap_state",
+          "depends_on",
+          "repository",
+          "operation",
+          "acceptance",
+          "integration_policy"
+        ],
+        "properties": {
+          "gap_id": {"type": "string", "minLength": 1, "pattern": "^(?!.*--)(?!.*[\\r\\n])[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$"},
+          "criterion_id": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "gap_state": {"enum": ["OPEN", "RETIRED"]},
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "pattern": "^(?!.*--)(?!.*[\\r\\n])[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$"},
+            "uniqueItems": true
+          },
+          "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+          "operation": {"const": "IMPLEMENTATION"},
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "integration_policy": {"enum": ["AUTO_AFTER_PASS", "HOLD_AFTER_PASS"]}
+        }
+      }
+    },
+    "authority_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "terminal_conditions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "supersedes_revision": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^(?!.*[\\r\\n])[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"}
+      ]
+    },
+    "principal_manual_relay_count": {"const": 0}
+  }
+}
