@@ -1,6 +1,9 @@
 import base64
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -104,6 +107,22 @@ def test_materializer_requires_exact_candidate_repository_and_nonempty_acceptanc
             {**_assurance_spec(), "acceptance_criteria": []},
             "2026-08-31T06:00:00Z",
         )
+
+
+def test_materializer_script_entrypoint_bootstraps_repository_root():
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "scripts/private_minimal_core_materialize.py", "--help"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Materialize one exact-candidate Minimal Core assurance root" in completed.stdout
 
 
 def test_workflow_exposes_only_owner_gated_materialize_prefix():
