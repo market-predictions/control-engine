@@ -68,6 +68,15 @@ def integration_task():
     }
 
 
+def v31_queue(*tasks):
+    return {
+        "version": "3.1",
+        "principal_manual_relay_count": 0,
+        "migration_facts": [],
+        "tasks": list(tasks),
+    }
+
+
 def mission_wrapper():
     return {
         "mission": {
@@ -117,9 +126,29 @@ def test_required_checks_fail_closed_on_invalid_shape():
         bridge._effective_required_checks(bad, authority())
 
 
+def test_planner_uses_frozen_auto_so_post_merge_recovery_survives_live_hold(monkeypatch):
+    q = v31_queue(integration_task())
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
+    assert bridge._plan_integration_target(
+        q,
+        {"control_runtime_enabled": True, "integration_enabled": True},
+        "control",
+    ) == "o/r"
+    assert bridge._plan_integration_target(
+        q,
+        {"control_runtime_enabled": False, "integration_enabled": True},
+        "control",
+    ) == ""
+    assert bridge._plan_integration_target(
+        q,
+        {"control_runtime_enabled": True, "integration_enabled": False},
+        "control",
+    ) == ""
+
+
 def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monkeypatch):
     t = integration_task()
-    queue = {"tasks": [t]}
+    queue = v31_queue(t)
     live = authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")
     frozen = authority()
     calls = []
@@ -129,13 +158,20 @@ def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monk
     def fake_api(_token, method, path, body=None):
         calls.append((method, path, body))
         assert method == "GET"
-        return {
-            "state": "closed",
-            "merged": True,
-            "head": {"sha": "a" * 40},
-            "base": {"ref": "main"},
-            "merge_commit_sha": "c" * 40,
-        }
+        if "/pulls/" in path:
+            return {
+                "state": "closed",
+                "merged": True,
+                "head": {"sha": "a" * 40},
+                "base": {"ref": "main"},
+                "merge_commit_sha": "c" * 40,
+            }
+        if "/commits/" in path:
+            return {
+                "sha": "c" * 40,
+                "parents": [{"sha": "b" * 40}, {"sha": "a" * 40}],
+            }
+        raise AssertionError(path)
 
     monkeypatch.setattr(bridge, "_api", fake_api)
     marked = {}
@@ -151,12 +187,38 @@ def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monk
     assert report["integration"] == "RECONCILED_MERGED"
     assert report["merge_sha"] == "c" * 40
     assert marked["task_id"] == t["task_id"]
-    assert len(calls) == 1
+    assert len(calls) == 2
+
+
+def test_already_merged_candidate_rejects_unassured_merge_base(monkeypatch):
+    t = integration_task()
+    queue = v31_queue(t)
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
+
+    def fake_api(_token, method, path, body=None):
+        if "/pulls/" in path:
+            return {
+                "state": "closed",
+                "merged": True,
+                "head": {"sha": "a" * 40},
+                "base": {"ref": "main"},
+                "merge_commit_sha": "c" * 40,
+            }
+        if "/commits/" in path:
+            return {
+                "sha": "c" * 40,
+                "parents": [{"sha": "d" * 40}, {"sha": "a" * 40}],
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(bridge, "_api", fake_api)
+    with pytest.raises(bridge.BridgeError, match="frozen base and candidate parents"):
+        bridge._integrate_one(queue, {"o/r": authority()}, "control", "target", "o/r", NOW)
 
 
 def test_already_merged_candidate_never_legitimizes_missing_frozen_auto_authority(monkeypatch):
     t = integration_task()
-    queue = {"tasks": [t]}
+    queue = v31_queue(t)
     frozen = authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")
     monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: frozen)
     monkeypatch.setattr(
@@ -176,7 +238,7 @@ def test_already_merged_candidate_never_legitimizes_missing_frozen_auto_authorit
 
 def test_already_merged_candidate_requires_exact_frozen_identity(monkeypatch):
     t = integration_task()
-    queue = {"tasks": [t]}
+    queue = v31_queue(t)
     monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
     monkeypatch.setattr(
         bridge,
