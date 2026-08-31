@@ -150,7 +150,6 @@ def command_materialize(token: str, spec_b64: str) -> int:
     spec = _decode_spec(spec_b64)
 
     def mutate(state_dir):
-        bridge._reconcile_file(state_dir, datetime.now(timezone.utc))
         queue_path = state_dir / bridge.QUEUE_REL
         queue = bridge._load(queue_path)
         bridge._assert_cutover_safe(state_dir, queue)
