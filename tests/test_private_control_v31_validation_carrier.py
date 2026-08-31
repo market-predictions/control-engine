@@ -12,7 +12,8 @@ VALIDATOR = ROOT / "scripts" / "validate_private_control_v31.py"
 def test_private_v31_carrier_is_read_only_and_trusted_main_only():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "issue_comment:" in workflow
-    assert "github.event.comment.user.login == 'market-predictions'" in workflow
+    assert "github.actor == 'market-predictions'" in workflow
+    assert "github.event.comment.user.login" not in workflow
     assert "ref: main" in workflow
     assert "permission-contents: read" in workflow
     assert "permission-contents: write" not in workflow

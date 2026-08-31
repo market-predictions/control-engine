@@ -12,7 +12,7 @@ jobs:
     if: >-
       github.repository == 'market-predictions/control-engine' &&
       github.event.issue.number == 87 &&
-      github.event.comment.user.login == 'market-predictions' &&
+      github.actor == 'market-predictions' &&
       startsWith(github.event.comment.body, 'CONTROL_PRIVATE_V31_VALIDATE ')
     runs-on: ubuntu-latest
     timeout-minutes: 10
