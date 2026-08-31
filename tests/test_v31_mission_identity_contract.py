@@ -49,6 +49,19 @@ def test_task_identity_components_are_unambiguous_across_double_hyphen_joining()
             validator.validate_instance(mission, schema, label="invalid Mission")
 
 
+def test_task_identity_components_reject_line_breaks_including_terminal_newlines():
+    schema = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
+    for mission in (
+        _minimal_mission(mission_id="M\n"),
+        _minimal_mission(revision="r1\n"),
+        _minimal_mission(gap_id="G1\n"),
+        _minimal_mission(depends_on=["G0\n"]),
+        _minimal_mission(mission_id="M\r"),
+    ):
+        with pytest.raises(validator.ValidationError, match="violates trusted schema"):
+            validator.validate_instance(mission, schema, label="invalid Mission")
+
+
 def test_previously_colliding_component_tuples_are_both_rejected():
     schema = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
     for mission in (
