@@ -8,7 +8,7 @@ from control_engine import migration_v31 as migration
 NOW = datetime(2026, 8, 30, 22, 0, tzinfo=timezone.utc)
 
 
-def wrapped_mission(gaps=None):
+def wrapped_mission(gaps=None, *, mission_id="M1", revision="2026-08-16-r2"):
     gaps = gaps or [
         {
             "gap_id": "GAP-10",
@@ -31,8 +31,8 @@ def wrapped_mission(gaps=None):
     ]
     return {
         "mission": {
-            "mission_id": "M1",
-            "mission_revision": "2026-08-16-r2",
+            "mission_id": mission_id,
+            "mission_revision": revision,
             "repository": "o/r",
             "gaps": gaps,
         },
@@ -41,9 +41,9 @@ def wrapped_mission(gaps=None):
     }
 
 
-def legacy_integration(gap="GAP-10", outcome="COMPLETED", status="TERMINAL"):
+def legacy_integration(gap="GAP-10", outcome="COMPLETED", status="TERMINAL", *, explicit=True):
     root = f"MISSION-M1-2026-08-16-r2-{gap}"
-    return {
+    task = {
         "lifecycle_model": "CONTROL_MINIMAL_CORE_V1",
         "task_id": root + "--ASSURE--INTEGRATE",
         "operation": "PROJECT_INTEGRATION",
@@ -53,6 +53,49 @@ def legacy_integration(gap="GAP-10", outcome="COMPLETED", status="TERMINAL"):
         "result_ref": f"control/worker-results/{root}.json",
         "principal_manual_relay_count": 0,
     }
+    if explicit:
+        task.update(mission_id="M1", mission_revision="2026-08-16-r2", mission_gap_id=gap)
+    return task
+
+
+def legacy_chain(gap="GAP-10", *, mission_id="M1", revision="2026-08-16-r2"):
+    root_id = f"MISSION-{mission_id}-{revision}-{gap}"
+    implementation = {
+        "lifecycle_model": "CONTROL_MINIMAL_CORE_V1",
+        "task_id": root_id,
+        "operation": "IMPLEMENTATION",
+        "repository": "o/r",
+        "status": "TERMINAL",
+        "outcome": "COMPLETED",
+        "result_ref": f"control/worker-results/{root_id}.json",
+        "mission_id": mission_id,
+        "mission_revision": revision,
+        "mission_gap_id": gap,
+        "principal_manual_relay_count": 0,
+    }
+    assurance = {
+        "lifecycle_model": "CONTROL_MINIMAL_CORE_V1",
+        "task_id": root_id + "--ASSURE",
+        "operation": "ASSURANCE",
+        "repository": "o/r",
+        "status": "TERMINAL",
+        "outcome": "PASS",
+        "result_ref": f"control/worker-results/{root_id}--ASSURE.json",
+        "predecessor_task_id": root_id,
+        "principal_manual_relay_count": 0,
+    }
+    integration = {
+        "lifecycle_model": "CONTROL_MINIMAL_CORE_V1",
+        "task_id": root_id + "--ASSURE--INTEGRATE",
+        "operation": "PROJECT_INTEGRATION",
+        "repository": "o/r",
+        "status": "TERMINAL",
+        "outcome": "COMPLETED",
+        "result_ref": f"control/worker-results/{root_id}--INTEGRATE.json",
+        "predecessor_task_id": assurance["task_id"],
+        "principal_manual_relay_count": 0,
+    }
+    return implementation, assurance, integration
 
 
 def legacy_queue(*tasks):
@@ -75,6 +118,36 @@ def test_migration_imports_only_completed_integration_for_current_mission_gap():
     assert facts[0]["gap_id"] == "GAP-10"
     assert facts[0]["fact"] == migration.MIGRATION_FACT
     assert facts[0]["principal_manual_relay_count"] == 0
+
+
+def test_realistic_integration_chain_inherits_explicit_root_mission_identity():
+    chain = legacy_chain("GAP-10")
+    _, facts = migration.migrate(legacy_queue(*chain), missions=[wrapped_mission()], now=NOW)
+    assert [fact["gap_id"] for fact in facts] == ["GAP-10"]
+    assert facts[0]["source_task_id"] == chain[-1]["task_id"]
+
+
+def test_ambiguous_legacy_task_text_never_overrides_explicit_predecessor_identity():
+    # Both legacy tuples encode to the same hyphen-only root text. The predecessor
+    # metadata says this chain belongs to A / B-C / D, while the governed Mission
+    # is A-B / C / D. It must not be imported as satisfaction for the latter.
+    chain = legacy_chain("D", mission_id="A", revision="B-C")
+    current = wrapped_mission(
+        [{"gap_id": "D", "gap_state": "OPEN", "depends_on": [], "repository": "o/r", "operation": "IMPLEMENTATION", "acceptance": ["done"], "integration_policy": "HOLD_AFTER_PASS"}],
+        mission_id="A-B",
+        revision="C",
+    )
+    _, facts = migration.migrate(legacy_queue(*chain), missions=[current], now=NOW)
+    assert facts == []
+
+
+def test_completed_integration_without_explicit_identity_chain_is_not_promoted():
+    _, facts = migration.migrate(
+        legacy_queue(legacy_integration("GAP-10", explicit=False)),
+        missions=[wrapped_mission()],
+        now=NOW,
+    )
+    assert facts == []
 
 
 def test_blocked_executing_queued_and_assurance_only_never_become_satisfaction_facts():
@@ -139,26 +212,10 @@ def test_migration_rejects_missing_malformed_or_future_queue_versions():
             migration.migrate(queue, missions=[wrapped_mission()], now=NOW)
 
 
-def test_legacy_root_matching_does_not_collide_on_gap_prefixes():
+def test_explicit_identity_avoids_gap_prefix_collisions():
     gaps = [
-        {
-            "gap_id": "GAP-1",
-            "gap_state": "OPEN",
-            "depends_on": [],
-            "repository": "o/r",
-            "operation": "IMPLEMENTATION",
-            "acceptance": ["one"],
-            "integration_policy": "HOLD_AFTER_PASS",
-        },
-        {
-            "gap_id": "GAP-10",
-            "gap_state": "OPEN",
-            "depends_on": [],
-            "repository": "o/r",
-            "operation": "IMPLEMENTATION",
-            "acceptance": ["ten"],
-            "integration_policy": "HOLD_AFTER_PASS",
-        },
+        {"gap_id": "GAP-1", "gap_state": "OPEN", "depends_on": [], "repository": "o/r", "operation": "IMPLEMENTATION", "acceptance": ["one"], "integration_policy": "HOLD_AFTER_PASS"},
+        {"gap_id": "GAP-10", "gap_state": "OPEN", "depends_on": [], "repository": "o/r", "operation": "IMPLEMENTATION", "acceptance": ["ten"], "integration_policy": "HOLD_AFTER_PASS"},
     ]
     q, facts = migration.migrate(
         legacy_queue(legacy_integration("GAP-10")),
