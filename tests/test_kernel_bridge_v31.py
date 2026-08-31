@@ -213,56 +213,57 @@ def test_planner_and_executor_keep_exact_same_task_within_repository(monkeypatch
     assert planned == ("LATER", "o/r")
 
     seen = []
-    merged_state = {"done": False}
+    branch_reads = iter(["b" * 40, "d" * 40])
+    fast_forwards = []
 
     def fake_api(_token, method, path, body=None):
         seen.append((method, path, body))
         if path.endswith("/pulls/8") and method == "GET":
-            if merged_state["done"]:
-                return {
-                    "state": "closed",
-                    "merged": True,
-                    "head": {"sha": "c" * 40},
-                    "base": {"ref": "main"},
-                    "merge_commit_sha": "d" * 40,
-                }
             return {"state": "open", "merged": False, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}
-        if path.endswith("/branches/main"):
-            return {"commit": {"sha": "b" * 40}}
         if "check-runs" in path:
             return {"check_runs": []}
         if path.endswith("/statuses/" + "c" * 40):
             return {}
-        if path.endswith("/pulls/8/merge"):
-            merged_state["done"] = True
-            return {"merged": True, "sha": "d" * 40}
+        if path.endswith("/git/ref/pull/8/merge") and method == "GET":
+            return {"object": {"sha": "d" * 40}}
         if path.endswith("/commits/" + "d" * 40):
             return {"sha": "d" * 40, "parents": [{"sha": "b" * 40}, {"sha": "c" * 40}]}
         raise AssertionError(path)
 
     monkeypatch.setattr(bridge, "_api", fake_api)
+    monkeypatch.setattr(bridge, "_branch_sha", lambda *_args, **_kwargs: next(branch_reads))
+
+    def fake_fast_forward(token, repository, branch, *, merge_sha, expected_base_sha):
+        fast_forwards.append((token, repository, branch, merge_sha, expected_base_sha))
+        return True
+
+    monkeypatch.setattr(bridge, "_fast_forward_branch_ref", fake_fast_forward)
     monkeypatch.setattr(bridge.core, "mark_integrated", lambda queue_arg, **_kwargs: queue_arg)
     _, report = bridge._integrate_one(q, [mission_wrapper()], {"o/r": authority()}, "control", "target", "LATER", "o/r", NOW)
     assert report["task_id"] == "LATER"
+    assert report["integration"] == "MERGED"
     assert all("/pulls/7" not in path for _, path, _ in seen)
+    assert fast_forwards == [("target", "o/r", "main", "d" * 40, "b" * 40)]
 
 
 def test_open_candidate_with_revoked_mission_authority_never_merges(monkeypatch):
     t = integration_task()
     q = v31_queue(t)
     monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
+    monkeypatch.setattr(bridge, "_branch_sha", lambda *_args, **_kwargs: "b" * 40)
     calls = []
 
     def fake_api(_token, method, path, body=None):
         calls.append((method, path, body))
-        if "/pulls/" in path:
+        if "/pulls/" in path and method == "GET":
             return {"state": "open", "merged": False, "head": {"sha": "a" * 40}, "base": {"ref": "main"}}
         raise AssertionError(path)
 
     monkeypatch.setattr(bridge, "_api", fake_api)
-    _, report = bridge._integrate_one(q, [], {"o/r": authority()}, "control", "target", t["task_id"], "o/r", NOW)
+    held, report = bridge._integrate_one(q, [], {"o/r": authority()}, "control", "target", t["task_id"], "o/r", NOW)
     assert report["integration"] == "HOLD_MISSION_AUTHORITY"
-    assert all(method != "PUT" for method, _, _ in calls)
+    assert held["tasks"][0]["integration_state"] == "HOLD"
+    assert all(method == "GET" for method, _, _ in calls)
 
 
 def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monkeypatch):
