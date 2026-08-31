@@ -24,7 +24,7 @@ def test_private_v31_carrier_is_read_only_and_trusted_main_only():
 
 def test_private_v31_validator_reads_committed_git_objects_only():
     text = VALIDATOR.read_text(encoding="utf-8")
-    assert '"ls-tree", "-rz", "--full-tree", "HEAD"' in text
+    assert '"ls-tree", "-rz", "-r", "--full-tree", "HEAD"' in text
     assert '"cat-file", "blob", oid' in text
     assert "PRIVATE_CANDIDATE_EXECUTION=false" in text
     assert "PRIVATE_RUNTIME_MUTATION=false" in text
