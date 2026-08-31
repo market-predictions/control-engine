@@ -114,6 +114,26 @@ def test_materializer_replay_does_not_reconcile_or_mutate_existing_lifecycle(tmp
     assert materialize.bridge._load(queue_path) == before
 
 
+def test_materializer_fails_closed_on_authoritative_readback_identity_drift(tmp_path, monkeypatch):
+    queue = {"version": "1.0", "principal_manual_relay_count": 0, "tasks": []}
+    queue_path = tmp_path / materialize.bridge.QUEUE_REL
+    queue_path.parent.mkdir(parents=True)
+    materialize.bridge._write(queue_path, queue)
+    monkeypatch.setattr(materialize.bridge, "_assert_legacy_b1_retired", lambda *_args: None)
+
+    def fake_with_cas(_token, mutate, *, message):
+        assert message.startswith("runtime: materialize Minimal Core assurance root")
+        captured = mutate(tmp_path)
+        readback = materialize.bridge._load(queue_path)
+        readback["tasks"][0]["instruction"] = "Concurrent immutable-spec drift"
+        return captured, readback, 1
+
+    monkeypatch.setattr(materialize.bridge, "_with_cas", fake_with_cas)
+
+    with pytest.raises(RuntimeError, match="immutable identity drifted"):
+        materialize.command_materialize("token", _encode(_assurance_spec()))
+
+
 def test_materializer_requires_retired_legacy_b1_even_for_first_root(tmp_path, monkeypatch):
     queue = {"version": "1.0", "principal_manual_relay_count": 0, "tasks": []}
     queue_path = tmp_path / materialize.bridge.QUEUE_REL
