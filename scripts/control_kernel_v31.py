@@ -204,6 +204,13 @@ def _active_gap_identities(missions: list[dict[str, Any]]) -> set[tuple[str, str
     }
 
 
+def _active_mission_blobs(missions: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    return {
+        (wrapped["mission"]["mission_id"], wrapped["mission"]["mission_revision"]): wrapped["mission_contract_blob_sha"]
+        for wrapped in missions
+    }
+
+
 def _mission_for_task(missions: list[dict[str, Any]], task: dict[str, Any]) -> dict[str, Any] | None:
     for wrapped in missions:
         m = wrapped["mission"]
@@ -282,6 +289,54 @@ def _api(token: str, method: str, path: str, body: dict[str, Any] | None = None)
         raise BridgeError(f"GitHub API HTTP {exc.code} for {path}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise TransientError("GitHub API unavailable") from exc
+
+
+def _branch_sha(token: str, repository: str, branch: str) -> str:
+    data = _api(token, "GET", f"repos/{repository}/branches/{urllib.parse.quote(branch, safe='')}")
+    sha = data.get("commit", {}).get("sha")
+    if not core._sha(sha):
+        raise BridgeError("target base branch identity is invalid")
+    return sha
+
+
+def _fast_forward_branch_ref(
+    token: str,
+    repository: str,
+    branch: str,
+    *,
+    merge_sha: str,
+    expected_base_sha: str,
+) -> bool:
+    """Atomically move a base ref only while the frozen base is still current.
+
+    GitHub rejects a non-fast-forward update if the base moved after planning.
+    A rejection while the frozen base is still current is a real authority or
+    branch-protection blocker, not a synthetic base-drift signal.
+    """
+    path = f"repos/{repository}/git/refs/heads/{urllib.parse.quote(branch, safe='')}"
+    url = "https://api.github.com/" + path
+    body = json.dumps({"sha": merge_sha, "force": False}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="PATCH")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("User-Agent", "control-kernel-v3-1")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        if exc.code in {409, 422}:
+            if _branch_sha(token, repository, branch) != expected_base_sha:
+                return False
+            raise BridgeError("atomic base ref update rejected while frozen base remained current") from exc
+        if exc.code in {429, 500, 502, 503, 504}:
+            raise TransientError(f"GitHub transient HTTP {exc.code}") from exc
+        raise BridgeError("atomic base ref update failed") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientError("GitHub API unavailable") from exc
+    if payload.get("object", {}).get("sha") != merge_sha:
+        raise BridgeError("atomic base ref update returned unexpected identity")
+    return True
 
 
 def _frozen_repository_authority(control_token: str, task: dict[str, Any]) -> dict[str, Any]:
@@ -467,40 +522,62 @@ def _integrate_one(
 
     if pr.get("state") != "open":
         raise BridgeError("live PR is neither open nor merged")
-    if not _has_live_task_authority(task, missions, repo_auth):
-        return queue, {"integration": "HOLD_MISSION_AUTHORITY", "task_id": task["task_id"]}
-    if not _integration_authorized(task, frozen, live):
-        return queue, {"integration": "HOLD", "task_id": task["task_id"]}
 
-    base = _api(target_token, "GET", f"repos/{target_repository}/branches/{urllib.parse.quote(candidate['expected_base_branch'], safe='')}")
-    current_base = base.get("commit", {}).get("sha")
+    current_base = _branch_sha(target_token, target_repository, candidate["expected_base_branch"])
+    if current_base != candidate["expected_base_sha"] and _merged_commit_proves_expected_candidate(
+        target_token,
+        target_repository,
+        current_base,
+        expected_base_sha=candidate["expected_base_sha"],
+        candidate_sha=sha,
+    ):
+        q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=current_base, merged_at=now)
+        return q, {"integration": "RECONCILED_BASE_REF", "task_id": task["task_id"], "merge_sha": current_base}
+
+    if not _has_live_task_authority(task, missions, repo_auth):
+        q = core.mark_integration_hold(queue, assurance_task_id=task["task_id"], held_at=now)
+        return q, {"integration": "HOLD_MISSION_AUTHORITY", "task_id": task["task_id"]}
+    if not _integration_authorized(task, frozen, live):
+        q = core.mark_integration_hold(queue, assurance_task_id=task["task_id"], held_at=now)
+        return q, {"integration": "HOLD", "task_id": task["task_id"]}
+
     if current_base != candidate["expected_base_sha"]:
         q, repair_id = core.materialize_base_drift_repair(queue, assurance_task_id=task["task_id"], now=now)
         return q, {"integration": "BASE_DRIFT", "task_id": task["task_id"], "repair_task_id": repair_id}
+
     required_checks = _effective_required_checks(frozen, live)
     if not _required_checks_green(target_token, target_repository, sha, required_checks):
         return queue, {"integration": "WAIT_CHECKS", "task_id": task["task_id"]}
     _publish_assurance_status(target_token, target_repository, sha)
-    merged = _api(target_token, "PUT", f"repos/{target_repository}/pulls/{pr_number}/merge", {"sha": sha, "merge_method": "merge"})
-    if merged.get("merged") is not True or not core._sha(merged.get("sha")):
-        raise BridgeError("guarded expected-head merge did not succeed")
-    post = _api(target_token, "GET", f"repos/{target_repository}/pulls/{pr_number}")
-    if post.get("merged") is not True:
-        raise BridgeError("post-merge readback does not prove merge")
-    if post.get("head", {}).get("sha") != sha or post.get("base", {}).get("ref") != candidate["expected_base_branch"]:
-        raise BridgeError("post-merge exact candidate identity mismatch")
-    if post.get("merge_commit_sha") != merged["sha"]:
-        raise BridgeError("post-merge commit identity mismatch")
+
+    merge_ref = _api(target_token, "GET", f"repos/{target_repository}/git/ref/pull/{pr_number}/merge")
+    merge_sha = merge_ref.get("object", {}).get("sha")
+    if not core._sha(merge_sha):
+        raise BridgeError("synthetic PR merge ref is unavailable")
     if not _merged_commit_proves_expected_candidate(
         target_token,
         target_repository,
-        merged["sha"],
+        merge_sha,
         expected_base_sha=candidate["expected_base_sha"],
         candidate_sha=sha,
     ):
-        raise BridgeError("merge commit does not prove frozen base and candidate parents")
-    q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=merged["sha"], merged_at=now)
-    return q, {"integration": "MERGED", "task_id": task["task_id"], "merge_sha": merged["sha"]}
+        raise BridgeError("synthetic merge commit does not prove frozen base and exact candidate")
+
+    if not _fast_forward_branch_ref(
+        target_token,
+        target_repository,
+        candidate["expected_base_branch"],
+        merge_sha=merge_sha,
+        expected_base_sha=candidate["expected_base_sha"],
+    ):
+        q, repair_id = core.materialize_base_drift_repair(queue, assurance_task_id=task["task_id"], now=now)
+        return q, {"integration": "BASE_DRIFT", "task_id": task["task_id"], "repair_task_id": repair_id}
+
+    if _branch_sha(target_token, target_repository, candidate["expected_base_branch"]) != merge_sha:
+        raise BridgeError("atomic integration readback does not prove exact merge commit")
+
+    q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=merge_sha, merged_at=now)
+    return q, {"integration": "MERGED", "task_id": task["task_id"], "merge_sha": merge_sha}
 
 
 def command_claim(token: str, *, role: str, worker: str, task_id: str) -> int:
@@ -515,6 +592,7 @@ def command_claim(token: str, *, role: str, worker: str, task_id: str) -> int:
             now=_now(),
             active_missions=_active_revisions(missions),
             active_gaps=_active_gap_identities(missions),
+            active_mission_blobs=_active_mission_blobs(missions),
         )
         chosen = task_id
         if chosen == "AUTO":
@@ -643,6 +721,7 @@ def command_tick(token: str, *, target_token: str, target_task_id: str, target_r
             now=now,
             active_missions=_active_revisions(missions),
             active_gaps=_active_gap_identities(missions),
+            active_mission_blobs=_active_mission_blobs(missions),
         )
         integration_report: dict[str, Any] = {"integration": "DISABLED"}
         if _global_integration_enabled(global_auth) and target_repository:
