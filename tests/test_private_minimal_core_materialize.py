@@ -77,6 +77,43 @@ def test_same_spec_identity_ignores_lifecycle_state_but_detects_spec_drift():
     assert materialize._identity_projection(original) != materialize._identity_projection(drifted)
 
 
+def test_materializer_replay_does_not_reconcile_or_mutate_existing_lifecycle(tmp_path, monkeypatch):
+    spec = _assurance_spec()
+    existing = materialize._root_from_spec(spec, "2026-08-31T06:00:00Z")
+    existing["status"] = core.STATUS_EXECUTING
+    existing["claim"] = {
+        "run_id": "run-expired",
+        "role": core.ROLE_B,
+        "worker_instance": core.INSTANCE_B1,
+        "backend": "canonical-minimal-core/b1",
+        "started_at": "2026-08-31T06:05:00Z",
+        "expires_at": "2026-08-31T06:35:00Z",
+    }
+    existing["attempt_count"] = 1
+    queue = {"version": "1.0", "principal_manual_relay_count": 0, "tasks": [existing]}
+    queue_path = tmp_path / materialize.bridge.QUEUE_REL
+    queue_path.parent.mkdir(parents=True)
+    materialize.bridge._write(queue_path, queue)
+    before = json.loads(json.dumps(queue))
+
+    monkeypatch.setattr(materialize.bridge, "_assert_cutover_safe", lambda *_args: None)
+
+    def forbidden_reconcile(*_args, **_kwargs):
+        raise AssertionError("materialization replay must not reconcile lifecycle state")
+
+    monkeypatch.setattr(materialize.bridge, "_reconcile_file", forbidden_reconcile)
+
+    def fake_with_cas(_token, mutate, *, message):
+        assert message.startswith("runtime: materialize Minimal Core assurance root")
+        captured = mutate(tmp_path)
+        return captured, materialize.bridge._load(queue_path), 1
+
+    monkeypatch.setattr(materialize.bridge, "_with_cas", fake_with_cas)
+
+    assert materialize.command_materialize("token", _encode(spec)) == 0
+    assert materialize.bridge._load(queue_path) == before
+
+
 def test_materializer_rejects_any_authority_or_mission_field_injection():
     for field, value in (
         ("role", core.ROLE_A),
