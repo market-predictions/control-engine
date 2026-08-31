@@ -121,7 +121,7 @@ def test_trusted_schema_rejects_missing_required_mission_contract_fields():
             {
                 "protocol_id": "MISSION_CONTRACT_V3_1",
                 "mission_id": "M1",
-                "mission_revision": "r1",
+                "mission_revision": "2026-08-31-r1",
                 "repository": "o/r",
                 "gaps": [],
                 "principal_manual_relay_count": 0,
@@ -203,16 +203,26 @@ def test_gap_auto_integration_requires_runtime_integration_and_repository_author
 
 
 def test_revision_discipline_is_bound_to_mission_identity_not_filename():
-    base = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r1", "desired_outcome": "old"}}
-    changed_same_revision = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r1", "desired_outcome": "new"}}
+    base_revision = "2026-08-30-r1"
+    next_revision = "2026-08-31-r2"
+    base = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": base_revision, "desired_outcome": "old"}}
+    changed_same_revision = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": base_revision, "desired_outcome": "new"}}
     with pytest.raises(validator.ValidationError, match="without new mission_revision"):
         validator.enforce_revision_discipline(changed_same_revision, base)
 
-    changed_new_revision = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r2", "desired_outcome": "new"}}
+    changed_new_revision = {
+        "M1": {
+            "protocol_id": "MISSION_CONTRACT_V3_1",
+            "mission_id": "M1",
+            "mission_revision": next_revision,
+            "supersedes_revision": base_revision,
+            "desired_outcome": "new",
+        }
+    }
     validator.enforce_revision_discipline(changed_new_revision, base)
 
 
 def test_revision_discipline_rejects_disappearing_existing_v31_mission():
-    base = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "r1"}}
+    base = {"M1": {"protocol_id": "MISSION_CONTRACT_V3_1", "mission_id": "M1", "mission_revision": "2026-08-30-r1"}}
     with pytest.raises(validator.ValidationError, match="removed instead of being revised/retired"):
         validator.enforce_revision_discipline({}, base)
