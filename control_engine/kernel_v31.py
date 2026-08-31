@@ -18,6 +18,7 @@ STATUS_EXECUTING = "EXECUTING"
 STATUS_TERMINAL = "TERMINAL"
 STATUS_SUPERSEDED = "SUPERSEDED"
 LEASE_SECONDS = 5400
+TASK_SEPARATOR = "--"
 
 OPERATION_ROLE = {
     "IMPLEMENTATION": ROLE_A,
@@ -158,15 +159,23 @@ def validate(queue: Mapping[str, Any]) -> None:
             raise KernelError("non-terminal task retains terminal state")
 
 
+def _identity_component(value: object) -> str:
+    if not isinstance(value, str) or not value or TASK_SEPARATOR in value:
+        raise KernelError("task identity component is invalid")
+    return value
+
+
 def deterministic_root_id(mission_id: str, revision: str, gap_id: str) -> str:
-    return f"MISSION-{mission_id}-{revision}-{gap_id}"
+    return TASK_SEPARATOR.join(
+        ("MISSION", _identity_component(mission_id), _identity_component(revision), _identity_component(gap_id))
+    )
 
 
 def _successor_id(predecessor_id: str, operation: str, candidate_sha: str | None = None) -> str:
     suffix = operation
     if candidate_sha:
         suffix += f"-{candidate_sha[:12]}"
-    return f"{predecessor_id}--{suffix}"
+    return f"{predecessor_id}{TASK_SEPARATOR}{suffix}"
 
 
 def select_task(queue: Mapping[str, Any], role: str) -> dict[str, Any] | None:
@@ -368,25 +377,39 @@ def record(
 
 
 def reconcile(
-    queue: Mapping[str, Any], *, now: datetime, active_missions: Mapping[str, str] | None = None
+    queue: Mapping[str, Any],
+    *,
+    now: datetime,
+    active_missions: Mapping[str, str] | None = None,
+    active_gaps: set[tuple[str, str, str]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, list[str]]]:
     q = deepcopy(queue)
     validate(q)
     now = _utc(now)
+    missions_authoritative = active_missions is not None
+    gaps_authoritative = active_gaps is not None
     active_missions = active_missions or {}
+    active_gaps = active_gaps or set()
     expired: list[str] = []
     superseded: list[str] = []
     for task in q["tasks"]:
-        if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") != STATUS_EXECUTING:
+        if task.get("lifecycle_model") != PROTOCOL_ID or task.get("status") not in {STATUS_QUEUED, STATUS_EXECUTING}:
             continue
         mission_id = task.get("mission_id")
         revision = task.get("mission_revision")
-        current_revision = active_missions.get(mission_id) if isinstance(mission_id, str) else None
-        if current_revision is not None and revision != current_revision:
+        gap_id = task.get("gap_id")
+        obsolete = False
+        if missions_authoritative:
+            obsolete = not isinstance(mission_id, str) or active_missions.get(mission_id) != revision
+        if not obsolete and gaps_authoritative:
+            obsolete = (mission_id, revision, gap_id) not in active_gaps
+        if obsolete:
             task["status"] = STATUS_SUPERSEDED
             task["claim"] = None
             task["updated_at"] = _ts(now)
             superseded.append(task["task_id"])
+            continue
+        if task.get("status") != STATUS_EXECUTING:
             continue
         claim = task["claim"]
         if _parse_ts(claim["expires_at"]) <= now:
@@ -401,9 +424,9 @@ def reconcile(
 
 
 def _legacy_gap_satisfied(queue: Mapping[str, Any], mission_id: str, revision: str, gap_id: str) -> bool:
-    prefix = deterministic_root_id(mission_id, revision, gap_id)
+    root = deterministic_root_id(mission_id, revision, gap_id)
     return any(
-        t.get("task_id", "").startswith(prefix)
+        (t.get("task_id", "") == root or t.get("task_id", "").startswith(root + TASK_SEPARATOR))
         and t.get("operation") == "PROJECT_INTEGRATION"
         and t.get("status") == "TERMINAL"
         and t.get("outcome") == "COMPLETED"
