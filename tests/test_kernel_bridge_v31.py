@@ -28,21 +28,22 @@ def authority(*, repository="o/r", policy="AUTO_AFTER_PASS", enabled=True, profi
     }
 
 
-def task(*, repository="o/r"):
+def task(*, repository="o/r", mission_id="M1", gap_id="G1"):
     return {
         "repository": repository,
-        "mission_id": "M1",
+        "mission_id": mission_id,
         "mission_revision": "r1",
-        "gap_id": "G1",
+        "gap_id": gap_id,
         "mission_contract_blob_sha": "1" * 40,
         "repository_authority_blob_sha": "2" * 40,
         "integration_policy": "AUTO_AFTER_PASS",
     }
 
 
-def integration_task(*, repository="o/r", task_id="MISSION-M1-r1-G1--ASSURANCE-aaaaaaaaaaaa", updated_at="2026-08-30T21:00:00Z"):
+def integration_task(*, repository="o/r", mission_id="M1", gap_id="G1", task_id=None, updated_at="2026-08-30T21:00:00Z"):
+    task_id = task_id or bridge.core.deterministic_root_id(mission_id, "r1", gap_id) + "--ASSURANCE-aaaaaaaaaaaa"
     return {
-        **task(repository=repository),
+        **task(repository=repository, mission_id=mission_id, gap_id=gap_id),
         "lifecycle_model": bridge.core.PROTOCOL_ID,
         "task_id": task_id,
         "operation": "ASSURANCE",
@@ -77,13 +78,13 @@ def v31_queue(*tasks):
     }
 
 
-def mission_wrapper():
+def mission_wrapper(*, mission_id="M1", repository="o/r", gap_id="G1"):
     return {
         "mission": {
-            "mission_id": "M1",
+            "mission_id": mission_id,
             "mission_revision": "r1",
-            "repository": "o/r",
-            "gaps": [{"gap_id": "G1", "gap_state": "OPEN"}],
+            "repository": repository,
+            "gaps": [{"gap_id": gap_id, "gap_state": "OPEN"}],
         },
         "mission_contract_blob_sha": "1" * 40,
         "repository_authority_blob_sha": "3" * 40,
@@ -127,41 +128,46 @@ def test_required_checks_fail_closed_on_invalid_shape():
 
 
 def test_planner_uses_frozen_auto_so_post_merge_recovery_survives_live_hold(monkeypatch):
-    q = v31_queue(integration_task())
+    t = integration_task()
+    q = v31_queue(t)
     monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority(repository=_task["repository"]))
     hold = authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE")
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": True, "integration_enabled": True},
+        [mission_wrapper()],
         {"o/r": hold},
         "control",
-    ) == "o/r"
+    ) == (t["task_id"], "o/r")
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": False, "integration_enabled": True},
+        [mission_wrapper()],
         {"o/r": hold},
         "control",
-    ) == ""
+    ) == ("", "")
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": True, "integration_enabled": False},
+        [mission_wrapper()],
         {"o/r": hold},
         "control",
-    ) == ""
+    ) == ("", "")
 
 
 def test_planner_prefers_live_auto_over_older_frozen_only_recovery_candidate(monkeypatch):
     older_hold = integration_task(
         repository="o/hold",
-        task_id="MISSION-M1-r1-G1--ASSURANCE-aaaaaaaaaaaa",
+        mission_id="M1",
+        task_id="OLDER--ASSURANCE-aaaaaaaaaaaa",
         updated_at="2026-08-30T20:00:00Z",
     )
     later_auto = integration_task(
         repository="o/auto",
-        task_id="MISSION-M2-r1-G1--ASSURANCE-bbbbbbbbbbbb",
+        mission_id="M2",
+        task_id="LATER--ASSURANCE-bbbbbbbbbbbb",
         updated_at="2026-08-30T21:00:00Z",
     )
-    later_auto["mission_id"] = "M2"
     q = v31_queue(older_hold, later_auto)
 
     monkeypatch.setattr(
@@ -173,12 +179,79 @@ def test_planner_prefers_live_auto_over_older_frozen_only_recovery_candidate(mon
         "o/hold": authority(repository="o/hold", policy="HOLD_AFTER_PASS", enabled=False, profile="NONE"),
         "o/auto": authority(repository="o/auto"),
     }
+    missions = [
+        mission_wrapper(mission_id="M1", repository="o/hold"),
+        mission_wrapper(mission_id="M2", repository="o/auto"),
+    ]
     assert bridge._plan_integration_target(
         q,
         {"control_runtime_enabled": True, "integration_enabled": True},
+        missions,
         repo_auth,
         "control",
-    ) == "o/auto"
+    ) == (later_auto["task_id"], "o/auto")
+
+
+def test_planner_and_executor_keep_exact_same_task_within_repository(monkeypatch):
+    older = integration_task(task_id="OLDER", updated_at="2026-08-30T20:00:00Z")
+    later = integration_task(task_id="LATER", updated_at="2026-08-30T21:00:00Z")
+    later["candidate"] = {**later["candidate"], "candidate_sha": "c" * 40, "candidate_pr_number": 8}
+    q = v31_queue(older, later)
+
+    monkeypatch.setattr(
+        bridge,
+        "_frozen_repository_authority",
+        lambda _token, t: authority(policy="HOLD_AFTER_PASS", enabled=False, profile="NONE") if t["task_id"] == "OLDER" else authority(),
+    )
+    planned = bridge._plan_integration_target(
+        q,
+        {"control_runtime_enabled": True, "integration_enabled": True},
+        [mission_wrapper()],
+        {"o/r": authority()},
+        "control",
+    )
+    assert planned == ("LATER", "o/r")
+
+    seen = []
+    def fake_api(_token, method, path, body=None):
+        seen.append((method, path, body))
+        if path.endswith("/pulls/8"):
+            return {"state": "open", "merged": False, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}
+        if path.endswith("/branches/main"):
+            return {"commit": {"sha": "b" * 40}}
+        if "check-runs" in path:
+            return {"check_runs": []}
+        if path.endswith("/statuses/" + "c" * 40):
+            return {}
+        if path.endswith("/pulls/8/merge"):
+            return {"merged": True, "sha": "d" * 40}
+        if path.endswith("/commits/" + "d" * 40):
+            return {"sha": "d" * 40, "parents": [{"sha": "b" * 40}, {"sha": "c" * 40}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(bridge, "_api", fake_api)
+    monkeypatch.setattr(bridge.core, "mark_integrated", lambda queue_arg, **_kwargs: queue_arg)
+    _, report = bridge._integrate_one(q, [mission_wrapper()], {"o/r": authority()}, "control", "target", "LATER", "o/r", NOW)
+    assert report["task_id"] == "LATER"
+    assert all("/pulls/7" not in path for _, path, _ in seen)
+
+
+def test_open_candidate_with_revoked_mission_authority_never_merges(monkeypatch):
+    t = integration_task()
+    q = v31_queue(t)
+    monkeypatch.setattr(bridge, "_frozen_repository_authority", lambda _token, _task: authority())
+    calls = []
+
+    def fake_api(_token, method, path, body=None):
+        calls.append((method, path, body))
+        if "/pulls/" in path:
+            return {"state": "open", "merged": False, "head": {"sha": "a" * 40}, "base": {"ref": "main"}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(bridge, "_api", fake_api)
+    _, report = bridge._integrate_one(q, [], {"o/r": authority()}, "control", "target", t["task_id"], "o/r", NOW)
+    assert report["integration"] == "HOLD_MISSION_AUTHORITY"
+    assert all(method != "PUT" for method, _, _ in calls)
 
 
 def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monkeypatch):
@@ -216,7 +289,7 @@ def test_already_merged_exact_candidate_reconciles_after_lost_runtime_write(monk
         return {**queue_arg, "reconciled": True}
 
     monkeypatch.setattr(bridge.core, "mark_integrated", fake_mark)
-    q, report = bridge._integrate_one(queue, {"o/r": live}, "control", "target", "o/r", NOW)
+    q, report = bridge._integrate_one(queue, [], {"o/r": live}, "control", "target", t["task_id"], "o/r", NOW)
 
     assert q["reconciled"] is True
     assert report["integration"] == "RECONCILED_MERGED"
@@ -248,7 +321,7 @@ def test_already_merged_candidate_rejects_unassured_merge_base(monkeypatch):
 
     monkeypatch.setattr(bridge, "_api", fake_api)
     with pytest.raises(bridge.BridgeError, match="frozen base and candidate parents"):
-        bridge._integrate_one(queue, {"o/r": authority()}, "control", "target", "o/r", NOW)
+        bridge._integrate_one(queue, [], {"o/r": authority()}, "control", "target", t["task_id"], "o/r", NOW)
 
 
 def test_already_merged_candidate_never_legitimizes_missing_frozen_auto_authority(monkeypatch):
@@ -268,7 +341,7 @@ def test_already_merged_candidate_never_legitimizes_missing_frozen_auto_authorit
         },
     )
     with pytest.raises(bridge.BridgeError, match="lacks frozen AUTO authority"):
-        bridge._integrate_one(queue, {"o/r": authority()}, "control", "target", "o/r", NOW)
+        bridge._integrate_one(queue, [], {"o/r": authority()}, "control", "target", t["task_id"], "o/r", NOW)
 
 
 def test_already_merged_candidate_requires_exact_frozen_identity(monkeypatch):
@@ -287,4 +360,4 @@ def test_already_merged_candidate_requires_exact_frozen_identity(monkeypatch):
         },
     )
     with pytest.raises(bridge.BridgeError, match="exact PASS candidate"):
-        bridge._integrate_one(queue, {"o/r": authority()}, "control", "target", "o/r", NOW)
+        bridge._integrate_one(queue, [], {"o/r": authority()}, "control", "target", t["task_id"], "o/r", NOW)
