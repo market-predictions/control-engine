@@ -109,14 +109,15 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.command != 'TICK'
         shell: bash
         env:
-          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           A1_ACTOR: ${{ vars.CONTROL_A1_GITHUB_ACTOR }}
           B1_ACTOR: ${{ vars.CONTROL_B1_GITHUB_ACTOR }}
         run: |
           set -euo pipefail
+          [ -n "$TRIGGERING_ACTOR" ]
           [ -n "$A1_ACTOR" ] && [ -n "$B1_ACTOR" ]
           [ "$A1_ACTOR" != "$B1_ACTOR" ]
-          case "$ACTOR" in
+          case "$TRIGGERING_ACTOR" in
             "$A1_ACTOR")
               echo 'role=implementation_operations' >> "$GITHUB_OUTPUT"
               echo 'worker=A1' >> "$GITHUB_OUTPUT"
@@ -126,7 +127,7 @@ jobs:
               echo 'worker=B1' >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo '::error::Authenticated actor has no V3.1 semantic role capability.'
+              echo '::error::Authenticated triggering actor has no V3.1 semantic role capability.'
               exit 1
               ;;
           esac
@@ -140,15 +141,20 @@ jobs:
         run: |
           set -euo pipefail
           output="$(python scripts/control_kernel_v31.py plan-tick)"
+          task_id="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_TASK_ID=//p' | tail -n1)"
           target="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_REPOSITORY=//p' | tail -n1)"
           if [ -n "$target" ]; then
+            [ -n "$task_id" ]
             owner="${target%%/*}"
             repo="${target#*/}"
             [ "$owner" != "$target" ] && [ -n "$repo" ]
+            echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
             echo "target=$target" >> "$GITHUB_OUTPUT"
             echo "owner=$owner" >> "$GITHUB_OUTPUT"
             echo "repo=$repo" >> "$GITHUB_OUTPUT"
           else
+            [ -z "$task_id" ]
+            echo 'task_id=' >> "$GITHUB_OUTPUT"
             echo 'target=' >> "$GITHUB_OUTPUT"
             echo 'owner=' >> "$GITHUB_OUTPUT"
             echo 'repo=' >> "$GITHUB_OUTPUT"
@@ -174,6 +180,7 @@ jobs:
         env:
           CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
           CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_TASK_ID: ${{ steps.plan.outputs.task_id }}
           CONTROL_TARGET_REPOSITORY: ${{ steps.plan.outputs.target }}
         run: |
           set -euo pipefail
