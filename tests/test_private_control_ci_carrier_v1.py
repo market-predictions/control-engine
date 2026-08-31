@@ -88,12 +88,12 @@ class PrivateControlCiCarrierV1Tests(unittest.TestCase):
 
     def test_carrier_runs_current_minimal_core_validation_profile_not_retired_runtime_tests(self) -> None:
         text = CARRIER.read_text(encoding="utf-8")
-        self.assertIn("tools/control_minimal_mission_feed_v1.py", text)
+        self.assertNotIn("tools/control_minimal_mission_feed_v1.py", text)
         self.assertIn("tools/mission_contract_v1.py", text)
         self.assertIn("test -f tests/test_mission_contract_v1.py", text)
-        self.assertIn("test -f tests/test_control_minimal_mission_feed_v1.py", text)
+        self.assertNotIn("test -f tests/test_control_minimal_mission_feed_v1.py", text)
         self.assertIn("test_mission_contract_v1.py", text)
-        self.assertIn("test_control_minimal_mission_feed_v1.py", text)
+        self.assertNotIn("test_control_minimal_mission_feed_v1.py", text)
         self.assertIn("profile=CONTROL_MINIMAL_CORE_V1", text)
         self.assertIn("runtime_model=CONTROL_MINIMAL_CORE_V1", text)
         self.assertIn("mandatory_convergence_cleanup=true", text)
