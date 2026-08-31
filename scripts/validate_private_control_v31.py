@@ -105,7 +105,7 @@ def git_bytes(root: Path, *args: str) -> bytes:
 
 
 def committed_tree(root: Path) -> dict[str, tuple[str, str, str]]:
-    raw = git_bytes(root, "ls-tree", "-rz", "--full-tree", "HEAD")
+    raw = git_bytes(root, "ls-tree", "-rz", "-r", "--full-tree", "HEAD")
     entries: dict[str, tuple[str, str, str]] = {}
     for record in raw.split(b"\0"):
         if not record:
