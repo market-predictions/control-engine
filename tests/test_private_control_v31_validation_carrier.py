@@ -79,7 +79,7 @@ def test_manual_relay_count_requires_exact_integer_zero():
     validator.require_zero_relay_count({"principal_manual_relay_count": 0})
     for value in (0.0, False, True, "0", None):
         with pytest.raises(validator.ValidationError, match="exact integer zero"):
-            validator.require_zero_relay_count({"principal_manual_relay_count": value)
+            validator.require_zero_relay_count({"principal_manual_relay_count": value})
 
 
 def test_repository_identity_is_github_safe_and_case_canonical():
@@ -144,7 +144,7 @@ def test_gap_dependency_graph_must_be_acyclic_without_recursion_limit():
         )
 
     chain = [
-        {"gap_id": f"G{i}", "depends_on": [] if i == 0 else [f"G{i - 1}"]}
+        {"gap_id": f"G{i}", "depends_on": [] if i == 0 else [f"G{i - 1}"]
         for i in range(1500)
     ]
     validator.assert_acyclic_dependencies(chain, mission_name="LONG")
