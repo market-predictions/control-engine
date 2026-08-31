@@ -28,6 +28,11 @@ def _task_identity_component(value: object, *, label: str) -> str:
     return value
 
 
+def _legacy_root_id(mission_id: str, revision: str, gap_id: str) -> str:
+    """Reproduce only the retired Minimal Core V1 root for one-time import."""
+    return f"MISSION-{mission_id}-{revision}-{gap_id}"
+
+
 def _current_gap_prefixes(missions: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     prefixes: dict[str, dict[str, Any]] = {}
     for wrapped in missions:
@@ -44,9 +49,9 @@ def _current_gap_prefixes(missions: Iterable[Mapping[str, Any]]) -> dict[str, di
             if not isinstance(gap, Mapping) or gap.get("gap_state") != "OPEN":
                 continue
             gap_id = _task_identity_component(gap.get("gap_id"), label="Mission gap identity")
-            prefix = core.deterministic_root_id(mission_id, revision, gap_id)
+            prefix = _legacy_root_id(mission_id, revision, gap_id)
             if prefix in prefixes:
-                raise MigrationError("duplicate deterministic Mission gap identity")
+                raise MigrationError("duplicate deterministic legacy Mission gap identity")
             prefixes[prefix] = {
                 "mission_id": mission_id,
                 "mission_revision": revision,
@@ -193,7 +198,7 @@ def gap_satisfied_by_fact(queue: Mapping[str, Any], mission_id: str, revision: s
 def feed(queue: Mapping[str, Any], *, missions: Iterable[Mapping[str, Any]], now: datetime) -> tuple[dict[str, Any], list[str]]:
     """Run the existing pure Feed with ephemeral shadows for inert migration facts.
 
-    Each shadow uses the exact deterministic root id so Feed treats that migrated
+    Each shadow uses the V3.1 deterministic root id so Feed treats that migrated
     gap as already observed. It also has the legacy completed-integration shape
     so downstream dependencies see the fact as satisfied. Shadows exist only in
     memory and are removed before the queue is returned or persisted.
