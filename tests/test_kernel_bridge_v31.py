@@ -233,7 +233,8 @@ def test_planner_and_executor_keep_exact_same_task_within_repository(monkeypatch
     monkeypatch.setattr(bridge, "_api", fake_api)
     monkeypatch.setattr(bridge, "_branch_sha", lambda *_args, **_kwargs: next(branch_reads))
 
-    def fake_fast_forward(token, repository, branch, *, merge_sha, expected_base_sha):
+    def fake_fast_forward(token, repository, branch, *, pr_number, merge_sha, expected_base_sha):
+        assert pr_number == 8
         fast_forwards.append((token, repository, branch, merge_sha, expected_base_sha))
         return True
 
