@@ -52,5 +52,5 @@ def test_migration_fact_with_boundary_ambiguous_identity_fails_closed_before_fee
         ],
         "tasks": [],
     }
-    with pytest.raises(k.KernelError, match="task identity component is invalid"):
+    with pytest.raises(migration.MigrationError, match="migration fact mission_id is invalid"):
         migration.feed(queue, missions=[], now=NOW)
