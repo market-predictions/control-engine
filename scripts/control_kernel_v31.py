@@ -37,6 +37,7 @@ GLOBAL_AUTH_REL = "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"
 MISSIONS_REL = "control/missions"
 REPO_AUTH_REL = "control/repository-authority"
 MAX_CAS_ATTEMPTS = 7
+TASK_SEPARATOR = "--"
 
 
 class BridgeError(RuntimeError):
@@ -129,12 +130,20 @@ def _blob_sha(repo: Path, path: str) -> str:
     return _run(["git", "rev-parse", f"HEAD:{path}"], cwd=repo).stdout.strip()
 
 
+def _task_identity_component(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or not value or TASK_SEPARATOR in value:
+        raise BridgeError(f"{label} is invalid or contains reserved task separator")
+    return value
+
+
 def _authority(main: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     global_auth = _load(main / GLOBAL_AUTH_REL)
     if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1" or global_auth.get("principal_manual_relay_count") != 0:
         raise BridgeError("global V3.1 authority invalid")
     if global_auth.get("semantic_claim_lease_seconds") != core.LEASE_SECONDS:
         raise BridgeError("lease authority mismatch")
+    if not isinstance(global_auth.get("control_runtime_enabled"), bool) or not isinstance(global_auth.get("integration_enabled"), bool):
+        raise BridgeError("global V3.1 authority switches must be booleans")
 
     repo_auth: dict[str, dict[str, Any]] = {}
     for path in sorted((main / REPO_AUTH_REL).glob("*.json")):
@@ -150,6 +159,20 @@ def _authority(main: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[s
         mission = _load(path)
         if mission.get("protocol_id") != "MISSION_CONTRACT_V3_1" or mission.get("principal_manual_relay_count") != 0:
             raise BridgeError(f"Mission is not V3.1: {path.name}")
+        _task_identity_component(mission.get("mission_id"), label="Mission identity")
+        _task_identity_component(mission.get("mission_revision"), label="Mission revision")
+        gaps = mission.get("gaps")
+        if not isinstance(gaps, list):
+            raise BridgeError(f"Mission gaps are invalid: {path.name}")
+        for gap in gaps:
+            if not isinstance(gap, dict):
+                raise BridgeError(f"Mission gap is invalid: {path.name}")
+            _task_identity_component(gap.get("gap_id"), label="Mission gap identity")
+            dependencies = gap.get("depends_on", [])
+            if not isinstance(dependencies, list):
+                raise BridgeError(f"Mission gap dependencies are invalid: {path.name}")
+            for dependency in dependencies:
+                _task_identity_component(dependency, label="Mission gap dependency")
         repository = mission.get("repository")
         if repository not in repo_auth:
             raise BridgeError(f"Mission repository has no authority record: {repository}")
@@ -277,6 +300,10 @@ def _integration_authorized(task: dict[str, Any], frozen_repo: dict[str, Any], l
     )
 
 
+def _global_integration_enabled(global_auth: dict[str, Any]) -> bool:
+    return global_auth.get("control_runtime_enabled") is True and global_auth.get("integration_enabled") is True
+
+
 def _effective_required_checks(frozen_repo: dict[str, Any], live_repo: dict[str, Any]) -> list[str]:
     frozen = frozen_repo.get("required_check_runs", [])
     live = live_repo.get("required_check_runs", [])
@@ -321,6 +348,32 @@ def _integration_candidates(queue: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _merged_commit_proves_expected_candidate(
+    token: str, repository: str, merge_sha: str, *, expected_base_sha: str, candidate_sha: str
+) -> bool:
+    if not core._sha(merge_sha) or not core._sha(expected_base_sha) or not core._sha(candidate_sha):
+        return False
+    commit = _api(token, "GET", f"repos/{repository}/commits/{merge_sha}")
+    if commit.get("sha") != merge_sha:
+        return False
+    parents = commit.get("parents")
+    if not isinstance(parents, list) or len(parents) != 2:
+        return False
+    parent_shas = [parent.get("sha") if isinstance(parent, dict) else None for parent in parents]
+    return parent_shas == [expected_base_sha, candidate_sha]
+
+
+def _plan_integration_target(queue: dict[str, Any], global_auth: dict[str, Any], control_token: str) -> str:
+    if not _global_integration_enabled(global_auth):
+        return ""
+    _require_v31_queue(queue)
+    for task in _integration_candidates(queue):
+        frozen = _frozen_repository_authority(control_token, task)
+        if _frozen_integration_authorized(task, frozen):
+            return task["repository"]
+    return ""
+
+
 def _integrate_one(
     queue: dict[str, Any],
     repo_auth: dict[str, dict[str, Any]],
@@ -351,6 +404,14 @@ def _integrate_one(
         merge_sha = pr.get("merge_commit_sha")
         if not core._sha(merge_sha):
             raise BridgeError("already-merged exact candidate has invalid merge SHA")
+        if not _merged_commit_proves_expected_candidate(
+            target_token,
+            target_repository,
+            merge_sha,
+            expected_base_sha=candidate["expected_base_sha"],
+            candidate_sha=sha,
+        ):
+            raise BridgeError("already-merged candidate does not prove frozen base and candidate parents")
         q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=merge_sha, merged_at=now)
         return q, {"integration": "RECONCILED_MERGED", "task_id": task["task_id"], "merge_sha": merge_sha}
 
@@ -376,6 +437,16 @@ def _integrate_one(
         raise BridgeError("post-merge readback does not prove merge")
     if post.get("head", {}).get("sha") != sha or post.get("base", {}).get("ref") != candidate["expected_base_branch"]:
         raise BridgeError("post-merge exact candidate identity mismatch")
+    if post.get("merge_commit_sha") != merged["sha"]:
+        raise BridgeError("post-merge commit identity mismatch")
+    if not _merged_commit_proves_expected_candidate(
+        target_token,
+        target_repository,
+        merged["sha"],
+        expected_base_sha=candidate["expected_base_sha"],
+        candidate_sha=sha,
+    ):
+        raise BridgeError("merge commit does not prove frozen base and candidate parents")
     q = core.mark_integrated(queue, assurance_task_id=task["task_id"], merge_sha=merged["sha"], merged_at=now)
     return q, {"integration": "MERGED", "task_id": task["task_id"], "merge_sha": merged["sha"]}
 
@@ -486,18 +557,12 @@ def command_plan_tick(token: str) -> int:
         _init_repo(main, CONTROL_REPOSITORY)
         _init_repo(runtime, CONTROL_REPOSITORY)
         _fetch_ref(token, main, "main")
-        global_auth, missions, repo_auth = _authority(main)
+        global_auth, _, _ = _authority(main)
         _fetch_ref(token, runtime, RUNTIME_REF)
         q = _load(runtime / QUEUE_REL)
         target = ""
-        if q.get("version") == "3.1" and global_auth.get("integration_enabled") is True:
-            _require_v31_queue(q)
-            for task in _integration_candidates(q):
-                live = repo_auth.get(task["repository"], {})
-                frozen = _frozen_repository_authority(token, task)
-                if _integration_authorized(task, frozen, live):
-                    target = task["repository"]
-                    break
+        if q.get("version") == "3.1":
+            target = _plan_integration_target(q, global_auth, token)
         print(f"CONTROL_KERNEL_TARGET_REPOSITORY={target}")
     return 0
 
@@ -517,7 +582,7 @@ def command_tick(token: str, *, target_token: str, target_repository: str) -> in
         }
         q, reconcile_report = core.reconcile(q, now=now, active_missions=_active_revisions(missions))
         integration_report: dict[str, Any] = {"integration": "DISABLED"}
-        if global_auth.get("integration_enabled") is True and target_repository:
+        if _global_integration_enabled(global_auth) and target_repository:
             if not target_token:
                 raise BridgeError("target token required for enabled integration")
             q, integration_report = _integrate_one(q, repo_auth, token, target_token, target_repository, now)
