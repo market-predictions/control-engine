@@ -56,3 +56,13 @@ def test_required_check_lookup_remains_fail_closed(monkeypatch):
     )
 
     assert bridge._required_checks_green("token", "o/r", "b" * 40, ["ci/required"]) is False
+
+
+def test_missing_required_check_lookup_remains_fail_closed(monkeypatch):
+    monkeypatch.setattr(
+        bridge,
+        "_api",
+        lambda *_args, **_kwargs: {"total_count": 0, "check_runs": []},
+    )
+
+    assert bridge._required_checks_green("token", "o/r", "c" * 40, ["ci/required"]) is False
