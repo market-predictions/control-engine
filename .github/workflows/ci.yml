@@ -40,6 +40,8 @@ jobs:
           assert manifest['consumer_binding'] == 'EXACT_40_CHAR_COMMIT_SHA_ONLY'
           assert manifest['private_data_policy'] == 'NO_PRIVATE_RUNTIME_STATE'
           assert manifest['control_runtime'] == 'CONTROL_AUTONOMY_V3_1'
+          assert manifest['public_boundary'] == 'docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md'
+          assert Path(manifest['public_boundary']).is_file()
           bundled = {entry['path'] for entry in bundle['files']}
           for module in manifest['modules']:
               for key in ('implementation', 'schema'):
