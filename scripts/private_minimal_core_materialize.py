@@ -146,6 +146,20 @@ def _identity_projection(task: dict) -> dict:
     return {field: deepcopy(task.get(field)) for field in fields}
 
 
+def _assert_root_id_available(queue: dict, task_id: str) -> None:
+    for other in queue.get("tasks", []):
+        if other.get("status") == core.STATUS_TERMINAL:
+            continue
+        successors = other.get("successor_by_outcome")
+        if not isinstance(successors, dict):
+            continue
+        if any(
+            isinstance(successor, dict) and successor.get("task_id") == task_id
+            for successor in successors.values()
+        ):
+            raise RuntimeError("root task_id is reserved by an existing non-terminal task")
+
+
 def command_materialize(token: str, spec_b64: str) -> int:
     spec = _decode_spec(spec_b64)
 
@@ -161,6 +175,7 @@ def command_materialize(token: str, spec_b64: str) -> int:
             core.validate(queue)
             return {"task_id": proposed["task_id"], "created": False}
 
+        _assert_root_id_available(queue, proposed["task_id"])
         core._assert_direct_successor_ids_available(queue, proposed)
         queue.setdefault("tasks", []).append(proposed)
         core.validate(queue)
