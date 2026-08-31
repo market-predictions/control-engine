@@ -131,9 +131,10 @@ def _blob_sha(repo: Path, path: str) -> str:
 
 
 def _task_identity_component(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or not value or TASK_SEPARATOR in value:
-        raise BridgeError(f"{label} is invalid or contains reserved task separator")
-    return value
+    try:
+        return core._identity_component(value)
+    except core.KernelError as exc:
+        raise BridgeError(f"{label} is invalid or contains reserved task separator/boundary ambiguity") from exc
 
 
 def _authority(main: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
