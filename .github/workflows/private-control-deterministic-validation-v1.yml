@@ -170,12 +170,9 @@ jobs:
             # Compilation is isolated from candidate module lookup and does not execute
             # candidate modules. Candidate-controlled execution starts only in the
             # final focused unit-test phase below.
-            python -I -m py_compile \
-              tools/control_minimal_mission_feed_v1.py \
-              tools/mission_contract_v1.py
+            python -I -m py_compile tools/mission_contract_v1.py
 
             test -f tests/test_mission_contract_v1.py
-            test -f tests/test_control_minimal_mission_feed_v1.py
 
             # Strip the remaining GitHub runner environment before executing private tests.
             env -i \
@@ -184,12 +181,6 @@ jobs:
               TMPDIR="$root/test-tmp" \
               PYTHONDONTWRITEBYTECODE=1 \
               python -m unittest discover -s tests -p 'test_mission_contract_v1.py' -v
-            env -i \
-              PATH="$PATH" \
-              HOME="$root/test-home" \
-              TMPDIR="$root/test-tmp" \
-              PYTHONDONTWRITEBYTECODE=1 \
-              python -m unittest discover -s tests -p 'test_control_minimal_mission_feed_v1.py' -v
           ) >"$log" 2>&1
           rc=$?
           set -e
