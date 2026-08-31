@@ -137,6 +137,22 @@ def test_materializer_requires_retired_legacy_b1_even_for_first_root(tmp_path, m
     assert materialize.bridge._load(queue_path) == queue
 
 
+def test_root_id_cannot_steal_nonterminal_successor_reservation():
+    proposed = materialize._root_from_spec(_assurance_spec(), "2026-08-31T06:00:00Z")
+    predecessor = {
+        "task_id": "OTHER-ASSURE",
+        "status": core.STATUS_QUEUED,
+        "successor_by_outcome": {
+            "PASS": {"task_id": proposed["task_id"]}
+        },
+    }
+    with pytest.raises(RuntimeError, match="reserved"):
+        materialize._assert_root_id_available({"tasks": [predecessor]}, proposed["task_id"])
+
+    predecessor["status"] = core.STATUS_TERMINAL
+    materialize._assert_root_id_available({"tasks": [predecessor]}, proposed["task_id"])
+
+
 def test_materializer_rejects_any_authority_or_mission_field_injection():
     for field, value in (
         ("role", core.ROLE_A),
