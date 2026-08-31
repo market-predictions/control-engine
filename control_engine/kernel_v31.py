@@ -387,14 +387,17 @@ def reconcile(
     now: datetime,
     active_missions: Mapping[str, str] | None = None,
     active_gaps: set[tuple[str, str, str]] | None = None,
+    active_mission_blobs: Mapping[tuple[str, str], str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, list[str]]]:
     q = deepcopy(queue)
     validate(q)
     now = _utc(now)
     missions_authoritative = active_missions is not None
     gaps_authoritative = active_gaps is not None
+    blobs_authoritative = active_mission_blobs is not None
     active_missions = active_missions or {}
     active_gaps = active_gaps or set()
+    active_mission_blobs = active_mission_blobs or {}
     expired: list[str] = []
     superseded: list[str] = []
     for task in q["tasks"]:
@@ -408,6 +411,9 @@ def reconcile(
             obsolete = not isinstance(mission_id, str) or active_missions.get(mission_id) != revision
         if not obsolete and gaps_authoritative:
             obsolete = (mission_id, revision, gap_id) not in active_gaps
+        if not obsolete and blobs_authoritative:
+            expected_blob = active_mission_blobs.get((mission_id, revision))
+            obsolete = not _sha(expected_blob) or task.get("mission_contract_blob_sha") != expected_blob
         if obsolete:
             task["status"] = STATUS_SUPERSEDED
             task["claim"] = None
@@ -519,6 +525,23 @@ def feed(
             break
     validate(q)
     return q, created
+
+
+def mark_integration_hold(queue: Mapping[str, Any], *, assurance_task_id: str, held_at: datetime) -> dict[str, Any]:
+    q = deepcopy(queue)
+    task = _task(q, assurance_task_id)
+    if not (
+        task.get("lifecycle_model") == PROTOCOL_ID
+        and task.get("operation") == "ASSURANCE"
+        and task.get("status") == STATUS_TERMINAL
+        and task.get("outcome") == "PASS"
+        and task.get("integration_state") == "PENDING"
+    ):
+        raise KernelError("assurance is not pending deterministic integration")
+    task["integration_state"] = "HOLD"
+    task["updated_at"] = _ts(held_at)
+    validate(q)
+    return q
 
 
 def mark_integrated(
