@@ -17,6 +17,8 @@ def test_private_v31_carrier_is_read_only_and_trusted_main_only():
     assert 'event.get("issue", {}).get("number") == 87' in workflow
     assert 'event.get("comment", {}).get("user", {}).get("login") == "market-predictions"' in workflow
     assert 'prefix = "CONTROL_PRIVATE_V31_VALIDATE "' in workflow
+    assert 'sha = body[len(prefix):] if authorized else ""' in workflow
+    assert 'body[len(prefix):].split()' not in workflow
     assert "id: gate" in workflow
     assert "if: steps.gate.outputs.authorized == 'true'" in workflow
     assert "ref: main" in workflow
@@ -84,7 +86,7 @@ def test_manual_relay_count_requires_exact_integer_zero():
     validator.require_zero_relay_count({"principal_manual_relay_count": 0})
     for value in (0.0, False, True, "0", None):
         with pytest.raises(validator.ValidationError, match="exact integer zero"):
-            validator.require_zero_relay_count({"principal_manual_relay_count": value})
+            validator.require_zero_relay_count({"principal_manual_relay_count": value)
 
 
 def test_repository_identity_is_github_safe_and_case_canonical():
