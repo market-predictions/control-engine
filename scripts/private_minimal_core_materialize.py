@@ -152,7 +152,7 @@ def command_materialize(token: str, spec_b64: str) -> int:
     def mutate(state_dir):
         queue_path = state_dir / bridge.QUEUE_REL
         queue = bridge._load(queue_path)
-        bridge._assert_cutover_safe(state_dir, queue)
+        bridge._assert_legacy_b1_retired(state_dir)
         proposed = _root_from_spec(spec, _ts_now())
         matches = [task for task in queue.get("tasks", []) if task.get("task_id") == proposed["task_id"]]
         if matches:
