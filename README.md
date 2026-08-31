@@ -23,4 +23,4 @@ Semantic lanes are exactly:
 
 There is no baseline A2, provider fallback, semantic `PROJECT_INTEGRATION` task, worker-direct runtime write, project-intake routing plane, mandatory handover projection, or second queue.
 
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V1.md` for the V3.1 trust boundary. Historical implementations remain available through Git history, not the active source surface.
+See `docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md` for the V3.1 trust boundary. Historical implementations remain available through Git history, not the active source surface.
