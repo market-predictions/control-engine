@@ -280,6 +280,27 @@ def test_reconcile_superseded_revision_revokes_active_claim():
     assert q["tasks"][0]["claim"] is None
 
 
+def test_reconcile_supersedes_obsolete_queued_gap_before_selection():
+    q, report = k.reconcile(
+        queue(root()),
+        now=NOW + timedelta(minutes=1),
+        active_missions={"M1": "r1"},
+        active_gaps=set(),
+    )
+    assert report["superseded_claims"] == ["MISSION-M1-r1-G1"]
+    assert q["tasks"][0]["status"] == k.STATUS_SUPERSEDED
+    assert k.select_task(q, k.ROLE_A) is None
+
+
+def test_v31_root_identity_is_unambiguous_for_hyphenated_components():
+    left = k.deterministic_root_id("A-B", "C", "D")
+    right = k.deterministic_root_id("A", "B-C", "D")
+    assert left != right
+    assert left == "MISSION--A-B--C--D"
+    with pytest.raises(k.KernelError, match="identity component"):
+        k.deterministic_root_id("A--B", "C", "D")
+
+
 def mission(gaps, mission_id="M1", revision="r1", repository="o/r"):
     return {
         "mission": {
@@ -308,9 +329,9 @@ def gap(gap_id, deps=()):
 def test_feed_is_idempotent_and_materializes_at_most_one_gap_per_mission():
     m = mission([gap("G1"), gap("G2")])
     q, created = k.feed(queue(), missions=[m], now=NOW)
-    assert created == ["MISSION-M1-r1-G1"]
+    assert created == [k.deterministic_root_id("M1", "r1", "G1")]
     q2, created2 = k.feed(q, missions=[m], now=NOW + timedelta(minutes=1))
-    assert created2 == ["MISSION-M1-r1-G2"]
+    assert created2 == [k.deterministic_root_id("M1", "r1", "G2")]
     q3, created3 = k.feed(q2, missions=[m], now=NOW + timedelta(minutes=2))
     assert created3 == []
     assert len(q3["tasks"]) == 2
@@ -322,17 +343,29 @@ def test_feed_respects_explicit_dependencies_without_planning():
     assert created == []
 
 
-def test_legacy_completed_integration_is_migration_fact_not_new_project_task():
-    legacy = {
-        "task_id": "MISSION-M1-r1-G1--ASSURE--INTEGRATE",
+def test_migration_shadow_completed_integration_satisfies_exact_dependency_root():
+    shadow = {
+        "task_id": k.deterministic_root_id("M1", "r1", "G1"),
         "operation": "PROJECT_INTEGRATION",
         "status": "TERMINAL",
         "outcome": "COMPLETED",
     }
     m = mission([gap("G2", deps=["G1"])])
-    q, created = k.feed(queue(legacy), missions=[m], now=NOW)
-    assert created == ["MISSION-M1-r1-G2"]
+    q, created = k.feed(queue(shadow), missions=[m], now=NOW)
+    assert created == [k.deterministic_root_id("M1", "r1", "G2")]
     assert q["tasks"][-1]["operation"] == "IMPLEMENTATION"
+
+
+def test_migration_shadow_gap_prefix_collision_does_not_satisfy_other_gap():
+    shadow = {
+        "task_id": k.deterministic_root_id("M1", "r1", "GAP-10"),
+        "operation": "PROJECT_INTEGRATION",
+        "status": "TERMINAL",
+        "outcome": "COMPLETED",
+    }
+    m = mission([gap("G2", deps=["GAP-1"])])
+    _, created = k.feed(queue(shadow), missions=[m], now=NOW)
+    assert created == []
 
 
 def test_mark_integrated_makes_gap_satisfied_for_next_feed():
