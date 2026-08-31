@@ -7,6 +7,7 @@ markers; candidate-derived values are never included in process output.
 """
 from __future__ import annotations
 
+from datetime import date
 import json
 from pathlib import Path
 import re
@@ -22,6 +23,7 @@ MISSION_SCHEMA_REL = "schemas/mission_contract_v31.schema.json"
 REPOSITORY_SCHEMA_REL = "schemas/repository_authority_v31.schema.json"
 OWNER_RE = re.compile(r"^(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+REVISION_RE = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})-r(?P<sequence>[1-9]\d*)$")
 
 
 class ValidationError(ValueError):
@@ -43,6 +45,19 @@ def require_zero_relay_count(document: Mapping[str, Any]) -> None:
 
 def explicit_bool(value: object) -> bool:
     return isinstance(value, bool)
+
+
+def revision_key(value: object) -> tuple[int, date]:
+    if not isinstance(value, str):
+        raise ValidationError("Mission revision invalid")
+    match = REVISION_RE.fullmatch(value)
+    if match is None:
+        raise ValidationError("Mission revision invalid")
+    try:
+        day = date.fromisoformat(match.group("day"))
+    except ValueError as exc:
+        raise ValidationError("Mission revision invalid") from exc
+    return int(match.group("sequence")), day
 
 
 def canonical_repository(value: object) -> str | None:
@@ -302,6 +317,7 @@ def validate_candidate(root: Path) -> None:
         require_zero_relay_count(mission)
         mission_id = mission["mission_id"]
         revision = mission["mission_revision"]
+        revision_key(revision)
         canonical_repo = canonical_repository(mission["repository"])
         if mission_id in seen_missions or canonical_repo is None or canonical_repo not in repository_authority:
             raise ValidationError("Mission identity or repository authority invalid")
@@ -324,8 +340,6 @@ def validate_candidate(root: Path) -> None:
                 global_integration_enabled=global_auth["integration_enabled"],
             )
         assert_acyclic_dependencies(gaps)
-        if not isinstance(revision, str) or not revision:
-            raise ValidationError("Mission revision invalid")
 
     index = text(root, entries, "control/SYSTEM_INDEX.md")
     for marker in (
@@ -351,6 +365,7 @@ def mission_documents_by_identity(root: Path, entries: Mapping[str, tuple[str, s
         mission_id = doc.get("mission_id")
         if not isinstance(mission_id, str) or not mission_id or mission_id in documents:
             raise ValidationError("V3.1 Mission identity missing or duplicated")
+        revision_key(doc.get("mission_revision"))
         documents[mission_id] = doc
     return documents
 
@@ -360,8 +375,18 @@ def enforce_revision_discipline(candidate_docs: Mapping[str, dict[str, Any]], ba
         candidate_doc = candidate_docs.get(mission_id)
         if candidate_doc is None:
             raise ValidationError("existing V3.1 Mission removed instead of being revised/retired")
-        if candidate_doc != base_doc and candidate_doc.get("mission_revision") == base_doc.get("mission_revision"):
+        if candidate_doc == base_doc:
+            continue
+        base_revision = base_doc.get("mission_revision")
+        candidate_revision = candidate_doc.get("mission_revision")
+        if candidate_revision == base_revision:
             raise ValidationError("execution-relevant Mission changed without new mission_revision")
+        base_sequence, base_day = revision_key(base_revision)
+        candidate_sequence, candidate_day = revision_key(candidate_revision)
+        if candidate_sequence <= base_sequence or candidate_day < base_day:
+            raise ValidationError("Mission revision must move forward monotonically")
+        if candidate_doc.get("supersedes_revision") != base_revision:
+            raise ValidationError("new Mission revision must explicitly supersede current revision")
 
 
 def validate_revision_discipline(candidate: Path, base: Path) -> None:
