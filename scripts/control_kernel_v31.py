@@ -402,13 +402,20 @@ def _effective_required_checks(frozen_repo: dict[str, Any], live_repo: dict[str,
 
 
 def _required_checks_green(token: str, repository: str, sha: str, required: list[str]) -> bool:
-    if not required:
-        return True
-    data = _api(token, "GET", f"repos/{repository}/commits/{sha}/check-runs?per_page=100")
-    by_name = {item.get("name"): item for item in data.get("check_runs", [])}
     for name in required:
-        item = by_name.get(name)
-        if not item or item.get("status") != "completed" or item.get("conclusion") not in {"success", "neutral", "skipped"}:
+        encoded = urllib.parse.quote(name, safe="")
+        data = _api(
+            token,
+            "GET",
+            f"repos/{repository}/commits/{sha}/check-runs?check_name={encoded}&filter=latest&per_page=1",
+        )
+        runs = data.get("check_runs")
+        if not isinstance(runs, list) or len(runs) != 1:
+            return False
+        item = runs[0]
+        if item.get("name") != name:
+            return False
+        if item.get("status") != "completed" or item.get("conclusion") not in {"success", "neutral", "skipped"}:
             return False
     return True
 
