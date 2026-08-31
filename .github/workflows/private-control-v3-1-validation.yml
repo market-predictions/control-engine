@@ -34,7 +34,7 @@ jobs:
               and isinstance(body, str)
               and body.startswith(prefix)
           )
-          sha = "".join(body[len(prefix):].split()) if authorized else ""
+          sha = body[len(prefix):] if authorized else ""
           authorized = authorized and re.fullmatch(r"[0-9a-f]{40}", sha) is not None
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
