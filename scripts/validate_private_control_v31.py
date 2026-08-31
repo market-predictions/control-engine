@@ -85,6 +85,11 @@ def strict_json(raw: str) -> Any:
         raise ValidationError("private JSON invalid or ambiguous") from exc
 
 
+def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+    """Compare JSON contracts with JSON type semantics, not Python numeric coercion."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 def git_bytes(root: Path, *args: str) -> bytes:
     try:
         result = subprocess.run(
@@ -375,7 +380,7 @@ def enforce_revision_discipline(candidate_docs: Mapping[str, dict[str, Any]], ba
         candidate_doc = candidate_docs.get(mission_id)
         if candidate_doc is None:
             raise ValidationError("existing V3.1 Mission removed instead of being revised/retired")
-        if candidate_doc == base_doc:
+        if canonical_json_bytes(candidate_doc) == canonical_json_bytes(base_doc):
             continue
         base_revision = base_doc.get("mission_revision")
         candidate_revision = candidate_doc.get("mission_revision")
