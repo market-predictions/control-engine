@@ -39,12 +39,18 @@ def test_kernel_fails_closed_before_any_runtime_operation_when_runtime_branch_is
         assert protection < value.index(later)
 
 
-def test_runtime_and_target_capabilities_are_separate_and_repository_scoped():
+def test_runtime_and_target_capabilities_are_separate_repository_scoped_and_least_privilege():
     value = text()
     assert 'repositories: control-plane' in value
     assert 'Create exact target-repository capability' in value
     assert 'repositories: ${{ steps.plan.outputs.repo }}' in value
     assert 'owner: ${{ steps.plan.outputs.owner }}' in value
+    target = value.split('Create exact target-repository capability', 1)[1].split('Execute deterministic TICK', 1)[0]
+    assert 'permission-contents: write' in target
+    assert 'permission-pull-requests: read' in target
+    assert 'permission-checks: read' in target
+    assert 'permission-statuses: write' in target
+    assert 'permission-pull-requests: write' not in target
 
 
 def test_semantic_role_uses_rerun_safe_triggering_actor_not_supplied_role_or_original_actor():
