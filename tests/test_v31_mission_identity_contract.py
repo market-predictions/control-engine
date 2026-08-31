@@ -26,15 +26,34 @@ def _minimal_mission(mission_id="M1", revision="r1", gap_id="G1", depends_on=Non
     }
 
 
-def test_task_identity_components_reserve_double_hyphen_separator():
+def test_task_identity_components_are_unambiguous_across_double_hyphen_joining():
     schema = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
     validator.validate_instance(_minimal_mission(), schema, label="valid Mission")
+    validator.validate_instance(
+        _minimal_mission(mission_id="MISSION_A", revision="2026-08-31-r1", gap_id="GAP-10"),
+        schema,
+        label="valid Mission",
+    )
 
     for mission in (
         _minimal_mission(mission_id="M--1"),
         _minimal_mission(revision="r--1"),
         _minimal_mission(gap_id="G--1"),
         _minimal_mission(depends_on=["G--0"]),
+        _minimal_mission(mission_id="M-"),
+        _minimal_mission(revision="-r"),
+        _minimal_mission(gap_id="G-"),
+        _minimal_mission(depends_on=["-G0"]),
     ):
         with pytest.raises(validator.ValidationError, match="violates trusted schema"):
             validator.validate_instance(mission, schema, label="invalid Mission")
+
+
+def test_previously_colliding_component_tuples_are_both_rejected():
+    schema = validator.trusted_schema(validator.MISSION_SCHEMA_REL)
+    for mission in (
+        _minimal_mission(mission_id="M-", revision="r"),
+        _minimal_mission(mission_id="M", revision="-r"),
+    ):
+        with pytest.raises(validator.ValidationError, match="violates trusted schema"):
+            validator.validate_instance(mission, schema, label="ambiguous Mission")
