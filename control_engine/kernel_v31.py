@@ -160,7 +160,12 @@ def validate(queue: Mapping[str, Any]) -> None:
 
 
 def _identity_component(value: object) -> str:
-    if not isinstance(value, str) or not value or TASK_SEPARATOR in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or TASK_SEPARATOR in value
+        or re.fullmatch(r"[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?", value) is None
+    ):
         raise KernelError("task identity component is invalid")
     return value
 
