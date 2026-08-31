@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from control_engine import kernel_v31 as core
 from control_engine import migration_v31 as migration
 
 NOW = datetime(2026, 8, 30, 22, 0, tzinfo=timezone.utc)
@@ -116,7 +117,7 @@ def test_migration_is_idempotent_and_never_reintroduces_legacy_tasks():
 def test_feed_uses_migration_fact_without_persisting_shadow_or_legacy_task():
     q, _ = migration.migrate(legacy_queue(legacy_integration("GAP-10")), missions=[wrapped_mission()], now=NOW)
     fed, created = migration.feed(q, missions=[wrapped_mission()], now=NOW)
-    assert created == ["MISSION-M1-2026-08-16-r2-GAP-20"]
+    assert created == [core.deterministic_root_id("M1", "2026-08-16-r2", "GAP-20")]
     assert len(fed["tasks"]) == 1
     assert fed["tasks"][0]["operation"] == "IMPLEMENTATION"
     assert all("_migration_shadow" not in task for task in fed["tasks"])
