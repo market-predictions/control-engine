@@ -213,9 +213,19 @@ def test_planner_and_executor_keep_exact_same_task_within_repository(monkeypatch
     assert planned == ("LATER", "o/r")
 
     seen = []
+    merged_state = {"done": False}
+
     def fake_api(_token, method, path, body=None):
         seen.append((method, path, body))
-        if path.endswith("/pulls/8"):
+        if path.endswith("/pulls/8") and method == "GET":
+            if merged_state["done"]:
+                return {
+                    "state": "closed",
+                    "merged": True,
+                    "head": {"sha": "c" * 40},
+                    "base": {"ref": "main"},
+                    "merge_commit_sha": "d" * 40,
+                }
             return {"state": "open", "merged": False, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}
         if path.endswith("/branches/main"):
             return {"commit": {"sha": "b" * 40}}
@@ -224,6 +234,7 @@ def test_planner_and_executor_keep_exact_same_task_within_repository(monkeypatch
         if path.endswith("/statuses/" + "c" * 40):
             return {}
         if path.endswith("/pulls/8/merge"):
+            merged_state["done"] = True
             return {"merged": True, "sha": "d" * 40}
         if path.endswith("/commits/" + "d" * 40):
             return {"sha": "d" * 40, "parents": [{"sha": "b" * 40}, {"sha": "c" * 40}]}
