@@ -16,7 +16,6 @@ def _encode(payload: dict) -> str:
 def _assurance_spec() -> dict:
     return {
         "task_id": "SOLIDSECURITY-24-CUMULATIVE-ASSURE",
-        "operation": "ASSURANCE",
         "repository": "solidprivacy-nl/solidsecurity",
         "candidate_sha": "9" * 40,
         "priority": 10,
@@ -30,6 +29,7 @@ def test_decode_and_build_assurance_root_is_exact_and_one_step():
     task = materialize._root_from_spec(spec, "2026-08-31T06:00:00Z")
 
     assert task["lifecycle_model"] == core.PROTOCOL_ID
+    assert task["operation"] == "ASSURANCE"
     assert task["role"] == core.ROLE_B
     assert task["status"] == core.STATUS_QUEUED
     assert task["claim"] is None
@@ -42,7 +42,13 @@ def test_decode_and_build_assurance_root_is_exact_and_one_step():
         "repository": "solidprivacy-nl/solidsecurity",
         "candidate_sha": "9" * 40,
     }
-    assert task["successor_by_outcome"]["FAIL"]["operation"] == "REPAIR"
+    assert task["successor_by_outcome"]["FAIL"] == {
+        "task_id": "SOLIDSECURITY-24-CUMULATIVE-ASSURE--REPAIR",
+        "operation": "REPAIR",
+        "role": core.ROLE_A,
+        "repository": "solidprivacy-nl/solidsecurity",
+        "candidate_sha": "9" * 40,
+    }
     core.validate({"version": "1.0", "principal_manual_relay_count": 0, "tasks": [task]})
 
 
@@ -68,24 +74,28 @@ def test_same_spec_identity_ignores_lifecycle_state_but_detects_spec_drift():
     assert materialize._identity_projection(original) != materialize._identity_projection(drifted)
 
 
-def test_materializer_rejects_unknown_fields_and_project_integration_root():
-    with pytest.raises(RuntimeError, match="unsupported fields"):
-        materialize._decode_spec(_encode({**_assurance_spec(), "role": core.ROLE_A}))
-
-    with pytest.raises(RuntimeError, match="may not be materialized as a root"):
-        materialize._root_from_spec(
-            {
-                **_assurance_spec(),
-                "operation": "PROJECT_INTEGRATION",
-            },
-            "2026-08-31T06:00:00Z",
-        )
+def test_materializer_rejects_any_authority_or_mission_field_injection():
+    for field, value in (
+        ("role", core.ROLE_A),
+        ("operation", "IMPLEMENTATION"),
+        ("mission_id", "SOLIDSECURITY"),
+        ("successor_by_outcome", {}),
+        ("principal_manual_relay_count", 1),
+    ):
+        with pytest.raises(RuntimeError, match="unsupported fields"):
+            materialize._decode_spec(_encode({**_assurance_spec(), field: value}))
 
 
-def test_materializer_requires_exact_candidate_for_assurance_and_nonempty_acceptance():
+def test_materializer_requires_exact_candidate_repository_and_nonempty_acceptance():
     with pytest.raises(RuntimeError, match="exact candidate SHA"):
         materialize._root_from_spec(
             {**_assurance_spec(), "candidate_sha": "short"},
+            "2026-08-31T06:00:00Z",
+        )
+
+    with pytest.raises(RuntimeError, match="owner/name"):
+        materialize._root_from_spec(
+            {**_assurance_spec(), "repository": "solidprivacy-nl/solidsecurity/extra"},
             "2026-08-31T06:00:00Z",
         )
 
