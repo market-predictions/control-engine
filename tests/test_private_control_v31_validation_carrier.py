@@ -12,8 +12,15 @@ VALIDATOR = ROOT / "scripts" / "validate_private_control_v31.py"
 def test_private_v31_carrier_is_read_only_and_trusted_main_only():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "issue_comment:" in workflow
-    assert "github.actor == 'market-predictions'" in workflow
-    assert "github.event.comment.user.login" not in workflow
+    assert "GITHUB_EVENT_PATH" in workflow
+    assert 'event.get("repository", {}).get("full_name") == "market-predictions/control-engine"' in workflow
+    assert 'event.get("issue", {}).get("number") == 87' in workflow
+    assert 'event.get("comment", {}).get("user", {}).get("login") == "market-predictions"' in workflow
+    assert 'prefix = "CONTROL_PRIVATE_V31_VALIDATE "' in workflow
+    assert 'sha = body[len(prefix):] if authorized else ""' in workflow
+    assert 'body[len(prefix):].split()' not in workflow
+    assert "id: gate" in workflow
+    assert "if: steps.gate.outputs.authorized == 'true'" in workflow
     assert "ref: main" in workflow
     assert "permission-contents: read" in workflow
     assert "permission-contents: write" not in workflow

@@ -9,15 +9,43 @@ permissions:
 
 jobs:
   validate:
-    if: >-
-      github.repository == 'market-predictions/control-engine' &&
-      github.event.issue.number == 87 &&
-      github.actor == 'market-predictions' &&
-      startsWith(github.event.comment.body, 'CONTROL_PRIVATE_V31_VALIDATE ')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Gate exact private validation request
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+              event = json.load(handle)
+
+          prefix = "CONTROL_PRIVATE_V31_VALIDATE "
+          body = event.get("comment", {}).get("body", "")
+          authorized = (
+              event.get("repository", {}).get("full_name") == "market-predictions/control-engine"
+              and event.get("issue", {}).get("number") == 87
+              and event.get("comment", {}).get("user", {}).get("login") == "market-predictions"
+              and isinstance(body, str)
+              and body.startswith(prefix)
+          )
+          sha = body[len(prefix):] if authorized else ""
+          authorized = authorized and re.fullmatch(r"[0-9a-f]{40}", sha) is not None
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"authorized={'true' if authorized else 'false'}\n")
+              if authorized:
+                  output.write(f"sha={sha}\n")
+          print("CONTROL_PRIVATE_V31_EVENT_GATE=" + ("AUTHORIZED" if authorized else "IGNORED"))
+          PY
+
       - name: Checkout trusted validator from public main
+        if: steps.gate.outputs.authorized == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: main
@@ -25,26 +53,17 @@ jobs:
           fetch-depth: 1
 
       - name: Setup trusted Python runtime
+        if: steps.gate.outputs.authorized == 'true'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
 
       - name: Install trusted schema validator
+        if: steps.gate.outputs.authorized == 'true'
         run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
 
-      - name: Parse exact private candidate SHA
-        id: candidate
-        shell: bash
-        env:
-          BODY: ${{ github.event.comment.body }}
-        run: |
-          set -euo pipefail
-          sha="${BODY#CONTROL_PRIVATE_V31_VALIDATE }"
-          sha="$(printf '%s' "$sha" | tr -d '[:space:]')"
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
       - name: Preflight GitHub App read capability
+        if: steps.gate.outputs.authorized == 'true'
         shell: bash
         env:
           CONTROL_GITHUB_APP_ID: ${{ vars.CONTROL_GITHUB_APP_ID }}
@@ -52,6 +71,7 @@ jobs:
         run: bash scripts/github_app_preflight.sh
 
       - name: Create read-only private candidate capability
+        if: steps.gate.outputs.authorized == 'true'
         id: private-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -62,16 +82,18 @@ jobs:
           permission-contents: read
 
       - name: Checkout exact private candidate as data
+        if: steps.gate.outputs.authorized == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: market-predictions/control-plane
-          ref: ${{ steps.candidate.outputs.sha }}
+          ref: ${{ steps.gate.outputs.sha }}
           token: ${{ steps.private-token.outputs.token }}
           path: private-candidate
           persist-credentials: false
           fetch-depth: 1
 
       - name: Checkout current private main as comparison data
+        if: steps.gate.outputs.authorized == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: market-predictions/control-plane
@@ -82,6 +104,7 @@ jobs:
           fetch-depth: 1
 
       - name: Validate candidate with trusted public code and schemas only
+        if: steps.gate.outputs.authorized == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -89,7 +112,7 @@ jobs:
           python scripts/validate_private_control_v31.py private-candidate private-base
 
       - name: Prove read-only carrier boundary
-        if: always()
+        if: ${{ always() && steps.gate.outputs.authorized == 'true' }}
         run: |
           echo 'CONTROL_PRIVATE_CANDIDATE_EXECUTION=false'
           echo 'CONTROL_PRIVATE_RUNTIME_MUTATION=false'
