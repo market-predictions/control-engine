@@ -41,6 +41,9 @@ jobs:
           assert manifest['repository'] == 'market-predictions/control-engine'
           assert manifest['consumer_binding'] == 'EXACT_40_CHAR_COMMIT_SHA_ONLY'
           assert manifest['private_data_policy'] == 'NO_PRIVATE_RUNTIME_STATE'
+          assert manifest['control_runtime'] == 'CONTROL_AUTONOMY_V3_1'
+          assert manifest['public_boundary'] == 'docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md'
+          assert Path(manifest['public_boundary']).is_file()
           bundled = {entry['path'] for entry in bundle['files']}
           for module in manifest['modules']:
               for key in ('implementation', 'schema'):
@@ -49,15 +52,23 @@ jobs:
                   assert path in bundled, path
           print('CONTROL_ENGINE_MANIFEST_BINDING=PASS')
           PY
-      - name: Compile engine and actuators
+      - name: Compile active engine and trusted validator
         run: |
-          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/scheduled_worker_a.py control_engine/scheduled_worker_b.py control_engine/cloudflare_b1.py control_engine/codex_b1.py control_engine/codex_b1_strict.py scripts/cloudflare_b1_shadow.py scripts/codex_b1_canary.py scripts/canonical_b1_dual_executor_v1.py scripts/validate_private_control_v31.py
-          bash -n scripts/scheduled_worker_a_v2.sh
-          bash -n scripts/scheduled_worker_b_v2.sh
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py
+          bash -n scripts/github_app_preflight.sh
       - name: Verify immutable consumer bundle
         run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
       - name: Run regressions
         run: python -m pytest -q
+      - name: Prove active V3.1 surface
+        run: |
+          set -euo pipefail
+          test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort)" = $'ci.yml\ncontrol-kernel-v3-1.yml\nprivate-control-v3-1-validation.yml'
+          test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nbundle.py\nkernel_v31.py\nmigration_v31.py\ntimeline.py'
+          test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py'
+          forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' -o -iname '*assurance_capsule*' \) -print)"
+          test -z "$forbidden"
+          echo 'CONTROL_V3_1_ACTIVE_SURFACE=PASS'
       - name: Synthetic engine smoke
         run: |
           python - <<'PY'

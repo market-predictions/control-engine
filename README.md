@@ -1,14 +1,26 @@
 # Control Engine
 
-Public deterministic execution and CI engine for Control.
+Public deterministic execution kernel for Control Autonomy V3.1.
 
-This repository intentionally contains **no persisted private Control runtime state**. It hosts generic deterministic compilers, validators, schemas, synthetic fixtures and public GitHub Actions compute. The private `market-predictions/control-plane` remains the sole authoritative governance/state plane.
+## Canonical runtime model
 
-Two governed execution modes exist:
+Control Engine contains no persisted private Control runtime state. The private `market-predictions/control-plane` remains the sole planning/authority and runtime-state plane.
 
-1. deterministic public modules consumed through immutable commit-SHA pinning; and
-2. trusted default-branch actuator workflows that may transiently process private Control state in an ephemeral runner using least-privilege secrets, while persisting every authoritative transition only in the private Control state plane.
+Exactly one public workflow owns canonical Control runtime mutation:
 
-Scheduled Worker A V2 is the implementation/repair actuator. Scheduled Worker B V2 is the independent assurance actuator. Both use the same public-compute/private-state boundary and short-lived Control GitHub App transport; neither stores private runtime state in this repository, public logs, artifacts or caches.
+`/.github/workflows/control-kernel-v3-1.yml`
 
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V1.md`, `docs/PRIVATE_RUNTIME_ACTUATOR_V1.md` and `docs/PRIVATE_RUNTIME_ASSURANCE_ACTUATOR_V1.md` for the trust and actuator contracts.
+Its deterministic implementation is:
+
+`/scripts/control_kernel_v31.py`
+
+The kernel supports only `TICK`, `CLAIM`, atomic `RECORD`, and `RELEASE`. `TICK` performs `RECONCILE -> INTEGRATE -> FEED`. It performs no semantic inference.
+
+Semantic lanes are exactly:
+
+- A1: `IMPLEMENTATION`, `REPAIR`;
+- B1: `ASSURANCE`.
+
+There is no baseline A2, provider fallback, semantic `PROJECT_INTEGRATION` task, worker-direct runtime write, project-intake routing plane, mandatory handover projection, or second queue.
+
+See `docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md` for the V3.1 trust boundary. Historical implementations remain available through Git history, not the active source surface.
