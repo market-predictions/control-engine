@@ -138,7 +138,7 @@ def _task_identity_component(value: object, *, label: str) -> str:
 
 def _authority(main: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     global_auth = _load(main / GLOBAL_AUTH_REL)
-    if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1" or global_auth.get("principal_manual_relay_count") != 0:
+    if global_auth.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1" or not core._zero(global_auth.get("principal_manual_relay_count")):
         raise BridgeError("global V3.1 authority invalid")
     if global_auth.get("semantic_claim_lease_seconds") != core.LEASE_SECONDS:
         raise BridgeError("lease authority mismatch")
@@ -148,26 +148,31 @@ def _authority(main: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[s
     repo_auth: dict[str, dict[str, Any]] = {}
     for path in sorted((main / REPO_AUTH_REL).glob("*.json")):
         doc = _load(path)
-        if doc.get("protocol_id") != "CONTROL_REPOSITORY_AUTHORITY_V3_1" or doc.get("principal_manual_relay_count") != 0:
+        if doc.get("protocol_id") != "CONTROL_REPOSITORY_AUTHORITY_V3_1" or not core._zero(doc.get("principal_manual_relay_count")):
             raise BridgeError(f"repository authority invalid: {path.name}")
         doc = dict(doc)
         doc["_blob_sha"] = _blob_sha(main, path.relative_to(main).as_posix())
         repo_auth[doc["repository"]] = doc
 
     missions: list[dict[str, Any]] = []
+    roots: set[str] = set()
     for path in sorted((main / MISSIONS_REL).glob("*.mission.json")):
         mission = _load(path)
-        if mission.get("protocol_id") != "MISSION_CONTRACT_V3_1" or mission.get("principal_manual_relay_count") != 0:
+        if mission.get("protocol_id") != "MISSION_CONTRACT_V3_1" or not core._zero(mission.get("principal_manual_relay_count")):
             raise BridgeError(f"Mission is not V3.1: {path.name}")
-        _task_identity_component(mission.get("mission_id"), label="Mission identity")
-        _task_identity_component(mission.get("mission_revision"), label="Mission revision")
+        mission_id = _task_identity_component(mission.get("mission_id"), label="Mission identity")
+        revision = _task_identity_component(mission.get("mission_revision"), label="Mission revision")
         gaps = mission.get("gaps")
         if not isinstance(gaps, list):
             raise BridgeError(f"Mission gaps are invalid: {path.name}")
         for gap in gaps:
             if not isinstance(gap, dict):
                 raise BridgeError(f"Mission gap is invalid: {path.name}")
-            _task_identity_component(gap.get("gap_id"), label="Mission gap identity")
+            gap_id = _task_identity_component(gap.get("gap_id"), label="Mission gap identity")
+            root_id = core.deterministic_root_id(mission_id, revision, gap_id)
+            if root_id in roots:
+                raise BridgeError("duplicate deterministic V3.1 Mission gap identity")
+            roots.add(root_id)
             dependencies = gap.get("depends_on", [])
             if not isinstance(dependencies, list):
                 raise BridgeError(f"Mission gap dependencies are invalid: {path.name}")
@@ -186,6 +191,16 @@ def _authority(main: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[s
 
 def _active_revisions(missions: list[dict[str, Any]]) -> dict[str, str]:
     return {wrapped["mission"]["mission_id"]: wrapped["mission"]["mission_revision"] for wrapped in missions}
+
+
+def _active_gap_identities(missions: list[dict[str, Any]]) -> set[tuple[str, str, str]]:
+    return {
+        (mission["mission_id"], mission["mission_revision"], gap["gap_id"])
+        for wrapped in missions
+        for mission in [wrapped["mission"]]
+        for gap in mission.get("gaps", [])
+        if isinstance(gap, dict) and gap.get("gap_state") == "OPEN"
+    }
 
 
 def _mission_for_task(missions: list[dict[str, Any]], task: dict[str, Any]) -> dict[str, Any] | None:
@@ -212,6 +227,14 @@ def _assert_live_task_authority(task: dict[str, Any], missions: list[dict[str, A
         raise BridgeError("task frozen Mission authority digest no longer matches active revision")
     if not core._sha(task.get("repository_authority_blob_sha")):
         raise BridgeError("task frozen repository authority digest is invalid")
+
+
+def _has_live_task_authority(task: dict[str, Any], missions: list[dict[str, Any]], repo_auth: dict[str, dict[str, Any]]) -> bool:
+    try:
+        _assert_live_task_authority(task, missions, repo_auth)
+        return True
+    except BridgeError:
+        return False
 
 
 def _require_v31_queue(queue: dict[str, Any]) -> None:
@@ -276,7 +299,7 @@ def _frozen_repository_authority(control_token: str, task: dict[str, Any]) -> di
         not isinstance(doc, dict)
         or doc.get("protocol_id") != "CONTROL_REPOSITORY_AUTHORITY_V3_1"
         or doc.get("repository") != task.get("repository")
-        or doc.get("principal_manual_relay_count") != 0
+        or not core._zero(doc.get("principal_manual_relay_count"))
     ):
         raise BridgeError("frozen repository authority identity mismatch")
     return doc
@@ -364,45 +387,54 @@ def _merged_commit_proves_expected_candidate(
 
 
 def _plan_integration_target(
-    queue: dict[str, Any], global_auth: dict[str, Any], repo_auth: dict[str, dict[str, Any]], control_token: str
-) -> str:
-    """Prefer currently authorized integration; retain frozen-only recovery fallback.
+    queue: dict[str, Any],
+    global_auth: dict[str, Any],
+    missions: list[dict[str, Any]],
+    repo_auth: dict[str, dict[str, Any]],
+    control_token: str,
+) -> tuple[str, str]:
+    """Return one exact pending task and repository, preferring new authorized work.
 
-    Live HOLD must block a new merge, but it must not make a merge that already
-    happened unrecoverable. To avoid a frozen-AUTO/live-HOLD open PR starving
-    later live-AUTO work, select in two deterministic passes: live-authorized
-    first, frozen-only fallback second.
+    A frozen-AUTO task whose live authority is now HOLD/revoked remains eligible
+    only as a recovery fallback, because the external merge may already have
+    happened while the runtime write was lost. New merges require both live
+    Mission authority and live repository authority.
     """
     if not _global_integration_enabled(global_auth):
-        return ""
+        return "", ""
     _require_v31_queue(queue)
-    candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    recovery_repository = ""
+    recovery: tuple[str, str] = ("", "")
     for task in _integration_candidates(queue):
         frozen = _frozen_repository_authority(control_token, task)
         if not _frozen_integration_authorized(task, frozen):
             continue
-        candidates.append((task, frozen))
-        live = repo_auth.get(task["repository"], {})
-        if _integration_authorized(task, frozen, live):
-            return task["repository"]
-        if not recovery_repository:
-            recovery_repository = task["repository"]
-    return recovery_repository
+        repository = task["repository"]
+        live = repo_auth.get(repository, {})
+        if _has_live_task_authority(task, missions, repo_auth) and _integration_authorized(task, frozen, live):
+            return task["task_id"], repository
+        if not recovery[0]:
+            recovery = (task["task_id"], repository)
+    return recovery
 
 
 def _integrate_one(
     queue: dict[str, Any],
+    missions: list[dict[str, Any]],
     repo_auth: dict[str, dict[str, Any]],
     control_token: str,
     target_token: str,
+    target_task_id: str,
     target_repository: str,
     now: datetime,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    pending = [t for t in _integration_candidates(queue) if t.get("repository") == target_repository]
+    pending = [t for t in _integration_candidates(queue) if t.get("task_id") == target_task_id]
     if not pending:
         return queue, {"integration": "NONE"}
+    if len(pending) != 1:
+        raise BridgeError("planned integration task identity is not unique")
     task = pending[0]
+    if task.get("repository") != target_repository:
+        raise BridgeError("planned integration task repository mismatch")
     live = repo_auth.get(target_repository, {})
     frozen = _frozen_repository_authority(control_token, task)
     candidate = task["candidate"]
@@ -434,6 +466,8 @@ def _integrate_one(
 
     if pr.get("state") != "open":
         raise BridgeError("live PR is neither open nor merged")
+    if not _has_live_task_authority(task, missions, repo_auth):
+        return queue, {"integration": "HOLD_MISSION_AUTHORITY", "task_id": task["task_id"]}
     if not _integration_authorized(task, frozen, live):
         return queue, {"integration": "HOLD", "task_id": task["task_id"]}
 
@@ -475,7 +509,12 @@ def command_claim(token: str, *, role: str, worker: str, task_id: str) -> int:
         queue_path = runtime / QUEUE_REL
         q = _load(queue_path)
         _require_v31_queue(q)
-        q, _ = core.reconcile(q, now=_now(), active_missions=_active_revisions(missions))
+        q, _ = core.reconcile(
+            q,
+            now=_now(),
+            active_missions=_active_revisions(missions),
+            active_gaps=_active_gap_identities(missions),
+        )
         chosen = task_id
         if chosen == "AUTO":
             selected = core.select_task(q, role)
@@ -574,17 +613,18 @@ def command_plan_tick(token: str) -> int:
         _init_repo(main, CONTROL_REPOSITORY)
         _init_repo(runtime, CONTROL_REPOSITORY)
         _fetch_ref(token, main, "main")
-        global_auth, _, repo_auth = _authority(main)
+        global_auth, missions, repo_auth = _authority(main)
         _fetch_ref(token, runtime, RUNTIME_REF)
         q = _load(runtime / QUEUE_REL)
-        target = ""
+        target_task_id, target_repository = ("", "")
         if q.get("version") == "3.1":
-            target = _plan_integration_target(q, global_auth, repo_auth, token)
-        print(f"CONTROL_KERNEL_TARGET_REPOSITORY={target}")
+            target_task_id, target_repository = _plan_integration_target(q, global_auth, missions, repo_auth, token)
+        print(f"CONTROL_KERNEL_TARGET_TASK_ID={target_task_id}")
+        print(f"CONTROL_KERNEL_TARGET_REPOSITORY={target_repository}")
     return 0
 
 
-def command_tick(token: str, *, target_token: str, target_repository: str) -> int:
+def command_tick(token: str, *, target_token: str, target_task_id: str, target_repository: str) -> int:
     def mutate(runtime, global_auth, missions, repo_auth):
         queue_path = runtime / QUEUE_REL
         q = _load(queue_path)
@@ -597,12 +637,26 @@ def command_tick(token: str, *, target_token: str, target_repository: str) -> in
             "to_version": "3.1",
             "imported_fact_count": len(imported_facts),
         }
-        q, reconcile_report = core.reconcile(q, now=now, active_missions=_active_revisions(missions))
+        q, reconcile_report = core.reconcile(
+            q,
+            now=now,
+            active_missions=_active_revisions(missions),
+            active_gaps=_active_gap_identities(missions),
+        )
         integration_report: dict[str, Any] = {"integration": "DISABLED"}
         if _global_integration_enabled(global_auth) and target_repository:
-            if not target_token:
-                raise BridgeError("target token required for enabled integration")
-            q, integration_report = _integrate_one(q, repo_auth, token, target_token, target_repository, now)
+            if not target_token or not target_task_id:
+                raise BridgeError("exact target capability required for enabled integration")
+            q, integration_report = _integrate_one(
+                q,
+                missions,
+                repo_auth,
+                token,
+                target_token,
+                target_task_id,
+                target_repository,
+                now,
+            )
         created: list[str] = []
         if global_auth.get("control_runtime_enabled") is True:
             q, created = migration.feed(q, missions=missions, now=now)
@@ -670,7 +724,12 @@ def main() -> int:
         if args.command == "plan-tick":
             return command_plan_tick(token)
         if args.command == "tick":
-            return command_tick(token, target_token=os.environ.get("CONTROL_TARGET_TOKEN", ""), target_repository=os.environ.get("CONTROL_TARGET_REPOSITORY", ""))
+            return command_tick(
+                token,
+                target_token=os.environ.get("CONTROL_TARGET_TOKEN", ""),
+                target_task_id=os.environ.get("CONTROL_TARGET_TASK_ID", ""),
+                target_repository=os.environ.get("CONTROL_TARGET_REPOSITORY", ""),
+            )
         if args.command == "claim":
             return command_claim(token, role=args.role, worker=args.worker, task_id=args.task_id)
         if args.command == "record":
