@@ -86,7 +86,7 @@ def test_manual_relay_count_requires_exact_integer_zero():
     validator.require_zero_relay_count({"principal_manual_relay_count": 0})
     for value in (0.0, False, True, "0", None):
         with pytest.raises(validator.ValidationError, match="exact integer zero"):
-            validator.require_zero_relay_count({"principal_manual_relay_count": value)
+            validator.require_zero_relay_count({"principal_manual_relay_count": value})
 
 
 def test_repository_identity_is_github_safe_and_case_canonical():
