@@ -9,6 +9,7 @@ from control_engine import kernel_v31 as core
 LEGACY_QUEUE_VERSION = "1.0"
 MIGRATION_PROTOCOL_ID = "CONTROL_V3_1_MIGRATION_FACT"
 MIGRATION_FACT = "LEGACY_PROJECT_INTEGRATION_COMPLETED"
+TASK_SEPARATOR = "--"
 
 
 class MigrationError(ValueError):
@@ -21,24 +22,28 @@ def _ts(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _task_identity_component(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or not value or TASK_SEPARATOR in value:
+        raise MigrationError(f"{label} is invalid or contains reserved task separator")
+    return value
+
+
 def _current_gap_prefixes(missions: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     prefixes: dict[str, dict[str, Any]] = {}
     for wrapped in missions:
         mission = wrapped.get("mission")
         if not isinstance(mission, Mapping):
             raise MigrationError("wrapped Mission is invalid")
-        mission_id = mission.get("mission_id")
-        revision = mission.get("mission_revision")
+        mission_id = _task_identity_component(mission.get("mission_id"), label="Mission identity")
+        revision = _task_identity_component(mission.get("mission_revision"), label="Mission revision")
         repository = mission.get("repository")
         gaps = mission.get("gaps")
-        if not all(isinstance(v, str) and v for v in (mission_id, revision, repository)) or not isinstance(gaps, list):
+        if not isinstance(repository, str) or not repository or not isinstance(gaps, list):
             raise MigrationError("Mission identity is invalid")
         for gap in gaps:
             if not isinstance(gap, Mapping) or gap.get("gap_state") != "OPEN":
                 continue
-            gap_id = gap.get("gap_id")
-            if not isinstance(gap_id, str) or not gap_id:
-                raise MigrationError("Mission gap identity is invalid")
+            gap_id = _task_identity_component(gap.get("gap_id"), label="Mission gap identity")
             prefix = core.deterministic_root_id(mission_id, revision, gap_id)
             if prefix in prefixes:
                 raise MigrationError("duplicate deterministic Mission gap identity")
@@ -65,7 +70,7 @@ def _completed_legacy_integration(task: Mapping[str, Any]) -> bool:
 
 
 def _matches_legacy_root(task_id: str, root_id: str) -> bool:
-    return task_id == root_id or task_id.startswith(root_id + "--")
+    return task_id == root_id or task_id.startswith(root_id + TASK_SEPARATOR)
 
 
 def _validate_fact(fact: Mapping[str, Any]) -> None:
@@ -88,6 +93,9 @@ def _validate_fact(fact: Mapping[str, Any]) -> None:
     for key in ("mission_id", "mission_revision", "gap_id", "repository", "source_task_id", "source_result_ref", "imported_at"):
         if not isinstance(fact.get(key), str) or not fact[key]:
             raise MigrationError(f"migration fact {key} is invalid")
+    for key in ("mission_id", "mission_revision", "gap_id"):
+        if TASK_SEPARATOR in fact[key]:
+            raise MigrationError(f"migration fact {key} contains reserved task separator")
     relay = fact.get("principal_manual_relay_count")
     if not isinstance(relay, int) or isinstance(relay, bool) or relay != 0:
         raise MigrationError("migration fact manual relay count must remain integer zero")
