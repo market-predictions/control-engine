@@ -189,32 +189,27 @@ jobs:
 
       - name: Plan exact target-repository capability
         id: plan
-        if: >-
-          github.event_name == 'schedule' ||
-          inputs.command == 'TICK' ||
-          (github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'CODEX_START')
+        if: github.event_name == 'schedule' || inputs.command == 'TICK'
         shell: bash
         env:
           CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
-          A1_COMMAND: ${{ steps.a1-command.outputs.command }}
-          A1_TASK_ID: ${{ steps.a1-command.outputs.task_id }}
         run: |
           set -euo pipefail
           kind=''
           task_id=''
           target=''
 
-          if [ "$A1_COMMAND" = 'CODEX_START' ]; then
-            output="$(python scripts/control_codex_v31.py plan-start --task-id "$A1_TASK_ID")"
-            kind='CODEX_START'
-            task_id="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_CODEX_TASK_ID=//p' | tail -n1)"
-            target="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_CODEX_TARGET_REPOSITORY=//p' | tail -n1)"
+          codex="$(python scripts/control_codex_v31.py plan-active)"
+          task_id="$(printf '%s\n' "$codex" | sed -n 's/^CONTROL_CODEX_TASK_ID=//p' | tail -n1)"
+          target="$(printf '%s\n' "$codex" | sed -n 's/^CONTROL_CODEX_TARGET_REPOSITORY=//p' | tail -n1)"
+          if [ -n "$target" ]; then
+            kind='CODEX_ACTIVE'
           else
-            codex="$(python scripts/control_codex_v31.py plan-active)"
+            codex="$(python scripts/control_codex_v31.py plan-next)"
             task_id="$(printf '%s\n' "$codex" | sed -n 's/^CONTROL_CODEX_TASK_ID=//p' | tail -n1)"
             target="$(printf '%s\n' "$codex" | sed -n 's/^CONTROL_CODEX_TARGET_REPOSITORY=//p' | tail -n1)"
             if [ -n "$target" ]; then
-              kind='CODEX_ACTIVE'
+              kind='CODEX_QUEUED'
             else
               output="$(python scripts/control_kernel_v31.py plan-tick)"
               task_id="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_TASK_ID=//p' | tail -n1)"
@@ -266,6 +261,17 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/control_codex_v31.py reconcile --task-id "$TASK_ID"
+
+      - name: Start next deterministic native Codex B1 run
+        if: steps.plan.outputs.kind == 'CODEX_QUEUED'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
+          TASK_ID: ${{ steps.plan.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          python scripts/control_codex_v31.py start --task-id "$TASK_ID"
 
       - name: Execute deterministic TICK
         if: github.event_name == 'schedule' || inputs.command == 'TICK'
@@ -356,17 +362,6 @@ jobs:
           set -euo pipefail
           python scripts/control_kernel_v31.py release --role implementation_operations --worker A1 --task-id "$TASK_ID" --run-id "$RUN_ID" --reason "$RELEASE_REASON"
 
-      - name: Start kernel-owned native Codex B1 run
-        if: github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'CODEX_START'
-        shell: bash
-        env:
-          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
-          CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
-          TASK_ID: ${{ steps.a1-command.outputs.task_id }}
-        run: |
-          set -euo pipefail
-          python scripts/control_codex_v31.py start --task-id "$TASK_ID"
-
       - name: Prove kernel boundary
         if: always()
         shell: bash
@@ -377,6 +372,7 @@ jobs:
           echo 'CONTROL_RUNTIME_PROTECTION_REQUIRED=false'
           echo 'CONTROL_RUNTIME_WRITE_GUARD=CAS_SCOPE_VALIDATION'
           echo 'CONTROL_A1_COMMENT=TRANSPORT_ONLY'
+          echo 'CONTROL_B1_DISPATCH=DETERMINISTIC_TICK_ONLY'
           echo 'CONTROL_B1_SEMANTIC_EXECUTOR=TRUSTED_CODEX_GITHUB_REVIEW'
           echo 'CONTROL_A1_SUPPLIED_B1_VERDICT=false'
           echo 'CONTROL_SEMANTIC_INFERENCE=false'
