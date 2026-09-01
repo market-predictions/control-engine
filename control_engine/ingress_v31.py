@@ -80,10 +80,6 @@ def parse_a1_command(body: str) -> A1Command:
             reason=reason,
         )
 
-    if command == "CODEX_START":
-        _exact_keys(payload, {"command", "task_id"})
-        return A1Command(command=command, task_id=_text(payload.get("task_id"), field="task_id"))
-
     raise IngressError("unsupported A1 command")
 
 
