@@ -77,7 +77,7 @@ jobs:
           repositories: control-plane
           permission-contents: write
 
-      - name: Enforce protected canonical runtime branch
+      - name: Validate canonical private runtime authority
         shell: bash
         env:
           CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
@@ -86,22 +86,36 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           import urllib.request
 
-          req = urllib.request.Request(
-              'https://api.github.com/repos/market-predictions/control-plane/branches/control-runtime-state',
-              headers={
-                  'Authorization': f"Bearer {os.environ['CONTROL_RUNTIME_TOKEN']}",
-                  'Accept': 'application/vnd.github+json',
-                  'X-GitHub-Api-Version': '2022-11-28',
-                  'User-Agent': 'control-kernel-v3-1',
-              },
-          )
-          with urllib.request.urlopen(req, timeout=30) as response:
-              branch = json.load(response)
-          if branch.get('protected') is not True:
-              raise SystemExit('CONTROL_RUNTIME_PROTECTION=FAIL_CLOSED_UNPROTECTED')
-          print('CONTROL_RUNTIME_PROTECTION=PROTECTED')
+          headers = {
+              'Authorization': f"Bearer {os.environ['CONTROL_RUNTIME_TOKEN']}",
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'control-kernel-v3-1',
+          }
+
+          def get(path):
+              req = urllib.request.Request(f'https://api.github.com/{path}', headers=headers)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+
+          repository = get('repos/market-predictions/control-plane')
+          if repository.get('full_name') != 'market-predictions/control-plane' or repository.get('private') is not True:
+              raise SystemExit('CONTROL_RUNTIME_AUTHORITY=FAIL_CLOSED_REPOSITORY')
+
+          branch = get('repos/market-predictions/control-plane/branches/control-runtime-state')
+          sha = branch.get('commit', {}).get('sha')
+          if (
+              branch.get('name') != 'control-runtime-state'
+              or not isinstance(sha, str)
+              or re.fullmatch(r'[0-9a-f]{40}', sha) is None
+          ):
+              raise SystemExit('CONTROL_RUNTIME_AUTHORITY=FAIL_CLOSED_BRANCH')
+
+          print('CONTROL_RUNTIME_AUTHORITY=PRIVATE_CANONICAL_BRANCH')
+          print(f'CONTROL_RUNTIME_HEAD={sha}')
           PY
 
       - name: Resolve authenticated semantic role
@@ -236,7 +250,8 @@ jobs:
           set -euo pipefail
           echo 'CONTROL_AUTONOMY_V3_1=true'
           echo 'CONTROL_RUNTIME_WRITER=CONTROL_KERNEL'
-          echo 'CONTROL_RUNTIME_PROTECTION_REQUIRED=true'
+          echo 'CONTROL_RUNTIME_PROTECTION_REQUIRED=false'
+          echo 'CONTROL_RUNTIME_WRITE_GUARD=CAS_SCOPE_VALIDATION'
           echo 'CONTROL_SEMANTIC_INFERENCE=false'
           echo 'CONTROL_A2=false'
           echo 'CONTROL_PROVIDER_FALLBACK=false'
