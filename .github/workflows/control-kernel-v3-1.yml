@@ -3,6 +3,8 @@ name: Control Kernel V3.1
 on:
   schedule:
     - cron: '*/15 * * * *'
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       command:
@@ -41,7 +43,17 @@ env:
 
 jobs:
   kernel:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'market-predictions/control-engine' &&
+      (
+        (github.event_name != 'issue_comment' && github.ref == 'refs/heads/main') ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.number == 100 &&
+          github.event.comment.user.login == vars.CONTROL_A1_GITHUB_ACTOR &&
+          startsWith(github.event.comment.body, 'CONTROL_V3_1_A1_COMMAND_V1')
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -58,7 +70,36 @@ jobs:
           python-version: '3.12'
 
       - name: Validate kernel syntax
-        run: python -m py_compile control_engine/kernel_v31.py scripts/control_kernel_v31.py
+        run: >-
+          python -m py_compile
+          control_engine/kernel_v31.py
+          control_engine/ingress_v31.py
+          control_engine/codex_v31.py
+          scripts/control_kernel_v31.py
+          scripts/control_codex_v31.py
+
+      - name: Parse authenticated A1 transport command
+        id: a1-command
+        if: github.event_name == 'issue_comment'
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from control_engine.ingress_v31 import parse_a1_command
+
+          command = parse_a1_command(os.environ['COMMENT_BODY'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              handle.write(f"command={command.command}\n")
+              handle.write(f"task_id={command.task_id}\n")
+              handle.write(f"run_id={command.run_id or ''}\n")
+              handle.write(f"reason={command.reason or ''}\n")
+              payload = '' if command.result is None else json.dumps(command.result, separators=(',', ':'), sort_keys=True)
+              handle.write(f"result_payload={payload}\n")
+          PY
 
       - name: Preflight GitHub App
         shell: bash
@@ -146,33 +187,59 @@ jobs:
               ;;
           esac
 
-      - name: Plan deterministic TICK target capability
+      - name: Plan exact target-repository capability
         id: plan
-        if: github.event_name == 'schedule' || inputs.command == 'TICK'
+        if: >-
+          github.event_name == 'schedule' ||
+          inputs.command == 'TICK' ||
+          (github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'CODEX_START')
         shell: bash
         env:
           CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          A1_COMMAND: ${{ steps.a1-command.outputs.command }}
+          A1_TASK_ID: ${{ steps.a1-command.outputs.task_id }}
         run: |
           set -euo pipefail
-          output="$(python scripts/control_kernel_v31.py plan-tick)"
-          task_id="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_TASK_ID=//p' | tail -n1)"
-          target="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_REPOSITORY=//p' | tail -n1)"
+          kind=''
+          task_id=''
+          target=''
+
+          if [ "$A1_COMMAND" = 'CODEX_START' ]; then
+            output="$(python scripts/control_codex_v31.py plan-start --task-id "$A1_TASK_ID")"
+            kind='CODEX_START'
+            task_id="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_CODEX_TASK_ID=//p' | tail -n1)"
+            target="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_CODEX_TARGET_REPOSITORY=//p' | tail -n1)"
+          else
+            codex="$(python scripts/control_codex_v31.py plan-active)"
+            task_id="$(printf '%s\n' "$codex" | sed -n 's/^CONTROL_CODEX_TASK_ID=//p' | tail -n1)"
+            target="$(printf '%s\n' "$codex" | sed -n 's/^CONTROL_CODEX_TARGET_REPOSITORY=//p' | tail -n1)"
+            if [ -n "$target" ]; then
+              kind='CODEX_ACTIVE'
+            else
+              output="$(python scripts/control_kernel_v31.py plan-tick)"
+              task_id="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_TASK_ID=//p' | tail -n1)"
+              target="$(printf '%s\n' "$output" | sed -n 's/^CONTROL_KERNEL_TARGET_REPOSITORY=//p' | tail -n1)"
+              if [ -n "$target" ]; then
+                kind='TICK_TARGET'
+              fi
+            fi
+          fi
+
           if [ -n "$target" ]; then
             [ -n "$task_id" ]
             owner="${target%%/*}"
             repo="${target#*/}"
             [ "$owner" != "$target" ] && [ -n "$repo" ]
-            echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
-            echo "target=$target" >> "$GITHUB_OUTPUT"
-            echo "owner=$owner" >> "$GITHUB_OUTPUT"
-            echo "repo=$repo" >> "$GITHUB_OUTPUT"
           else
             [ -z "$task_id" ]
-            echo 'task_id=' >> "$GITHUB_OUTPUT"
-            echo 'target=' >> "$GITHUB_OUTPUT"
-            echo 'owner=' >> "$GITHUB_OUTPUT"
-            echo 'repo=' >> "$GITHUB_OUTPUT"
+            owner=''
+            repo=''
           fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
 
       - name: Create exact target-repository capability
         id: target-token
@@ -184,18 +251,30 @@ jobs:
           owner: ${{ steps.plan.outputs.owner }}
           repositories: ${{ steps.plan.outputs.repo }}
           permission-contents: write
+          permission-issues: write
           permission-pull-requests: read
           permission-checks: read
           permission-statuses: write
+
+      - name: Reconcile active native Codex B1 evidence
+        if: steps.plan.outputs.kind == 'CODEX_ACTIVE'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
+          TASK_ID: ${{ steps.plan.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          python scripts/control_codex_v31.py reconcile --task-id "$TASK_ID"
 
       - name: Execute deterministic TICK
         if: github.event_name == 'schedule' || inputs.command == 'TICK'
         shell: bash
         env:
           CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
-          CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
-          CONTROL_TARGET_TASK_ID: ${{ steps.plan.outputs.task_id }}
-          CONTROL_TARGET_REPOSITORY: ${{ steps.plan.outputs.target }}
+          CONTROL_TARGET_TOKEN: ${{ steps.plan.outputs.kind == 'TICK_TARGET' && steps.target-token.outputs.token || '' }}
+          CONTROL_TARGET_TASK_ID: ${{ steps.plan.outputs.kind == 'TICK_TARGET' && steps.plan.outputs.task_id || '' }}
+          CONTROL_TARGET_REPOSITORY: ${{ steps.plan.outputs.kind == 'TICK_TARGET' && steps.plan.outputs.target || '' }}
         run: |
           set -euo pipefail
           python scripts/control_kernel_v31.py tick
@@ -243,6 +322,51 @@ jobs:
           case "$RELEASE_REASON" in EXECUTION_UNAVAILABLE|EXECUTION_ABORTED) ;; *) exit 2 ;; esac
           python scripts/control_kernel_v31.py release --role "$ROLE" --worker "$WORKER" --task-id "$TASK_ID" --run-id "$RUN_ID" --reason "$RELEASE_REASON"
 
+      - name: Execute A1 transport CLAIM
+        if: github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'CLAIM'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          TASK_ID: ${{ steps.a1-command.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          python scripts/control_kernel_v31.py claim --role implementation_operations --worker A1 --task-id "$TASK_ID"
+
+      - name: Execute A1 transport atomic RECORD
+        if: github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'RECORD'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          TASK_ID: ${{ steps.a1-command.outputs.task_id }}
+          RUN_ID: ${{ steps.a1-command.outputs.run_id }}
+          CONTROL_RESULT_PAYLOAD: ${{ steps.a1-command.outputs.result_payload }}
+        run: |
+          set -euo pipefail
+          python scripts/control_kernel_v31.py record --role implementation_operations --worker A1 --task-id "$TASK_ID" --run-id "$RUN_ID"
+
+      - name: Execute A1 transport RELEASE
+        if: github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'RELEASE'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          TASK_ID: ${{ steps.a1-command.outputs.task_id }}
+          RUN_ID: ${{ steps.a1-command.outputs.run_id }}
+          RELEASE_REASON: ${{ steps.a1-command.outputs.reason }}
+        run: |
+          set -euo pipefail
+          python scripts/control_kernel_v31.py release --role implementation_operations --worker A1 --task-id "$TASK_ID" --run-id "$RUN_ID" --reason "$RELEASE_REASON"
+
+      - name: Start kernel-owned native Codex B1 run
+        if: github.event_name == 'issue_comment' && steps.a1-command.outputs.command == 'CODEX_START'
+        shell: bash
+        env:
+          CONTROL_RUNTIME_TOKEN: ${{ steps.runtime-token.outputs.token }}
+          CONTROL_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
+          TASK_ID: ${{ steps.a1-command.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          python scripts/control_codex_v31.py start --task-id "$TASK_ID"
+
       - name: Prove kernel boundary
         if: always()
         shell: bash
@@ -252,6 +376,9 @@ jobs:
           echo 'CONTROL_RUNTIME_WRITER=CONTROL_KERNEL'
           echo 'CONTROL_RUNTIME_PROTECTION_REQUIRED=false'
           echo 'CONTROL_RUNTIME_WRITE_GUARD=CAS_SCOPE_VALIDATION'
+          echo 'CONTROL_A1_COMMENT=TRANSPORT_ONLY'
+          echo 'CONTROL_B1_SEMANTIC_EXECUTOR=TRUSTED_CODEX_GITHUB_REVIEW'
+          echo 'CONTROL_A1_SUPPLIED_B1_VERDICT=false'
           echo 'CONTROL_SEMANTIC_INFERENCE=false'
           echo 'CONTROL_A2=false'
           echo 'CONTROL_PROVIDER_FALLBACK=false'
