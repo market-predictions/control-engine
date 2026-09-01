@@ -21,14 +21,19 @@ def test_kernel_uses_exact_pinned_ephemeral_app_token_after_preflight():
     assert value.index('bash scripts/github_app_preflight.sh') < value.index('Create exact private-runtime capability')
 
 
-def test_kernel_fails_closed_before_any_runtime_operation_when_runtime_branch_is_unprotected():
+def test_kernel_fails_closed_on_wrong_private_runtime_authority_without_paid_branch_protection_dependency():
     value = text()
-    assert 'Enforce protected canonical runtime branch' in value
+    assert 'Validate canonical private runtime authority' in value
+    assert "repository.get('full_name') != 'market-predictions/control-plane'" in value
+    assert "repository.get('private') is not True" in value
     assert "branches/control-runtime-state" in value
-    assert "branch.get('protected') is not True" in value
-    assert 'CONTROL_RUNTIME_PROTECTION=FAIL_CLOSED_UNPROTECTED' in value
-    assert 'CONTROL_RUNTIME_PROTECTION_REQUIRED=true' in value
-    protection = value.index('Enforce protected canonical runtime branch')
+    assert "branch.get('name') != 'control-runtime-state'" in value
+    assert 'CONTROL_RUNTIME_AUTHORITY=FAIL_CLOSED_REPOSITORY' in value
+    assert 'CONTROL_RUNTIME_AUTHORITY=FAIL_CLOSED_BRANCH' in value
+    assert "branch.get('protected')" not in value
+    assert 'CONTROL_RUNTIME_PROTECTION_REQUIRED=false' in value
+    assert 'CONTROL_RUNTIME_WRITE_GUARD=CAS_SCOPE_VALIDATION' in value
+    guard = value.index('Validate canonical private runtime authority')
     for later in (
         'Plan deterministic TICK target capability',
         'Execute deterministic TICK',
@@ -36,7 +41,7 @@ def test_kernel_fails_closed_before_any_runtime_operation_when_runtime_branch_is
         'Execute authenticated atomic RECORD',
         'Execute authenticated RELEASE',
     ):
-        assert protection < value.index(later)
+        assert guard < value.index(later)
 
 
 def test_runtime_and_target_capabilities_are_separate_repository_scoped_and_least_privilege():
