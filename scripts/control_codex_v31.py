@@ -60,6 +60,13 @@ def _queued_assurance(queue: dict[str, Any], task_id: str) -> dict[str, Any]:
     return task
 
 
+def _next_queued_b1(queue: dict[str, Any]) -> dict[str, Any] | None:
+    selected = core.select_task(queue, core.ROLE_B)
+    if selected is None:
+        return None
+    return _queued_assurance(queue, selected["task_id"])
+
+
 def _active_b1(queue: dict[str, Any], task_id: str | None = None) -> dict[str, Any] | None:
     matches = [
         item
@@ -119,10 +126,15 @@ def _request_matches(item: dict[str, Any], *, task_id: str, run_id: str, candida
     )
 
 
-def command_plan_start(runtime_token: str, *, task_id: str) -> int:
-    task = _queued_assurance(_runtime_queue(runtime_token), task_id)
-    print("CONTROL_CODEX_PLAN=QUEUED_ASSURANCE")
-    print(f"CONTROL_CODEX_TASK_ID={task_id}")
+def command_plan_next(runtime_token: str) -> int:
+    task = _next_queued_b1(_runtime_queue(runtime_token))
+    if task is None:
+        print("CONTROL_CODEX_NEXT=NONE")
+        print("CONTROL_CODEX_TASK_ID=")
+        print("CONTROL_CODEX_TARGET_REPOSITORY=")
+        return 0
+    print("CONTROL_CODEX_NEXT=QUEUED_ASSURANCE")
+    print(f"CONTROL_CODEX_TASK_ID={task['task_id']}")
     print(f"CONTROL_CODEX_TARGET_REPOSITORY={task['repository']}")
     return 0
 
@@ -277,8 +289,7 @@ def command_reconcile(runtime_token: str, target_token: str, *, task_id: str) ->
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Control V3.1 native Codex B1 binding")
     sub = parser.add_subparsers(dest="command", required=True)
-    start_plan = sub.add_parser("plan-start")
-    start_plan.add_argument("--task-id", required=True)
+    sub.add_parser("plan-next")
     sub.add_parser("plan-active")
     start = sub.add_parser("start")
     start.add_argument("--task-id", required=True)
@@ -295,8 +306,8 @@ def main() -> int:
         return 78
     args = build_parser().parse_args()
     try:
-        if args.command == "plan-start":
-            return command_plan_start(runtime_token, task_id=args.task_id)
+        if args.command == "plan-next":
+            return command_plan_next(runtime_token)
         if args.command == "plan-active":
             return command_plan_active(runtime_token)
         if not target_token:
