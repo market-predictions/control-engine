@@ -1,0 +1,261 @@
+from __future__ import annotations
+
+"""Trusted Git-data binding for passive Control V4 transforms.
+
+This module adds no writer, scheduler, network client, or runtime authority. It
+loads exact committed authority data from a local Git checkout, computes the
+actual Git blob identities, validates the documents with the trusted public
+schemas/contracts, and then delegates to the pure V4 transforms.
+"""
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+import subprocess
+from typing import Any, Mapping, Sequence
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+
+from control_engine.v4_contracts import (
+    PUBLIC_ROOT,
+    V4ValidationError,
+    derive_rollback_v31,
+    forward_transform_v31_to_v4,
+    validate_authority_set,
+    validate_mission_v4,
+    validate_queue_v4,
+    validate_repository_authority_v4,
+)
+
+
+V31_MISSION_SCHEMA_REL = "schemas/mission_contract_v31.schema.json"
+MISSION_PREFIX = "control/missions/"
+AUTHORITY_PREFIX = "control/repository-authority/"
+
+
+@dataclass(frozen=True)
+class V4AuthorityBundle:
+    missions: tuple[dict[str, Any], ...]
+    authorities: tuple[dict[str, Any], ...]
+    mission_blob_shas: Mapping[str, str]
+    authority_blob_shas: Mapping[str, str]
+
+
+class _DuplicateKeyError(ValueError):
+    pass
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKeyError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _strict_json(raw: bytes) -> dict[str, Any]:
+    try:
+        text = raw.decode("utf-8", "strict")
+        value = json.loads(text, object_pairs_hook=_unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError, TypeError, ValueError) as exc:
+        raise V4ValidationError("trusted authority JSON invalid or ambiguous") from exc
+    if not isinstance(value, dict):
+        raise V4ValidationError("trusted authority JSON root must be an object")
+    return value
+
+
+def _git(root: Path, *args: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            cwd=root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise V4ValidationError("trusted Git read failed") from exc
+    return result.stdout
+
+
+def _committed_tree(root: Path) -> dict[str, tuple[str, str, str]]:
+    raw = _git(root, "ls-tree", "-rz", "-r", "--full-tree", "HEAD")
+    entries: dict[str, tuple[str, str, str]] = {}
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode_b, type_b, oid_b = metadata.split(b" ", 2)
+            path = raw_path.decode("utf-8", "strict")
+            entry = (mode_b.decode("ascii"), type_b.decode("ascii"), oid_b.decode("ascii"))
+        except Exception as exc:
+            raise V4ValidationError("trusted Git tree contains unsupported record") from exc
+        if path in entries:
+            raise V4ValidationError("trusted Git tree contains duplicate path")
+        entries[path] = entry
+    return entries
+
+
+def _single_level_json_paths(entries: Mapping[str, tuple[str, str, str]], prefix: str, suffix: str) -> list[str]:
+    paths: list[str] = []
+    for path in entries:
+        if not path.startswith(prefix):
+            continue
+        tail = path[len(prefix):]
+        if tail and "/" not in tail and tail.endswith(suffix):
+            paths.append(path)
+    return sorted(paths)
+
+
+def _blob(root: Path, entries: Mapping[str, tuple[str, str, str]], path: str) -> tuple[bytes, str]:
+    entry = entries.get(path)
+    if entry is None:
+        raise V4ValidationError("trusted authority file missing")
+    mode, obj_type, oid = entry
+    if mode != "100644" or obj_type != "blob":
+        raise V4ValidationError("trusted authority path is not an inert regular file")
+    return _git(root, "cat-file", "blob", oid), oid
+
+
+def load_v4_authority_from_git(authority_root: Path) -> V4AuthorityBundle:
+    """Load V4 Missions/repository authority from exact committed HEAD data."""
+    root = Path(authority_root)
+    entries = _committed_tree(root)
+    mission_paths = _single_level_json_paths(entries, MISSION_PREFIX, ".mission.json")
+    authority_paths = _single_level_json_paths(entries, AUTHORITY_PREFIX, ".json")
+    if not mission_paths or not authority_paths:
+        raise V4ValidationError("trusted V4 authority registry is incomplete")
+
+    missions: list[dict[str, Any]] = []
+    authorities: list[dict[str, Any]] = []
+    mission_shas: dict[str, str] = {}
+    authority_shas: dict[str, str] = {}
+
+    for path in mission_paths:
+        raw, oid = _blob(root, entries, path)
+        mission = _strict_json(raw)
+        validate_mission_v4(mission)
+        mission_id = mission["mission_id"]
+        if mission_id in mission_shas:
+            raise V4ValidationError("trusted V4 Mission identity duplicated")
+        mission_shas[mission_id] = oid
+        missions.append(mission)
+
+    for path in authority_paths:
+        raw, oid = _blob(root, entries, path)
+        authority = _strict_json(raw)
+        validate_repository_authority_v4(authority)
+        repository = authority["repository"].lower()
+        if repository in authority_shas:
+            raise V4ValidationError("trusted V4 repository authority duplicated")
+        authority_shas[repository] = oid
+        authorities.append(authority)
+
+    validate_authority_set(missions, authorities)
+    return V4AuthorityBundle(
+        missions=tuple(missions),
+        authorities=tuple(authorities),
+        mission_blob_shas=dict(mission_shas),
+        authority_blob_shas=dict(authority_shas),
+    )
+
+
+def load_v31_missions_from_git(authority_root: Path) -> tuple[dict[str, Any], ...]:
+    """Load exact committed V3.1 Mission data from a frozen pre-cutover checkout."""
+    root = Path(authority_root)
+    entries = _committed_tree(root)
+    mission_paths = _single_level_json_paths(entries, MISSION_PREFIX, ".mission.json")
+    if not mission_paths:
+        raise V4ValidationError("frozen V3.1 Mission registry is empty")
+    try:
+        schema = json.loads((PUBLIC_ROOT / V31_MISSION_SCHEMA_REL).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise V4ValidationError("trusted V3.1 Mission schema unavailable") from exc
+
+    missions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in mission_paths:
+        raw, _oid = _blob(root, entries, path)
+        mission = _strict_json(raw)
+        try:
+            Draft202012Validator(schema).validate(mission)
+        except JsonSchemaValidationError as exc:
+            raise V4ValidationError("frozen V3.1 Mission violates trusted schema") from exc
+        mission_id = mission.get("mission_id")
+        if not isinstance(mission_id, str) or not mission_id or mission_id in seen:
+            raise V4ValidationError("frozen V3.1 Mission identity invalid or duplicated")
+        seen.add(mission_id)
+        missions.append(mission)
+    return tuple(missions)
+
+
+def assert_v4_queue_bound_to_authority(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    *,
+    expected_mission_blob_shas: Mapping[str, str] | None = None,
+) -> None:
+    """Prove runtime task authority fields bind the exact committed authority set."""
+    validate_queue_v4(queue)
+    if expected_mission_blob_shas is not None and dict(bundle.mission_blob_shas) != dict(expected_mission_blob_shas):
+        raise V4ValidationError("trusted V4 Mission blob set drifted from frozen cutover set")
+
+    mission_by_id = {mission["mission_id"]: mission for mission in bundle.missions}
+    for task in queue["tasks"]:
+        mission = mission_by_id.get(task["mission_id"])
+        if mission is None:
+            raise V4ValidationError("V4 task Mission missing from trusted authority")
+        if task["mission_revision"] != mission["mission_revision"]:
+            raise V4ValidationError("V4 task Mission revision differs from trusted authority")
+        if task["mission_contract_blob_sha"] != bundle.mission_blob_shas[task["mission_id"]]:
+            raise V4ValidationError("V4 task Mission blob SHA differs from trusted Git authority")
+        repository = mission["repository"].lower()
+        if task["repository"].lower() != repository:
+            raise V4ValidationError("V4 task repository differs from trusted Mission")
+        if task["repository_authority_blob_sha"] != bundle.authority_blob_shas.get(repository):
+            raise V4ValidationError("V4 task repository authority SHA differs from trusted Git authority")
+
+
+def forward_transform_v31_to_v4_from_git(
+    v31_queue: Mapping[str, Any],
+    *,
+    authority_root: Path,
+    transformed_at: Any,
+) -> dict[str, Any]:
+    bundle = load_v4_authority_from_git(authority_root)
+    return forward_transform_v31_to_v4(
+        v31_queue,
+        missions=bundle.missions,
+        mission_blob_shas=bundle.mission_blob_shas,
+        authorities=bundle.authorities,
+        authority_blob_shas=bundle.authority_blob_shas,
+        transformed_at=transformed_at,
+    )
+
+
+def derive_rollback_v31_from_git(
+    *,
+    pre_v31_queue: Mapping[str, Any],
+    v4_queue: Mapping[str, Any],
+    frozen_v31_authority_root: Path,
+    current_v4_authority_root: Path,
+    expected_v4_mission_blob_shas: Mapping[str, str],
+    rollback_revisions: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, set[str]]]:
+    """Run bounded rollback only against exact frozen/current committed authority."""
+    bundle = load_v4_authority_from_git(current_v4_authority_root)
+    assert_v4_queue_bound_to_authority(
+        v4_queue,
+        bundle,
+        expected_mission_blob_shas=expected_v4_mission_blob_shas,
+    )
+    pre_cutover_missions: Sequence[Mapping[str, Any]] = load_v31_missions_from_git(frozen_v31_authority_root)
+    return derive_rollback_v31(
+        pre_v31_queue=pre_v31_queue,
+        v4_queue=v4_queue,
+        pre_cutover_missions=pre_cutover_missions,
+        rollback_revisions=rollback_revisions,
+    )
