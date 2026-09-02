@@ -51,9 +51,18 @@
     "review_record": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["candidate_sha", "outcome", "reviewed_at", "reviewer"],
+      "required": [
+        "candidate_sha",
+        "expected_base_branch",
+        "expected_base_sha",
+        "outcome",
+        "reviewed_at",
+        "reviewer"
+      ],
       "properties": {
         "candidate_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "expected_base_branch": {"type": "string", "minLength": 1},
+        "expected_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "outcome": {"enum": ["PASS", "REPAIR_REQUIRED", "BLOCKED"]},
         "reviewed_at": {"type": "string", "minLength": 1},
         "reviewer": {"type": "string", "minLength": 1},
@@ -63,9 +72,19 @@
     "external_review_record": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["candidate_sha", "provider", "request_key", "request_ref", "status"],
+      "required": [
+        "candidate_sha",
+        "expected_base_branch",
+        "expected_base_sha",
+        "provider",
+        "request_key",
+        "request_ref",
+        "status"
+      ],
       "properties": {
         "candidate_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "expected_base_branch": {"type": "string", "minLength": 1},
+        "expected_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "provider": {"type": "string", "minLength": 1},
         "request_key": {"type": "string", "minLength": 1},
         "request_ref": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
