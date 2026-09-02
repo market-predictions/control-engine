@@ -37,6 +37,8 @@ def task(*, status: str = "ACTIVE", phase: str = "INTEGRATE") -> dict:
         },
         "last_review": {
             "candidate_sha": CANDIDATE_SHA,
+            "expected_base_branch": "main",
+            "expected_base_sha": BASE_SHA,
             "verdict": "PASS",
             "reviewed_at": "2026-09-02T18:00:00Z",
         },
@@ -76,7 +78,7 @@ def test_authority_supersession_cannot_steal_live_persisted_lock() -> None:
     assert result["task_id"] == "T1"
 
 
-def test_integration_guard_accepts_only_exact_reviewed_live_head_and_base() -> None:
+def test_integration_guard_accepts_only_exact_reviewed_live_head_base_and_native_guard() -> None:
     current = queue()
     result = assert_integration_target_exact(
         current,
@@ -84,6 +86,8 @@ def test_integration_guard_accepts_only_exact_reviewed_live_head_and_base() -> N
         live_candidate_sha=CANDIDATE_SHA,
         live_base_branch="main",
         live_base_sha=BASE_SHA,
+        native_stale_base_guard=True,
+        runner_can_bypass_stale_base_guard=False,
     )
     assert result["phase"] == "INTEGRATE"
 
@@ -94,6 +98,8 @@ def test_integration_guard_accepts_only_exact_reviewed_live_head_and_base() -> N
             live_candidate_sha="e" * 40,
             live_base_branch="main",
             live_base_sha=BASE_SHA,
+            native_stale_base_guard=True,
+            runner_can_bypass_stale_base_guard=False,
         )
 
     with pytest.raises(V4ValidationError, match="base SHA drifted"):
@@ -103,6 +109,8 @@ def test_integration_guard_accepts_only_exact_reviewed_live_head_and_base() -> N
             live_candidate_sha=CANDIDATE_SHA,
             live_base_branch="main",
             live_base_sha="f" * 40,
+            native_stale_base_guard=True,
+            runner_can_bypass_stale_base_guard=False,
         )
 
     with pytest.raises(V4ValidationError, match="base branch drifted"):
@@ -112,4 +120,28 @@ def test_integration_guard_accepts_only_exact_reviewed_live_head_and_base() -> N
             live_candidate_sha=CANDIDATE_SHA,
             live_base_branch="release",
             live_base_sha=BASE_SHA,
+            native_stale_base_guard=True,
+            runner_can_bypass_stale_base_guard=False,
+        )
+
+    with pytest.raises(V4ValidationError, match="stale-base rejection is not proven"):
+        assert_integration_target_exact(
+            current,
+            task_id="T1",
+            live_candidate_sha=CANDIDATE_SHA,
+            live_base_branch="main",
+            live_base_sha=BASE_SHA,
+            native_stale_base_guard=False,
+            runner_can_bypass_stale_base_guard=False,
+        )
+
+    with pytest.raises(V4ValidationError, match="bypass of stale-base guard"):
+        assert_integration_target_exact(
+            current,
+            task_id="T1",
+            live_candidate_sha=CANDIDATE_SHA,
+            live_base_branch="main",
+            live_base_sha=BASE_SHA,
+            native_stale_base_guard=True,
+            runner_can_bypass_stale_base_guard=True,
         )
