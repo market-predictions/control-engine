@@ -84,6 +84,21 @@ def _gap(mission: dict[str, Any], gap_id: str) -> dict[str, Any]:
     return matches[0]
 
 
+def _carry_map(mission: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for carry in mission.get("done_carry_forward", []):
+        target = carry["target_gap_id"]
+        if target in result:
+            raise V4ValidationError(f"{mission['mission_id']}: duplicate carry-forward target {target}")
+        _gap(mission, target)
+        if carry["source_mission_revision"] == mission["mission_revision"]:
+            raise V4ValidationError(
+                f"{mission['mission_id']}:{target}: carry-forward source must be an older revision"
+            )
+        result[target] = carry
+    return result
+
+
 def _validate_mission_graph(mission: dict[str, Any]) -> None:
     gaps = {gap["gap_id"]: gap for gap in mission["gaps"]}
     if len(gaps) != len(mission["gaps"]):
@@ -115,6 +130,7 @@ def _validate_mission_graph(mission: dict[str, Any]) -> None:
 
     for gap_id in sorted(gaps):
         visit(gap_id)
+    _carry_map(mission)
 
 
 def load_v4_authority(
@@ -171,56 +187,97 @@ def load_v4_authority(
     return missions, repositories, mission_shas, repository_shas
 
 
+def _validate_source_fact(
+    mission: dict[str, Any],
+    carry: dict[str, Any],
+    migration_by_ref: dict[str, dict[str, Any]],
+    task_by_id: dict[str, dict[str, Any]],
+) -> None:
+    source_ref = carry["source_fact_ref"]
+    if carry["source_fact_kind"] == "MIGRATION_FACT":
+        fact = migration_by_ref.get(source_ref)
+        if fact is None:
+            raise V4ValidationError(f"missing carry-forward migration fact: {source_ref}")
+        expected = (
+            mission["mission_id"],
+            carry["source_mission_revision"],
+            carry["source_gap_id"],
+        )
+        actual = (fact["mission_id"], fact["mission_revision"], fact["gap_id"])
+        if actual != expected:
+            raise V4ValidationError(f"carry-forward migration fact mismatch: {source_ref}")
+        return
+
+    task = task_by_id.get(source_ref)
+    if task is None or task["status"] != "DONE":
+        raise V4ValidationError(f"missing terminal V4_DONE source task: {source_ref}")
+    expected = (
+        mission["mission_id"],
+        carry["source_mission_revision"],
+        carry["source_gap_id"],
+    )
+    actual = (task["mission_id"], task["mission_revision"], task["gap_id"])
+    if actual != expected:
+        raise V4ValidationError(f"carry-forward V4_DONE task mismatch: {source_ref}")
+
+
 def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_root: Path) -> None:
     _validate(queue, _load_schema(schema_root, QUEUE_SCHEMA), "V4 queue")
     missions, _, mission_shas, repository_shas = load_v4_authority(
         authority_root, schema_root=schema_root
     )
 
-    task_ids: set[str] = set()
-    logical_ids: set[tuple[str, str, str]] = set()
-    carry_ids: set[tuple[str, str, str]] = set()
-
+    migration_by_ref: dict[str, dict[str, Any]] = {}
     for fact in queue["migration_facts"]:
-        logical = (fact["mission_id"], fact["target_mission_revision"], fact["gap_id"])
-        if logical in carry_ids:
-            raise V4ValidationError(f"duplicate DONE_CARRY_FORWARD: {logical}")
-        mission = missions.get(fact["mission_id"])
-        if mission is None or mission["mission_revision"] != fact["target_mission_revision"]:
-            raise V4ValidationError(f"carry-forward targets non-current mission: {logical}")
-        _gap(mission, fact["gap_id"])
-        carry_ids.add(logical)
+        ref = fact["source_task_id"]
+        if ref in migration_by_ref:
+            raise V4ValidationError(f"duplicate migration fact identity: {ref}")
+        migration_by_ref[ref] = fact
 
+    task_by_id: dict[str, dict[str, Any]] = {}
+    logical_ids: set[tuple[str, str, str]] = set()
     for task in queue["tasks"]:
         task_id = task["task_id"]
-        if task_id in task_ids:
+        if task_id in task_by_id:
             raise V4ValidationError(f"duplicate task_id: {task_id}")
-        task_ids.add(task_id)
-
+        task_by_id[task_id] = task
         logical = (task["mission_id"], task["mission_revision"], task["gap_id"])
-        if logical in logical_ids or logical in carry_ids:
-            raise V4ValidationError(f"duplicate logical task/carry-forward identity: {logical}")
+        if logical in logical_ids:
+            raise V4ValidationError(f"duplicate logical task identity: {logical}")
         logical_ids.add(logical)
 
-        mission = missions.get(task["mission_id"])
-        if mission is None or mission["mission_revision"] != task["mission_revision"]:
-            raise V4ValidationError(f"task targets non-current mission: {logical}")
-        gap = _gap(mission, task["gap_id"])
-        if gap["gap_state"] != "OPEN":
-            raise V4ValidationError(f"task targets retired gap: {logical}")
+    carry_targets: set[tuple[str, str, str]] = set()
+    for mission in missions.values():
+        for target, carry in _carry_map(mission).items():
+            logical = (mission["mission_id"], mission["mission_revision"], target)
+            carry_targets.add(logical)
+            _validate_source_fact(mission, carry, migration_by_ref, task_by_id)
 
-        expected = {
-            "repository": gap["repository"],
-            "acceptance": gap["acceptance"],
-            "integration_policy": gap["integration_policy"],
-            "review_policy": gap["review_policy"],
-            "convergence_required": _convergence_required(gap),
-            "mission_contract_blob_sha": mission_shas[task["mission_id"]],
-            "repository_authority_blob_sha": repository_shas[gap["repository"]],
-        }
-        for field, expected_value in expected.items():
-            if task[field] != expected_value:
-                raise V4ValidationError(f"{field} drift: {logical}")
+    for task in queue["tasks"]:
+        logical = (task["mission_id"], task["mission_revision"], task["gap_id"])
+        mission = missions.get(task["mission_id"])
+        is_current = mission is not None and mission["mission_revision"] == task["mission_revision"]
+
+        if is_current:
+            if logical in carry_targets:
+                raise V4ValidationError(f"current task duplicates protected carry-forward: {logical}")
+            gap = _gap(mission, task["gap_id"])
+            if gap["gap_state"] != "OPEN":
+                raise V4ValidationError(f"task targets retired gap: {logical}")
+            expected = {
+                "repository": gap["repository"],
+                "acceptance": gap["acceptance"],
+                "integration_policy": gap["integration_policy"],
+                "review_policy": gap["review_policy"],
+                "convergence_required": _convergence_required(gap),
+                "mission_contract_blob_sha": mission_shas[task["mission_id"]],
+                "repository_authority_blob_sha": repository_shas[gap["repository"]],
+            }
+            for field, expected_value in expected.items():
+                if task[field] != expected_value:
+                    raise V4ValidationError(f"{field} drift: {logical}")
+        elif task["status"] not in {"DONE", "SUPERSEDED"}:
+            raise V4ValidationError(f"non-current task must be terminal historical fact: {logical}")
 
         status = task["status"]
         phase = task["phase"]
@@ -246,9 +303,32 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
         expires = _parse_time(lock["expires_at"])
         if int((expires - started).total_seconds()) != LEASE_SECONDS:
             raise V4ValidationError("execution_lock lease must be exactly 5400 seconds")
-        matches = [task for task in queue["tasks"] if task["task_id"] == lock["task_id"]]
-        if len(matches) != 1 or matches[0]["status"] != "ACTIVE":
+        task = task_by_id.get(lock["task_id"])
+        if task is None or task["status"] != "ACTIVE":
             raise V4ValidationError("execution_lock must reference exactly one ACTIVE task")
+
+
+def _validate_imported_v31_fact(fact: dict[str, Any]) -> None:
+    required = {
+        "protocol_id",
+        "fact",
+        "mission_id",
+        "mission_revision",
+        "gap_id",
+        "repository",
+        "source_task_id",
+        "source_result_ref",
+        "imported_at",
+        "principal_manual_relay_count",
+    }
+    if set(fact) != required:
+        raise V4ValidationError("unsupported V3.1 migration fact shape")
+    if fact["protocol_id"] != "CONTROL_V3_1_MIGRATION_FACT":
+        raise V4ValidationError("unsupported V3.1 migration fact protocol")
+    if fact["fact"] != "LEGACY_PROJECT_INTEGRATION_COMPLETED":
+        raise V4ValidationError("unsupported V3.1 migration fact kind")
+    if fact["principal_manual_relay_count"] != 0:
+        raise V4ValidationError("migration fact relay must remain zero")
 
 
 def forward_queue_v31_to_v4(
@@ -257,7 +337,7 @@ def forward_queue_v31_to_v4(
     *,
     schema_root: Path,
 ) -> dict[str, Any]:
-    """Deterministically transform only a quiescent V3.1 snapshot into V4 runtime data."""
+    """Transform only a quiescent V3.1 snapshot; never invent V4 carry-forward authority."""
     if old_queue.get("version") != "3.1" or old_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("forward transform requires V3.1 queue with relay 0")
 
@@ -265,28 +345,9 @@ def forward_queue_v31_to_v4(
         authority_root, schema_root=schema_root
     )
 
-    carry: list[dict[str, Any]] = []
-    carry_keys: set[tuple[str, str, str]] = set()
-    for fact in old_queue.get("migration_facts", []):
-        if fact.get("fact") != "LEGACY_PROJECT_INTEGRATION_COMPLETED":
-            raise V4ValidationError(f"unsupported V3.1 migration fact: {fact.get('fact')}")
-        mission = missions.get(fact.get("mission_id"))
-        if mission is None or mission.get("supersedes_revision") != fact.get("mission_revision"):
-            raise V4ValidationError("legacy completion does not map to exact V4 Mission supersession")
-        _gap(mission, fact["gap_id"])
-        logical = (mission["mission_id"], mission["mission_revision"], fact["gap_id"])
-        if logical in carry_keys:
-            raise V4ValidationError(f"duplicate legacy completion: {logical}")
-        carry_keys.add(logical)
-        carry.append(
-            {
-                "fact": "DONE_CARRY_FORWARD",
-                "mission_id": mission["mission_id"],
-                "target_mission_revision": mission["mission_revision"],
-                "gap_id": fact["gap_id"],
-                "source_ref": fact["source_result_ref"],
-            }
-        )
+    migration_facts = copy.deepcopy(old_queue.get("migration_facts", []))
+    for fact in migration_facts:
+        _validate_imported_v31_fact(fact)
 
     tasks: list[dict[str, Any]] = []
     for old_task in old_queue.get("tasks", []):
@@ -303,8 +364,7 @@ def forward_queue_v31_to_v4(
         if mission is None or mission.get("supersedes_revision") != old_task.get("mission_revision"):
             raise V4ValidationError("queued V3.1 task does not map to exact V4 Mission supersession")
         gap = _gap(mission, old_task["gap_id"])
-        logical = (mission["mission_id"], mission["mission_revision"], gap["gap_id"])
-        if logical in carry_keys or gap["gap_state"] != "OPEN":
+        if gap["gap_state"] != "OPEN" or gap["gap_id"] in _carry_map(mission):
             continue
 
         tasks.append(
@@ -335,7 +395,7 @@ def forward_queue_v31_to_v4(
         "version": "4.0",
         "principal_manual_relay_count": 0,
         "execution_lock": None,
-        "migration_facts": carry,
+        "migration_facts": migration_facts,
         "tasks": tasks,
     }
     validate_v4_queue(queue, authority_root, schema_root=schema_root)
@@ -399,7 +459,7 @@ def derive_rollback_v31_mission(
 
 
 def derive_empty_rollback_v31_queue(pre_cutover_queue: dict[str, Any]) -> dict[str, Any]:
-    """Return an empty V3.1 work queue; V3.1 TICK rematerializes OPEN rollback Mission work."""
+    """Return an empty V3.1 work queue; restored V3.1 TICK rematerializes OPEN work."""
     if pre_cutover_queue.get("version") != "3.1" or pre_cutover_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("rollback requires frozen V3.1 queue with relay 0")
     return {
