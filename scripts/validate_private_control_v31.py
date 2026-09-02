@@ -93,7 +93,7 @@ def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
 def git_bytes(root: Path, *args: str) -> bytes:
     try:
         result = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", *args],
             cwd=root,
             check=True,
             stdout=subprocess.PIPE,
