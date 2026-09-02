@@ -25,6 +25,7 @@ QUEUE_SCHEMA = Path("schemas/dispatch_queue_v4.schema.json")
 MISSION_DIR = Path("control/missions")
 REPOSITORY_DIR = Path("control/repository-authority")
 LEASE_SECONDS = 5400
+PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
 REVISION_RE = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})-r(?P<sequence>[1-9]\d*)$")
 
 
@@ -379,6 +380,12 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
             raise V4ValidationError(f"ACTIVE task has invalid phase: {logical}")
         if status in {"READY", "BLOCKED", "DONE", "SUPERSEDED"} and phase is not None:
             raise V4ValidationError(f"{status} task must have null phase: {logical}")
+        if task["blocker"] == PENDING_DRIFT_BLOCKER and not (
+            status == "ACTIVE" and phase == "REVIEW"
+        ):
+            raise V4ValidationError(
+                f"pending Mission drift marker requires ACTIVE/REVIEW: {logical}"
+            )
 
         candidate = task["candidate"]
         for record_field in ("last_review", "external_review"):
@@ -389,19 +396,17 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
                 if record["candidate_sha"] != candidate["candidate_sha"]:
                     raise V4ValidationError(f"{record_field} candidate drift: {logical}")
 
-    active_tasks = [task for task in queue["tasks"] if task["status"] == "ACTIVE"]
     lock = queue["execution_lock"]
     if lock is None:
-        if active_tasks:
-            raise V4ValidationError("ACTIVE task requires exactly one execution_lock")
         return
 
     started = _parse_time(lock["started_at"])
     expires = _parse_time(lock["expires_at"])
     if expires - started != timedelta(seconds=LEASE_SECONDS):
         raise V4ValidationError("execution_lock lease must be exactly 5400 seconds")
-    if len(active_tasks) != 1 or active_tasks[0]["task_id"] != lock["task_id"]:
-        raise V4ValidationError("execution_lock must match the complete ACTIVE task set")
+    holder = task_by_id.get(lock["task_id"])
+    if holder is None or holder["status"] != "ACTIVE":
+        raise V4ValidationError("execution_lock must target an ACTIVE task")
 
 
 def forward_queue_v31_to_v4(
