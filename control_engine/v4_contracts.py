@@ -204,18 +204,26 @@ def validate_authority_set(
     return mission_by_id, authority_by_repo
 
 
+def _review_matches_candidate(review: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+    return (
+        review.get("candidate_sha") == candidate.get("candidate_sha")
+        and review.get("expected_base_branch") == candidate.get("expected_base_branch")
+        and review.get("expected_base_sha") == candidate.get("expected_base_sha")
+    )
+
+
 def _task_review_passed(task: Mapping[str, Any]) -> bool:
     candidate = task.get("candidate")
     review = task.get("last_review")
     if not isinstance(candidate, Mapping) or not isinstance(review, Mapping):
         return False
-    if review.get("verdict") != "PASS" or review.get("candidate_sha") != candidate.get("candidate_sha"):
+    if review.get("verdict") != "PASS" or not _review_matches_candidate(review, candidate):
         return False
     if task.get("review_policy") == "EXTERNAL":
         external = task.get("external_review")
         if not isinstance(external, Mapping):
             return False
-        if external.get("status") != "PASS" or external.get("candidate_sha") != candidate.get("candidate_sha"):
+        if external.get("status") != "PASS" or not _review_matches_candidate(external, candidate):
             return False
     return True
 
@@ -253,10 +261,10 @@ def validate_queue_v4(queue: Mapping[str, Any]) -> None:
         external = task.get("external_review")
         if candidate is None and (review is not None or external is not None):
             raise V4ValidationError("review evidence exists without candidate")
-        if isinstance(review, Mapping) and review.get("candidate_sha") != candidate.get("candidate_sha"):
-            raise V4ValidationError("internal review candidate is stale")
-        if isinstance(external, Mapping) and external.get("candidate_sha") != candidate.get("candidate_sha"):
-            raise V4ValidationError("external review candidate is stale")
+        if isinstance(review, Mapping) and (not isinstance(candidate, Mapping) or not _review_matches_candidate(review, candidate)):
+            raise V4ValidationError("internal review candidate/base identity is stale")
+        if isinstance(external, Mapping) and (not isinstance(candidate, Mapping) or not _review_matches_candidate(external, candidate)):
+            raise V4ValidationError("external review candidate/base identity is stale")
 
         if task.get("blocker") == PENDING_DRIFT_BLOCKER:
             if task.get("status") != "ACTIVE" or task.get("phase") != "REVIEW":
@@ -409,13 +417,19 @@ def finish_passed_review_v4(
         raise V4ValidationError("passed review requires exact candidate")
     task["last_review"] = {
         "candidate_sha": candidate["candidate_sha"],
+        "expected_base_branch": candidate["expected_base_branch"],
+        "expected_base_sha": candidate["expected_base_sha"],
         "verdict": "PASS",
         "reviewed_at": _ts(now),
     }
     if task["review_policy"] == "EXTERNAL":
         external = task.get("external_review")
-        if not isinstance(external, Mapping) or external.get("status") != "PASS" or external.get("candidate_sha") != candidate["candidate_sha"]:
-            raise V4ValidationError("EXTERNAL review policy requires exact external PASS")
+        if (
+            not isinstance(external, Mapping)
+            or external.get("status") != "PASS"
+            or not _review_matches_candidate(external, candidate)
+        ):
+            raise V4ValidationError("EXTERNAL review policy requires exact candidate/base external PASS")
 
     if task["integration_policy"] == "HOLD_AFTER_PASS" or integration_enabled is False:
         task["status"] = "READY"
