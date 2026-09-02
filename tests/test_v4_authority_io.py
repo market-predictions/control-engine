@@ -12,6 +12,7 @@ from control_engine import kernel_v31
 from control_engine.v4_authority_io import (
     assert_v4_queue_bound_to_authority,
     forward_transform_v31_to_v4_from_git,
+    load_v31_missions_from_git,
     load_v4_authority_from_git,
 )
 from control_engine.v4_contracts import V4ValidationError
@@ -37,6 +38,28 @@ def _mission() -> dict:
             "review_policy": "INTERNAL",
         }],
         "authority_boundaries": ["no production authority"],
+        "principal_manual_relay_count": 0,
+    }
+
+
+def _v31_mission() -> dict:
+    return {
+        "protocol_id": "MISSION_CONTRACT_V3_1",
+        "mission_id": "M",
+        "mission_revision": "2026-09-01-r1",
+        "repository": "example/repo",
+        "desired_outcome": "bounded outcome",
+        "gaps": [{
+            "gap_id": "G1",
+            "gap_state": "OPEN",
+            "depends_on": [],
+            "repository": "example/repo",
+            "operation": "IMPLEMENTATION",
+            "acceptance": ["accept G1"],
+            "integration_policy": "HOLD_AFTER_PASS",
+        }],
+        "authority_boundaries": ["no production authority"],
+        "supersedes_revision": None,
         "principal_manual_relay_count": 0,
     }
 
@@ -185,3 +208,20 @@ def test_frozen_v4_mission_blob_set_drift_fails_closed(tmp_path: Path) -> None:
         assert_v4_queue_bound_to_authority(
             queue, bundle, expected_mission_blob_shas={"M": "0" * 40}
         )
+
+
+def test_frozen_v31_loader_rejects_mission_only_incomplete_authority(tmp_path: Path) -> None:
+    root = tmp_path / "frozen-v31"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "Control Test")
+    (root / "control/missions").mkdir(parents=True)
+    (root / "control/missions/M.mission.json").write_text(
+        json.dumps(_v31_mission(), indent=2) + "\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "incomplete frozen V3.1 authority")
+
+    with pytest.raises(V4ValidationError, match="complete frozen V3.1 authority|frozen V3.1 authority"):
+        load_v31_missions_from_git(root)
