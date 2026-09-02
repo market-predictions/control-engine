@@ -1,3 +1,4 @@
+import copy
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,8 +24,8 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
-def mission(revision="2026-09-02-r1", supersedes="2026-08-20-r2"):
-    return {
+def mission(revision="2026-09-02-r1", supersedes="2026-08-20-r2", carry=None):
+    result = {
         "protocol_id": "MISSION_CONTRACT_V4",
         "mission_id": "TEST_MISSION",
         "mission_revision": revision,
@@ -55,6 +56,20 @@ def mission(revision="2026-09-02-r1", supersedes="2026-08-20-r2"):
         "supersedes_revision": supersedes,
         "principal_manual_relay_count": 0,
     }
+    if carry is not None:
+        result["done_carry_forward"] = carry
+    return result
+
+
+def migration_carry(target="GAP_01", source="GAP_01"):
+    return {
+        "protocol_id": "DONE_CARRY_FORWARD",
+        "target_gap_id": target,
+        "source_mission_revision": "2026-08-20-r2",
+        "source_gap_id": source,
+        "source_fact_kind": "MIGRATION_FACT",
+        "source_fact_ref": "legacy-gap-01",
+    }
 
 
 def repository_authority():
@@ -66,9 +81,12 @@ def repository_authority():
     }
 
 
-def authority_root(tmp_path: Path) -> Path:
+def authority_root(tmp_path: Path, *, current_mission=None) -> Path:
     root = tmp_path / "authority"
-    write_json(root / "control/missions/TEST_MISSION.mission.json", mission())
+    write_json(
+        root / "control/missions/TEST_MISSION.mission.json",
+        current_mission or mission(),
+    )
     write_json(
         root / "control/repository-authority/example__project.json",
         repository_authority(),
@@ -83,12 +101,16 @@ def old_v31_queue(*, claimed=False):
         "principal_manual_relay_count": 0,
         "migration_facts": [
             {
+                "protocol_id": "CONTROL_V3_1_MIGRATION_FACT",
                 "fact": "LEGACY_PROJECT_INTEGRATION_COMPLETED",
                 "mission_id": "TEST_MISSION",
                 "mission_revision": "2026-08-20-r2",
                 "gap_id": "GAP_01",
                 "repository": "example/project",
+                "source_task_id": "legacy-gap-01",
                 "source_result_ref": "control/worker-results/legacy.json",
+                "imported_at": "2026-09-01T06:48:32Z",
+                "principal_manual_relay_count": 0,
             }
         ],
         "tasks": [
@@ -123,9 +145,10 @@ def test_authority_accepts_omitted_convergence_as_false(tmp_path):
     assert "convergence_required" not in missions["TEST_MISSION"]["gaps"][0]
 
 
-def test_forward_transform_preserves_completed_fact_and_maps_open_work(tmp_path):
+def test_forward_transform_preserves_source_facts_without_inventing_carry_authority(tmp_path):
+    old = old_v31_queue()
     root = authority_root(tmp_path)
-    result = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    result = forward_queue_v31_to_v4(old, root, schema_root=SCHEMA_ROOT)
 
     assert result.keys() == {
         "version",
@@ -136,15 +159,8 @@ def test_forward_transform_preserves_completed_fact_and_maps_open_work(tmp_path)
     }
     assert result["version"] == "4.0"
     assert result["execution_lock"] is None
-    assert result["migration_facts"] == [
-        {
-            "fact": "DONE_CARRY_FORWARD",
-            "mission_id": "TEST_MISSION",
-            "target_mission_revision": "2026-09-02-r1",
-            "gap_id": "GAP_01",
-            "source_ref": "control/worker-results/legacy.json",
-        }
-    ]
+    assert result["migration_facts"] == old["migration_facts"]
+    assert all(fact["fact"] != "DONE_CARRY_FORWARD" for fact in result["migration_facts"])
     assert len(result["tasks"]) == 1
     task = result["tasks"][0]
     assert task["gap_id"] == "GAP_02"
@@ -152,6 +168,33 @@ def test_forward_transform_preserves_completed_fact_and_maps_open_work(tmp_path)
     assert task["phase"] == "BUILD"
     assert task["convergence_required"] is True
     assert task["candidate"] is None
+
+
+def test_protected_mission_carry_forward_validates_against_imported_source_fact(tmp_path):
+    root = authority_root(tmp_path, current_mission=mission(carry=[migration_carry()]))
+    result = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    validate_v4_queue(result, root, schema_root=SCHEMA_ROOT)
+
+    current = json.loads((root / "control/missions/TEST_MISSION.mission.json").read_text())
+    assert current["done_carry_forward"] == [migration_carry()]
+    assert result["migration_facts"][0]["source_task_id"] == "legacy-gap-01"
+
+
+def test_carry_forward_missing_source_fact_fails_closed(tmp_path):
+    broken = migration_carry()
+    broken["source_fact_ref"] = "missing"
+    root = authority_root(tmp_path, current_mission=mission(carry=[broken]))
+    with pytest.raises(V4ValidationError, match="missing carry-forward migration fact"):
+        forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+
+
+def test_duplicate_carry_forward_target_is_rejected(tmp_path):
+    root = authority_root(
+        tmp_path,
+        current_mission=mission(carry=[migration_carry(), migration_carry()]),
+    )
+    with pytest.raises(V4ValidationError, match="duplicate carry-forward target"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
 
 
 def test_forward_transform_rejects_live_or_nonquiescent_v31_work(tmp_path):
@@ -197,6 +240,19 @@ def test_dependency_cycle_is_rejected(tmp_path):
     write_json(root / "control/missions/TEST_MISSION.mission.json", current)
     with pytest.raises(V4ValidationError, match="cycle"):
         load_v4_authority(root, schema_root=SCHEMA_ROOT)
+
+
+def test_historical_nonterminal_task_is_rejected(tmp_path):
+    root = authority_root(tmp_path)
+    queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    historical = copy.deepcopy(queue["tasks"][0])
+    historical["task_id"] = "historical-active"
+    historical["mission_revision"] = "2026-08-20-r2"
+    historical["status"] = "ACTIVE"
+    historical["phase"] = "BUILD"
+    queue["tasks"].append(historical)
+    with pytest.raises(V4ValidationError, match="terminal historical fact"):
+        validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
 
 
 def test_rollback_retires_only_proven_work_and_fabricates_no_v31_results():
