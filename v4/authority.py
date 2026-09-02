@@ -17,6 +17,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from control_engine import kernel_v31 as v31_kernel
 from control_engine import migration_v31 as v31_migration
 
 MISSION_SCHEMA = Path("schemas/mission_contract_v4.schema.json")
@@ -611,12 +612,18 @@ def derive_empty_rollback_v31_queue(pre_cutover_queue: dict[str, Any]) -> dict[s
     if pre_cutover_queue.get("version") != "3.1" or pre_cutover_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("rollback requires frozen V3.1 queue with relay 0")
     _validate_v31_migration_facts(pre_cutover_queue)
-    return {
+    queue = {
         "version": "3.1",
         "principal_manual_relay_count": 0,
         "migration_facts": copy.deepcopy(pre_cutover_queue.get("migration_facts", [])),
         "tasks": [],
     }
+    try:
+        v31_kernel.validate(queue)
+    except v31_kernel.KernelError as exc:
+        raise V4ValidationError("produced rollback V3.1 queue is invalid") from exc
+    _validate_v31_migration_facts(queue)
+    return queue
 
 
 def _build_parser() -> argparse.ArgumentParser:
