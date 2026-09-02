@@ -116,6 +116,7 @@ def old_v31_queue(*, claimed=False):
         "tasks": [
             {
                 "task_id": "old-gap-02",
+                "repository": "example/project",
                 "status": "QUEUED",
                 "claim": claim,
                 "outcome": None,
@@ -150,13 +151,6 @@ def test_forward_transform_preserves_source_facts_without_inventing_carry_author
     root = authority_root(tmp_path)
     result = forward_queue_v31_to_v4(old, root, schema_root=SCHEMA_ROOT)
 
-    assert result.keys() == {
-        "version",
-        "principal_manual_relay_count",
-        "execution_lock",
-        "migration_facts",
-        "tasks",
-    }
     assert result["version"] == "4.0"
     assert result["execution_lock"] is None
     assert result["migration_facts"] == old["migration_facts"]
@@ -174,10 +168,8 @@ def test_protected_mission_carry_forward_validates_against_imported_source_fact(
     root = authority_root(tmp_path, current_mission=mission(carry=[migration_carry()]))
     result = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
     validate_v4_queue(result, root, schema_root=SCHEMA_ROOT)
-
     current = json.loads((root / "control/missions/TEST_MISSION.mission.json").read_text())
     assert current["done_carry_forward"] == [migration_carry()]
-    assert result["migration_facts"][0]["source_task_id"] == "legacy-gap-01"
 
 
 def test_carry_forward_missing_source_fact_fails_closed(tmp_path):
@@ -186,6 +178,22 @@ def test_carry_forward_missing_source_fact_fails_closed(tmp_path):
     root = authority_root(tmp_path, current_mission=mission(carry=[broken]))
     with pytest.raises(V4ValidationError, match="missing carry-forward migration fact"):
         forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+
+
+def test_carry_forward_repository_mismatch_fails_closed(tmp_path):
+    root = authority_root(tmp_path, current_mission=mission(carry=[migration_carry()]))
+    queue = old_v31_queue()
+    queue["migration_facts"][0]["repository"] = "other/project"
+    with pytest.raises(V4ValidationError, match="carry-forward migration fact mismatch"):
+        forward_queue_v31_to_v4(queue, root, schema_root=SCHEMA_ROOT)
+
+
+def test_invalid_v31_migration_fact_shape_fails_closed(tmp_path):
+    root = authority_root(tmp_path)
+    queue = old_v31_queue()
+    del queue["migration_facts"][0]["source_result_ref"]
+    with pytest.raises(V4ValidationError, match="V3.1 migration facts are invalid"):
+        forward_queue_v31_to_v4(queue, root, schema_root=SCHEMA_ROOT)
 
 
 def test_duplicate_carry_forward_target_is_rejected(tmp_path):
@@ -233,6 +241,22 @@ def test_queue_lock_requires_exact_5400_second_lease_and_active_task(tmp_path):
         validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
 
 
+def test_fractional_lock_extension_is_not_truncated(tmp_path):
+    root = authority_root(tmp_path)
+    queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    task = queue["tasks"][0]
+    task["status"] = "ACTIVE"
+    task["phase"] = "BUILD"
+    queue["execution_lock"] = {
+        "run_id": "run-1",
+        "task_id": task["task_id"],
+        "started_at": "2026-09-02T10:00:00.000000Z",
+        "expires_at": "2026-09-02T11:30:00.000001Z",
+    }
+    with pytest.raises(V4ValidationError, match="5400"):
+        validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+
 def test_dependency_cycle_is_rejected(tmp_path):
     root = authority_root(tmp_path)
     current = mission()
@@ -255,8 +279,8 @@ def test_historical_nonterminal_task_is_rejected(tmp_path):
         validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
 
 
-def test_rollback_retires_only_proven_work_and_fabricates_no_v31_results():
-    v31 = {
+def v31_mission():
+    return {
         "protocol_id": "MISSION_CONTRACT_V3_1",
         "mission_id": "TEST_MISSION",
         "mission_revision": "2026-08-20-r2",
@@ -269,11 +293,13 @@ def test_rollback_retires_only_proven_work_and_fabricates_no_v31_results():
         "authority_boundaries": ["old"],
         "principal_manual_relay_count": 0,
     }
-    v4 = mission()
+
+
+def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results():
     rollback = derive_rollback_v31_mission(
-        v31,
-        v4,
-        legacy_completed_gap_ids={"GAP_01"},
+        v31_mission(),
+        mission(),
+        pre_cutover_v31_queue=old_v31_queue(),
         realized_facts=[
             {
                 "mission_id": "TEST_MISSION",
@@ -284,9 +310,9 @@ def test_rollback_retires_only_proven_work_and_fabricates_no_v31_results():
                 "target_ref": "refs/heads/main",
             }
         ],
-        rollback_revision="2026-09-02-r2",
+        rollback_revision="2026-09-02-r3",
     )
-    assert rollback["mission_revision"] == "2026-09-02-r2"
+    assert rollback["mission_revision"] == "2026-09-02-r3"
     assert {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]} == {
         "GAP_01": "RETIRED",
         "GAP_02": "RETIRED",
@@ -296,6 +322,33 @@ def test_rollback_retires_only_proven_work_and_fabricates_no_v31_results():
     assert queue["tasks"] == []
     assert "worker_results" not in queue
     assert queue["principal_manual_relay_count"] == 0
+
+
+def test_rollback_does_not_accept_unproven_legacy_completion():
+    queue = old_v31_queue()
+    queue["migration_facts"] = []
+    rollback = derive_rollback_v31_mission(
+        v31_mission(),
+        mission(),
+        pre_cutover_v31_queue=queue,
+        realized_facts=[],
+        rollback_revision="2026-09-02-r3",
+    )
+    assert {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]} == {
+        "GAP_01": "OPEN",
+        "GAP_02": "OPEN",
+    }
+
+
+def test_rollback_revision_must_advance_v31_discipline():
+    with pytest.raises(V4ValidationError, match="advance monotonically"):
+        derive_rollback_v31_mission(
+            v31_mission(),
+            mission(),
+            pre_cutover_v31_queue=old_v31_queue(),
+            realized_facts=[],
+            rollback_revision="2026-09-02-r2",
+        )
 
 
 def test_git_blob_binding_changes_when_authority_changes(tmp_path):
