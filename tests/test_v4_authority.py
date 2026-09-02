@@ -8,6 +8,7 @@ import pytest
 
 from v4.authority import (
     LEASE_SECONDS,
+    PENDING_DRIFT_BLOCKER,
     V4ValidationError,
     derive_empty_rollback_v31_queue,
     derive_rollback_v31_mission,
@@ -272,13 +273,41 @@ def test_queue_lock_requires_exact_5400_second_lease_and_active_task(tmp_path):
         validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
 
 
-def test_active_task_requires_lock_and_lock_targets_only_active_task(tmp_path):
+def test_unlocked_active_task_is_valid_and_lock_must_target_active_task(tmp_path):
     root = authority_root(tmp_path)
     queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
     task = queue["tasks"][0]
     task["status"] = "ACTIVE"
     task["phase"] = "BUILD"
-    with pytest.raises(V4ValidationError, match="ACTIVE task requires exactly one execution_lock"):
+
+    validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+    queue["execution_lock"] = {
+        "run_id": "run-1",
+        "task_id": task["task_id"],
+        "started_at": "2026-09-02T10:00:00Z",
+        "expires_at": "2026-09-02T11:30:00Z",
+    }
+    validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+    queue["execution_lock"]["task_id"] = "missing-task"
+    with pytest.raises(V4ValidationError, match="target an ACTIVE task"):
+        validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+
+def test_pending_drift_marker_is_durable_active_review_provenance(tmp_path):
+    root = authority_root(tmp_path)
+    queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    task = queue["tasks"][0]
+    task["status"] = "ACTIVE"
+    task["phase"] = "REVIEW"
+    task["blocker"] = PENDING_DRIFT_BLOCKER
+
+    validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+    task["status"] = "READY"
+    task["phase"] = None
+    with pytest.raises(V4ValidationError, match="requires ACTIVE/REVIEW"):
         validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
 
 
