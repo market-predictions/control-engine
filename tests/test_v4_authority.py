@@ -1,4 +1,5 @@
 import copy
+import inspect
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -345,21 +346,50 @@ def v31_mission():
     }
 
 
-def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results():
+def v4_queue_for_rollback(root: Path, *, old_queue=None, done_gap_02=False):
+    source = copy.deepcopy(old_queue if old_queue is not None else old_v31_queue())
+    queue = forward_queue_v31_to_v4(source, root, schema_root=SCHEMA_ROOT)
+    if done_gap_02:
+        task = queue["tasks"][0]
+        candidate_sha = "a" * 40
+        task["status"] = "DONE"
+        task["phase"] = None
+        task["candidate"] = {
+            "candidate_sha": candidate_sha,
+            "candidate_pr_number": 1,
+            "candidate_head_branch": "candidate",
+            "expected_base_branch": "main",
+            "expected_base_sha": "b" * 40,
+        }
+        task["last_review"] = {
+            "candidate_sha": candidate_sha,
+            "outcome": "PASS",
+            "reviewed_at": "2026-09-02T12:00:00Z",
+            "reviewer": "control-runner",
+        }
+        task["external_review"] = None
+        task["blocker"] = None
+    return queue
+
+
+def rollback_kwargs(root: Path, *, pre_cutover_queue=None, v4_queue=None):
+    old_queue = pre_cutover_queue if pre_cutover_queue is not None else old_v31_queue()
+    current_v4_queue = v4_queue if v4_queue is not None else v4_queue_for_rollback(root)
+    return {
+        "pre_cutover_v31_queue": old_queue,
+        "v4_queue": current_v4_queue,
+        "authority_root": root,
+        "schema_root": SCHEMA_ROOT,
+    }
+
+
+def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results(tmp_path):
+    root = authority_root(tmp_path)
+    v4_queue = v4_queue_for_rollback(root, done_gap_02=True)
     rollback = derive_rollback_v31_mission(
         v31_mission(),
         mission(),
-        pre_cutover_v31_queue=old_v31_queue(),
-        realized_facts=[
-            {
-                "mission_id": "TEST_MISSION",
-                "mission_revision": "2026-09-02-r3",
-                "gap_id": "GAP_02",
-                "repository": "example/project",
-                "candidate_sha": "a" * 40,
-                "target_ref": "refs/heads/main",
-            }
-        ],
+        **rollback_kwargs(root, v4_queue=v4_queue),
         rollback_revision="2026-09-02-r3",
     )
     assert rollback["mission_revision"] == "2026-09-02-r3"
@@ -374,12 +404,12 @@ def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results():
     assert queue["principal_manual_relay_count"] == 0
 
 
-def test_rollback_removes_proven_retired_prerequisites_from_open_dependencies():
+def test_rollback_removes_proven_retired_prerequisites_from_open_dependencies(tmp_path):
+    root = authority_root(tmp_path)
     rollback = derive_rollback_v31_mission(
         v31_mission(),
         mission(),
-        pre_cutover_v31_queue=old_v31_queue(),
-        realized_facts=[],
+        **rollback_kwargs(root),
         rollback_revision="2026-09-02-r3",
     )
     states = {gap["gap_id"]: gap for gap in rollback["gaps"]}
@@ -388,14 +418,15 @@ def test_rollback_removes_proven_retired_prerequisites_from_open_dependencies():
     assert states["GAP_02"]["depends_on"] == []
 
 
-def test_rollback_does_not_accept_unproven_legacy_completion():
+def test_rollback_does_not_accept_unproven_legacy_completion(tmp_path):
+    root = authority_root(tmp_path)
     queue = old_v31_queue()
     queue["migration_facts"] = []
+    current_v4_queue = v4_queue_for_rollback(root, old_queue=queue)
     rollback = derive_rollback_v31_mission(
         v31_mission(),
         mission(),
-        pre_cutover_v31_queue=queue,
-        realized_facts=[],
+        **rollback_kwargs(root, pre_cutover_queue=queue, v4_queue=current_v4_queue),
         rollback_revision="2026-09-02-r3",
     )
     assert {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]} == {
@@ -404,26 +435,54 @@ def test_rollback_does_not_accept_unproven_legacy_completion():
     }
 
 
-def test_rollback_revision_must_advance_v31_discipline():
+def test_rollback_has_no_free_form_realization_channel(tmp_path):
+    assert "realized_facts" not in inspect.signature(derive_rollback_v31_mission).parameters
+    root = authority_root(tmp_path)
+    rollback = derive_rollback_v31_mission(
+        v31_mission(),
+        mission(),
+        **rollback_kwargs(root),
+        rollback_revision="2026-09-02-r3",
+    )
+    states = {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]}
+    assert states["GAP_02"] == "OPEN"
+
+
+def test_rollback_done_task_requires_pass_review_evidence(tmp_path):
+    root = authority_root(tmp_path)
+    v4_queue = v4_queue_for_rollback(root)
+    task = v4_queue["tasks"][0]
+    task["status"] = "DONE"
+    task["phase"] = None
+    with pytest.raises(V4ValidationError, match="lacks reviewed candidate evidence"):
+        derive_rollback_v31_mission(
+            v31_mission(),
+            mission(),
+            **rollback_kwargs(root, v4_queue=v4_queue),
+            rollback_revision="2026-09-02-r3",
+        )
+
+
+def test_rollback_revision_must_advance_v31_discipline(tmp_path):
+    root = authority_root(tmp_path)
     with pytest.raises(V4ValidationError, match="advance monotonically"):
         derive_rollback_v31_mission(
             v31_mission(),
             mission(),
-            pre_cutover_v31_queue=old_v31_queue(),
-            realized_facts=[],
+            **rollback_kwargs(root),
             rollback_revision="2026-09-02-r2",
         )
 
 
-def test_rollback_rejects_legacy_completion_repository_mismatch():
+def test_rollback_rejects_legacy_completion_repository_mismatch(tmp_path):
+    root = authority_root(tmp_path)
     queue = old_v31_queue()
     queue["migration_facts"][0]["repository"] = "other/project"
     with pytest.raises(V4ValidationError, match="legacy completion repository mismatch"):
         derive_rollback_v31_mission(
             v31_mission(),
             mission(),
-            pre_cutover_v31_queue=queue,
-            realized_facts=[],
+            **rollback_kwargs(root, pre_cutover_queue=queue),
             rollback_revision="2026-09-02-r3",
         )
 
