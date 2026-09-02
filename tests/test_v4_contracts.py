@@ -88,7 +88,13 @@ def candidate() -> dict:
 
 
 def review_pass() -> dict:
-    return {"candidate_sha": CANDIDATE_SHA, "verdict": "PASS", "reviewed_at": "2026-09-02T18:00:00Z"}
+    return {
+        "candidate_sha": CANDIDATE_SHA,
+        "expected_base_branch": "main",
+        "expected_base_sha": BASE_SHA,
+        "verdict": "PASS",
+        "reviewed_at": "2026-09-02T18:00:00Z",
+    }
 
 
 def task_v4(
@@ -306,6 +312,18 @@ def test_auto_pass_with_integration_disabled_becomes_ready_and_clears_lock() -> 
     assert after["tasks"][0]["status"] == "READY"
     assert after["tasks"][0]["phase"] is None
     assert after["tasks"][0]["last_review"]["verdict"] == "PASS"
+    assert after["tasks"][0]["last_review"]["expected_base_branch"] == "main"
+    assert after["tasks"][0]["last_review"]["expected_base_sha"] == BASE_SHA
+
+
+def test_review_pass_is_invalidated_by_base_only_drift() -> None:
+    reviewed = task_v4(status="READY", phase=None, with_candidate=True, with_pass=True)
+    validate_queue_v4(queue_v4(reviewed))
+
+    changed_base = deepcopy(reviewed)
+    changed_base["candidate"]["expected_base_sha"] = "e" * 40
+    with pytest.raises(V4ValidationError, match="internal review candidate/base identity is stale"):
+        validate_queue_v4(queue_v4(changed_base))
 
 
 def test_ready_auto_requires_runtime_and_integration_for_integration_acquisition() -> None:
