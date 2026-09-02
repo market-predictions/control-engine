@@ -413,6 +413,28 @@ def v31_mission():
 
 def v31_authority_root(root: Path) -> Path:
     frozen = root.parent / "v31-authority"
+    write_json(
+        frozen / "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+        {
+            "protocol_id": "CONTROL_RUNTIME_AUTHORITY_V3_1",
+            "control_runtime_enabled": True,
+            "integration_enabled": True,
+            "semantic_claim_lease_seconds": LEASE_SECONDS,
+            "principal_manual_relay_count": 0,
+        },
+    )
+    write_json(
+        frozen / "control/repository-authority/example__project.json",
+        {
+            "protocol_id": "CONTROL_REPOSITORY_AUTHORITY_V3_1",
+            "repository": "example/project",
+            "integration_policy": "AUTO_AFTER_PASS",
+            "control_auto_profile": "CONTROL_AUTO_V1",
+            "integration_enabled": True,
+            "required_check_runs": [],
+            "principal_manual_relay_count": 0,
+        },
+    )
     write_json(frozen / "control/missions/TEST_MISSION.mission.json", v31_mission())
     return frozen
 
