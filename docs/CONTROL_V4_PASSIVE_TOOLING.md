@@ -7,6 +7,7 @@ This public tooling is deliberately passive. It provides:
 - JSON Schema Draft 2020-12 contracts for V4 Missions, repository authority and the canonical queue;
 - deterministic static/cross-record validation;
 - pure helpers that model atomic acquisition and the passed-review transition for regression proof;
+- pure safety guards that reject class-4 authority supersession while any persisted execution lock exists and reject integration when live candidate head/base facts differ from the frozen reviewed candidate;
 - a bounded V3.1 -> V4 transform that fails closed unless the fenced source has zero live claims and the reviewed queued-implementation shape;
 - a bounded fact-first pre-V4-80 rollback derivation that normalizes satisfied prerequisites and emits only V3.1-valid pre-existing terminal/result facts.
 
