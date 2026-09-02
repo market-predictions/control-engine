@@ -146,7 +146,7 @@ def active_task(task_id: str, *, gap_id: str = "GAP_01") -> dict:
     }
 
 
-def test_active_task_requires_exactly_one_matching_lock(tmp_path):
+def test_one_lock_can_coexist_with_unlocked_active_waits(tmp_path):
     current = mission(carry=migration_carry())
     current.pop("done_carry_forward")
     current["gaps"][0]["gap_state"] = "OPEN"
@@ -170,21 +170,24 @@ def test_active_task_requires_exactly_one_matching_lock(tmp_path):
     task["repository_authority_blob_sha"] = git_blob_sha(
         root / "control/repository-authority/example__secondary.json"
     )
-
-    with pytest.raises(V4ValidationError, match="ACTIVE task requires exactly one execution_lock"):
-        validate_v4_queue(empty_queue(tasks=[task]), root, schema_root=SCHEMA_ROOT)
-
     second = active_task("task-2", gap_id="GAP_02")
     second["mission_contract_blob_sha"] = task["mission_contract_blob_sha"]
     second["repository_authority_blob_sha"] = task["repository_authority_blob_sha"]
+
+    validate_v4_queue(empty_queue(tasks=[task, second]), root, schema_root=SCHEMA_ROOT)
+
     lock = {
         "run_id": "run-1",
         "task_id": "task-1",
         "started_at": "2026-09-02T10:00:00Z",
         "expires_at": "2026-09-02T11:30:00Z"
     }
-    with pytest.raises(V4ValidationError, match="complete ACTIVE task set"):
-        validate_v4_queue(empty_queue(tasks=[task, second], lock=lock), root, schema_root=SCHEMA_ROOT)
+    validate_v4_queue(empty_queue(tasks=[task, second], lock=lock), root, schema_root=SCHEMA_ROOT)
+
+    broken = copy.deepcopy(lock)
+    broken["task_id"] = "missing-task"
+    with pytest.raises(V4ValidationError, match="target an ACTIVE task"):
+        validate_v4_queue(empty_queue(tasks=[task, second], lock=broken), root, schema_root=SCHEMA_ROOT)
 
 
 def historical_done_task() -> dict:
