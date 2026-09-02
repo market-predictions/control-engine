@@ -152,6 +152,28 @@ def test_authority_accepts_omitted_convergence_as_false(tmp_path):
     assert "convergence_required" not in missions["TEST_MISSION"]["gaps"][0]
 
 
+def test_authority_rejects_duplicate_json_keys(tmp_path):
+    root = authority_root(tmp_path)
+    path = root / "control/missions/TEST_MISSION.mission.json"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        '  "mission_id": "TEST_MISSION",',
+        '  "mission_id": "TEST_MISSION",\n  "mission_id": "TEST_MISSION",',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(V4ValidationError, match="duplicate JSON key: mission_id"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
+
+
+def test_authority_rejects_invalid_github_repository_identity(tmp_path):
+    current = mission()
+    current["repository"] = "../project"
+    root = authority_root(tmp_path, current_mission=current)
+    with pytest.raises(V4ValidationError, match="repository identity invalid"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
+
+
 def test_forward_transform_preserves_source_facts_without_inventing_carry_authority(tmp_path):
     old = old_v31_queue()
     root = authority_root(tmp_path)
@@ -161,13 +183,22 @@ def test_forward_transform_preserves_source_facts_without_inventing_carry_author
     assert result["execution_lock"] is None
     assert result["migration_facts"] == old["migration_facts"]
     assert all(fact["fact"] != "DONE_CARRY_FORWARD" for fact in result["migration_facts"])
-    assert len(result["tasks"]) == 1
-    task = result["tasks"][0]
-    assert task["gap_id"] == "GAP_02"
-    assert task["status"] == "QUEUED"
-    assert task["phase"] == "BUILD"
-    assert task["convergence_required"] is True
-    assert task["candidate"] is None
+    assert len(result["tasks"]) == 2
+    tasks = {task["gap_id"]: task for task in result["tasks"]}
+    assert set(tasks) == {"GAP_01", "GAP_02"}
+    assert tasks["GAP_01"]["created_at"] == old["migration_facts"][0]["imported_at"]
+    assert tasks["GAP_02"]["status"] == "QUEUED"
+    assert tasks["GAP_02"]["phase"] == "BUILD"
+    assert tasks["GAP_02"]["convergence_required"] is True
+    assert tasks["GAP_02"]["candidate"] is None
+
+
+def test_forward_transform_fails_if_open_gap_has_no_frozen_source_evidence(tmp_path):
+    old = old_v31_queue()
+    old["migration_facts"] = []
+    root = authority_root(tmp_path)
+    with pytest.raises(V4ValidationError, match="cannot materialize current OPEN gap"):
+        forward_queue_v31_to_v4(old, root, schema_root=SCHEMA_ROOT)
 
 
 def test_protected_mission_carry_forward_validates_against_imported_source_fact(tmp_path):
@@ -379,7 +410,7 @@ def v4_queue_for_rollback(root: Path, *, old_queue=None, done_gap_02=False):
     source = copy.deepcopy(old_queue if old_queue is not None else old_v31_queue())
     queue = forward_queue_v31_to_v4(source, root, schema_root=SCHEMA_ROOT)
     if done_gap_02:
-        task = queue["tasks"][0]
+        task = next(task for task in queue["tasks"] if task["gap_id"] == "GAP_02")
         candidate_sha = "a" * 40
         task["status"] = "DONE"
         task["phase"] = None
@@ -451,6 +482,12 @@ def test_rollback_does_not_accept_unproven_legacy_completion(tmp_path):
     root = authority_root(tmp_path)
     queue = old_v31_queue()
     queue["migration_facts"] = []
+    gap_01_task = copy.deepcopy(queue["tasks"][0])
+    gap_01_task["task_id"] = "old-gap-01"
+    gap_01_task["gap_id"] = "GAP_01"
+    gap_01_task["created_at"] = "2026-09-01T11:00:00Z"
+    gap_01_task["updated_at"] = "2026-09-01T11:00:00Z"
+    queue["tasks"].append(gap_01_task)
     current_v4_queue = v4_queue_for_rollback(root, old_queue=queue)
     rollback = derive_rollback_v31_mission(
         v31_mission(),
@@ -480,7 +517,7 @@ def test_rollback_has_no_free_form_realization_channel(tmp_path):
 def test_rollback_done_task_requires_pass_review_evidence(tmp_path):
     root = authority_root(tmp_path)
     v4_queue = v4_queue_for_rollback(root)
-    task = v4_queue["tasks"][0]
+    task = next(task for task in v4_queue["tasks"] if task["gap_id"] == "GAP_02")
     task["status"] = "DONE"
     task["phase"] = None
     with pytest.raises(V4ValidationError, match="lacks reviewed candidate evidence"):
