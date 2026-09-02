@@ -29,6 +29,9 @@ jobs:
           python -m json.tool schemas/control_project_progress_event_v1.schema.json >/dev/null
           python -m json.tool schemas/mission_contract_v31.schema.json >/dev/null
           python -m json.tool schemas/repository_authority_v31.schema.json >/dev/null
+          python -m json.tool schemas/mission_contract_v4.schema.json >/dev/null
+          python -m json.tool schemas/repository_authority_v4.schema.json >/dev/null
+          python -m json.tool schemas/dispatch_queue_v4.schema.json >/dev/null
           python -m json.tool fixtures/dashboard_registry.json >/dev/null
           python -m json.tool fixtures/dashboard_events.json >/dev/null
       - name: Validate manifest paths and bundle coverage
@@ -52,9 +55,9 @@ jobs:
                   assert path in bundled, path
           print('CONTROL_ENGINE_MANIFEST_BINDING=PASS')
           PY
-      - name: Compile active engine and trusted validator
+      - name: Compile active engine and passive V4 tooling
         run: |
-          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py v4/__init__.py v4/authority.py
           bash -n scripts/github_app_preflight.sh
       - name: Verify immutable consumer bundle
         run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
