@@ -228,21 +228,33 @@ def historical_done_task() -> dict:
     }
 
 
-def test_v4_done_carry_forward_is_bound_to_protected_task_digest(tmp_path):
-    source = historical_done_task()
-    carry = {
+def v4_done_carry(source: dict) -> dict:
+    return {
         "protocol_id": "DONE_CARRY_FORWARD",
         "target_gap_id": "GAP_01",
-        "source_mission_revision": "2026-08-20-r2",
+        "source_mission_revision": source["mission_revision"],
         "source_gap_id": "GAP_01",
         "source_fact_kind": "V4_DONE",
         "source_fact_ref": source["task_id"],
         "source_task_sha256": canonical_sha256(source)
     }
-    root = authority_root(tmp_path, mission(carry=carry))
+
+
+def test_v4_done_carry_forward_is_bound_to_protected_task_digest(tmp_path):
+    source = historical_done_task()
+    root = authority_root(tmp_path, mission(carry=v4_done_carry(source)))
     validate_v4_queue(empty_queue(tasks=[source]), root, schema_root=SCHEMA_ROOT)
 
     reconstructed = copy.deepcopy(source)
     reconstructed["mission_contract_blob_sha"] = "f" * 40
     with pytest.raises(V4ValidationError, match="digest mismatch"):
         validate_v4_queue(empty_queue(tasks=[reconstructed]), root, schema_root=SCHEMA_ROOT)
+
+
+def test_v4_done_carry_forward_rejects_blocked_done_source(tmp_path):
+    source = historical_done_task()
+    source["blocker"] = "UNRESOLVED"
+    root = authority_root(tmp_path, mission(carry=v4_done_carry(source)))
+
+    with pytest.raises(V4ValidationError, match="retains blocker"):
+        validate_v4_queue(empty_queue(tasks=[source]), root, schema_root=SCHEMA_ROOT)
