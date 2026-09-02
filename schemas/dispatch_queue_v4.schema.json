@@ -76,13 +76,29 @@
     "migration_fact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fact", "mission_id", "target_mission_revision", "gap_id", "source_ref"],
+      "required": [
+        "protocol_id",
+        "fact",
+        "mission_id",
+        "mission_revision",
+        "gap_id",
+        "repository",
+        "source_task_id",
+        "source_result_ref",
+        "imported_at",
+        "principal_manual_relay_count"
+      ],
       "properties": {
-        "fact": {"const": "DONE_CARRY_FORWARD"},
+        "protocol_id": {"const": "CONTROL_V3_1_MIGRATION_FACT"},
+        "fact": {"const": "LEGACY_PROJECT_INTEGRATION_COMPLETED"},
         "mission_id": {"type": "string", "minLength": 1},
-        "target_mission_revision": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"},
+        "mission_revision": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"},
         "gap_id": {"type": "string", "minLength": 1},
-        "source_ref": {"type": "string", "minLength": 1}
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "source_task_id": {"type": "string", "minLength": 1},
+        "source_result_ref": {"type": "string", "minLength": 1},
+        "imported_at": {"type": "string", "minLength": 1},
+        "principal_manual_relay_count": {"const": 0}
       }
     },
     "task": {
