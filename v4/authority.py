@@ -19,11 +19,13 @@ from jsonschema import Draft202012Validator
 
 from control_engine import kernel_v31 as v31_kernel
 from control_engine import migration_v31 as v31_migration
+from scripts import validate_private_control_v31 as v31_authority
 
 MISSION_SCHEMA = Path("schemas/mission_contract_v4.schema.json")
 REPOSITORY_SCHEMA = Path("schemas/repository_authority_v4.schema.json")
 QUEUE_SCHEMA = Path("schemas/dispatch_queue_v4.schema.json")
 V31_MISSION_SCHEMA = Path("schemas/mission_contract_v31.schema.json")
+V31_REPOSITORY_SCHEMA = Path("schemas/repository_authority_v31.schema.json")
 MISSION_DIR = Path("control/missions")
 REPOSITORY_DIR = Path("control/repository-authority")
 LEASE_SECONDS = 5400
@@ -186,6 +188,51 @@ def _validate_v31_mission_semantics(mission: dict[str, Any]) -> None:
         visit(gap_id)
 
 
+def _load_trusted_v31_global_authority(authority_root: Path) -> dict[str, Any]:
+    path = authority_root / "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"
+    if not path.is_file():
+        raise V4ValidationError("frozen V3.1 global authority missing")
+    authority = load_json(path)
+    required_fields = {
+        "protocol_id",
+        "control_runtime_enabled",
+        "integration_enabled",
+        "semantic_claim_lease_seconds",
+        "principal_manual_relay_count",
+    }
+    if not isinstance(authority, dict) or set(authority) != required_fields:
+        raise V4ValidationError("frozen V3.1 global authority fields invalid")
+    if authority.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V3_1":
+        raise V4ValidationError("frozen V3.1 global authority protocol invalid")
+    if type(authority.get("principal_manual_relay_count")) is not int or authority["principal_manual_relay_count"] != 0:
+        raise V4ValidationError("frozen V3.1 global authority relay must be zero")
+    if authority.get("semantic_claim_lease_seconds") != LEASE_SECONDS:
+        raise V4ValidationError("frozen V3.1 global authority lease invalid")
+    if type(authority.get("control_runtime_enabled")) is not bool or type(authority.get("integration_enabled")) is not bool:
+        raise V4ValidationError("frozen V3.1 global authority switches must be booleans")
+    return authority
+
+
+def _load_trusted_v31_repository_authorities(
+    authority_root: Path,
+    *,
+    schema_root: Path,
+) -> dict[str, dict[str, Any]]:
+    schema = _load_schema(schema_root, V31_REPOSITORY_SCHEMA)
+    paths = sorted((authority_root / REPOSITORY_DIR).glob("*.json"))
+    if not paths:
+        raise V4ValidationError("frozen V3.1 repository authority missing")
+    authorities: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        authority = load_json(path)
+        _validate(authority, schema, "frozen V3.1 repository authority")
+        repository = _canonical_repository(authority["repository"])
+        if repository in authorities:
+            raise V4ValidationError("frozen V3.1 repository authority duplicated")
+        authorities[repository] = authority
+    return authorities
+
+
 def _load_trusted_v31_mission(
     authority_root: Path,
     mission_id: str,
@@ -200,6 +247,25 @@ def _load_trusted_v31_mission(
     if mission.get("mission_id") != mission_id:
         raise V4ValidationError("frozen V3.1 Mission identity mismatch")
     _validate_v31_mission_semantics(mission)
+
+    global_authority = _load_trusted_v31_global_authority(authority_root)
+    repository_authorities = _load_trusted_v31_repository_authorities(
+        authority_root, schema_root=schema_root
+    )
+    repository = _canonical_repository(mission["repository"])
+    repository_authority = repository_authorities.get(repository)
+    if repository_authority is None:
+        raise V4ValidationError("frozen V3.1 Mission repository authority missing")
+    for gap in mission["gaps"]:
+        try:
+            v31_authority.assert_gap_integration_authorized(
+                gap["integration_policy"],
+                repository_authority,
+                global_runtime_enabled=global_authority["control_runtime_enabled"],
+                global_integration_enabled=global_authority["integration_enabled"],
+            )
+        except v31_authority.ValidationError as exc:
+            raise V4ValidationError("frozen V3.1 gap integration policy exceeds authority") from exc
     return mission
 
 
