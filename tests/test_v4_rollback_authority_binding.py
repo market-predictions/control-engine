@@ -61,6 +61,28 @@ def v31_mission() -> dict:
     }
 
 
+def v31_global_authority(*, integration_enabled=False) -> dict:
+    return {
+        "protocol_id": "CONTROL_RUNTIME_AUTHORITY_V3_1",
+        "control_runtime_enabled": True,
+        "integration_enabled": integration_enabled,
+        "semantic_claim_lease_seconds": 5400,
+        "principal_manual_relay_count": 0,
+    }
+
+
+def v31_repository_authority(*, auto=False) -> dict:
+    return {
+        "protocol_id": "CONTROL_REPOSITORY_AUTHORITY_V3_1",
+        "repository": "example/project",
+        "integration_policy": "AUTO_AFTER_PASS" if auto else "HOLD_AFTER_PASS",
+        "control_auto_profile": "CONTROL_AUTO_V1" if auto else "NONE",
+        "integration_enabled": auto,
+        "required_check_runs": [],
+        "principal_manual_relay_count": 0,
+    }
+
+
 def authority_root(tmp_path: Path) -> Path:
     root = tmp_path / "authority"
     write_json(root / "control/missions/ROLLBACK_BINDING.mission.json", v4_mission())
@@ -76,11 +98,27 @@ def authority_root(tmp_path: Path) -> Path:
     return root
 
 
-def v31_authority_root(tmp_path: Path, *, current_mission=None) -> Path:
+def v31_authority_root(
+    tmp_path: Path,
+    *,
+    current_mission=None,
+    include_global=True,
+    global_integration_enabled=False,
+    repository_auto=False,
+) -> Path:
     root = tmp_path / "v31-authority"
     write_json(
         root / "control/missions/ROLLBACK_BINDING.mission.json",
         current_mission or v31_mission(),
+    )
+    if include_global:
+        write_json(
+            root / "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+            v31_global_authority(integration_enabled=global_integration_enabled),
+        )
+    write_json(
+        root / "control/repository-authority/example__project.json",
+        v31_repository_authority(auto=repository_auto),
     )
     return root
 
@@ -150,6 +188,42 @@ def test_rollback_rejects_schema_invalid_frozen_v31_authority(tmp_path):
     with pytest.raises(V4ValidationError, match="frozen V3.1 Mission"):
         derive_rollback_v31_mission(
             broken,
+            v4_mission(),
+            pre_cutover_v31_authority_root=frozen_root,
+            pre_cutover_v31_queue=empty_v31_queue(),
+            v4_queue=empty_v4_queue(),
+            authority_root=root,
+            schema_root=SCHEMA_ROOT,
+            rollback_revision="2026-09-02-r2",
+        )
+
+
+def test_rollback_rejects_missing_frozen_v31_global_authority(tmp_path):
+    root = authority_root(tmp_path)
+    frozen_root = v31_authority_root(tmp_path, include_global=False)
+
+    with pytest.raises(V4ValidationError, match="global authority missing"):
+        derive_rollback_v31_mission(
+            v31_mission(),
+            v4_mission(),
+            pre_cutover_v31_authority_root=frozen_root,
+            pre_cutover_v31_queue=empty_v31_queue(),
+            v4_queue=empty_v4_queue(),
+            authority_root=root,
+            schema_root=SCHEMA_ROOT,
+            rollback_revision="2026-09-02-r2",
+        )
+
+
+def test_rollback_rejects_v31_auto_gap_not_authorized_by_frozen_authority(tmp_path):
+    root = authority_root(tmp_path)
+    frozen = v31_mission()
+    frozen["gaps"][0]["integration_policy"] = "AUTO_AFTER_PASS"
+    frozen_root = v31_authority_root(tmp_path, current_mission=frozen)
+
+    with pytest.raises(V4ValidationError, match="integration policy exceeds authority"):
+        derive_rollback_v31_mission(
+            frozen,
             v4_mission(),
             pre_cutover_v31_authority_root=frozen_root,
             pre_cutover_v31_queue=empty_v31_queue(),
