@@ -133,9 +133,11 @@
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["candidate_sha", "verdict", "reviewed_at"],
+                "required": ["candidate_sha", "expected_base_branch", "expected_base_sha", "verdict", "reviewed_at"],
                 "properties": {
                   "candidate_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                  "expected_base_branch": {"type": "string", "minLength": 1},
+                  "expected_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                   "verdict": {"enum": ["PASS", "REPAIR_REQUIRED", "BLOCKED"]},
                   "reviewed_at": {"type": "string", "minLength": 1}
                 }
@@ -148,9 +150,11 @@
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["candidate_sha", "request_key", "status", "request_ref", "evidence_ref"],
+                "required": ["candidate_sha", "expected_base_branch", "expected_base_sha", "request_key", "status", "request_ref", "evidence_ref"],
                 "properties": {
                   "candidate_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                  "expected_base_branch": {"type": "string", "minLength": 1},
+                  "expected_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                   "request_key": {"type": "string", "minLength": 1},
                   "status": {"enum": ["REQUESTING", "PENDING", "PASS", "FAIL", "INDETERMINATE"]},
                   "request_ref": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
