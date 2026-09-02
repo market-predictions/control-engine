@@ -434,6 +434,8 @@ def v4_queue_for_rollback(root: Path, *, old_queue=None, done_gap_02=False):
         }
         task["last_review"] = {
             "candidate_sha": candidate_sha,
+            "expected_base_branch": "main",
+            "expected_base_sha": "b" * 40,
             "outcome": "PASS",
             "reviewed_at": "2026-09-02T12:00:00Z",
             "reviewer": "control-runner",
