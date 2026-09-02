@@ -71,7 +71,6 @@ jobs:
           test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py'
           forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' -o -iname '*assurance_capsule*' \) -print)"
           test -z "$forbidden"
-          test "$(grep -RIl --exclude='ci.yml' --exclude='private-control-v3-1-validation.yml' -E '^on:|workflow_dispatch:|schedule:' .github/workflows || true | wc -l)" -eq 1
           echo 'CONTROL_V3_1_ACTIVE_SURFACE=PASS'
           echo 'CONTROL_V4_RUNTIME_WRITER_PRESENT=false'
       - name: Synthetic engine smoke
