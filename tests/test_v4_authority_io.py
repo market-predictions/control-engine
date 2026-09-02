@@ -11,6 +11,7 @@ import pytest
 from control_engine import kernel_v31
 from control_engine.v4_authority_io import (
     assert_v4_queue_bound_to_authority,
+    derive_rollback_v31_from_git,
     forward_transform_v31_to_v4_from_git,
     load_v31_missions_from_git,
     load_v4_authority_from_git,
@@ -92,13 +93,13 @@ def _commit_authority(root: Path, mission: dict | str, authority: dict | None = 
     _git(root, "commit", "-m", "authority")
 
 
-def _repo(tmp_path: Path) -> Path:
-    root = tmp_path / "authority"
+def _repo(tmp_path: Path, name: str = "authority", mission: dict | None = None) -> Path:
+    root = tmp_path / name
     root.mkdir()
     _git(root, "init")
     _git(root, "config", "user.email", "test@example.invalid")
     _git(root, "config", "user.name", "Control Test")
-    _commit_authority(root, _mission())
+    _commit_authority(root, mission or _mission())
     return root
 
 
@@ -144,6 +145,23 @@ def test_loader_binds_exact_committed_git_blob_shas(tmp_path: Path) -> None:
     expected_authority = _git(root, "rev-parse", "HEAD:control/repository-authority/example__repo.json")
     assert bundle.mission_blob_shas == {"M": expected_mission}
     assert bundle.authority_blob_shas == {"example/repo": expected_authority}
+
+
+def test_loader_ignores_git_replacement_refs_for_authority_blobs(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    original_oid = _git(root, "rev-parse", "HEAD:control/missions/M.mission.json")
+
+    replacement = _mission()
+    replacement["desired_outcome"] = "replacement-ref content must not become authority"
+    replacement_path = root / "replacement-mission.json"
+    replacement_path.write_text(json.dumps(replacement, indent=2) + "\n", encoding="utf-8")
+    replacement_oid = _git(root, "hash-object", "-w", "replacement-mission.json")
+    _git(root, "replace", original_oid, replacement_oid)
+
+    assert "replacement-ref content" in _git(root, "cat-file", "blob", original_oid)
+    bundle = load_v4_authority_from_git(root)
+    assert bundle.mission_blob_shas == {"M": original_oid}
+    assert bundle.missions[0]["desired_outcome"] == "bounded outcome"
 
 
 def test_loader_rejects_ambiguous_duplicate_json_key(tmp_path: Path) -> None:
@@ -197,16 +215,62 @@ def test_queue_binding_rejects_caller_supplied_fake_authority_sha(tmp_path: Path
         assert_v4_queue_bound_to_authority(forged, bundle)
 
 
-def test_frozen_v4_mission_blob_set_drift_fails_closed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("task_id", "MISSION--M--2026-09-02-r2--OTHER", "identity differs"),
+        ("repository", "example/other", "repository differs"),
+        ("acceptance", ["weakened acceptance"], "acceptance differs"),
+        ("integration_policy", "AUTO_AFTER_PASS", "integration policy differs"),
+        ("review_policy", "EXTERNAL", "review policy differs"),
+        ("convergence_required", True, "convergence policy differs"),
+    ],
+)
+def test_queue_binding_rejects_mission_derived_task_field_drift(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
     root = _repo(tmp_path)
     bundle = load_v4_authority_from_git(root)
     queue = forward_transform_v31_to_v4_from_git(
         _v31_queue(), authority_root=root, transformed_at=NOW
     )
+    forged = deepcopy(queue)
+    forged["tasks"][0][field] = value
 
-    with pytest.raises(V4ValidationError, match="drifted from frozen cutover set"):
-        assert_v4_queue_bound_to_authority(
-            queue, bundle, expected_mission_blob_shas={"M": "0" * 40}
+    with pytest.raises(V4ValidationError, match=message):
+        assert_v4_queue_bound_to_authority(forged, bundle)
+
+
+def test_queue_binding_rejects_task_for_unknown_trusted_gap(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    bundle = load_v4_authority_from_git(root)
+    queue = forward_transform_v31_to_v4_from_git(
+        _v31_queue(), authority_root=root, transformed_at=NOW
+    )
+    forged = deepcopy(queue)
+    forged["tasks"][0]["gap_id"] = "G2"
+
+    with pytest.raises(V4ValidationError, match="gap does not resolve exactly"):
+        assert_v4_queue_bound_to_authority(forged, bundle)
+
+
+def test_rollback_derives_frozen_v4_mission_set_from_git_and_rejects_drift(tmp_path: Path) -> None:
+    frozen = _repo(tmp_path, "frozen-v4")
+    changed = _mission()
+    changed["desired_outcome"] = "post-cutover Mission drift"
+    current = _repo(tmp_path, "current-v4", changed)
+    current_queue = forward_transform_v31_to_v4_from_git(
+        _v31_queue(), authority_root=current, transformed_at=NOW
+    )
+
+    with pytest.raises(V4ValidationError, match="drifted from frozen cutover Git authority"):
+        derive_rollback_v31_from_git(
+            pre_v31_queue=_v31_queue(),
+            v4_queue=current_queue,
+            frozen_v31_authority_root=tmp_path / "unused-because-drift-fails-first",
+            frozen_v4_authority_root=frozen,
+            current_v4_authority_root=current,
+            rollback_revisions={"M": "2026-09-03-r3"},
         )
 
 
