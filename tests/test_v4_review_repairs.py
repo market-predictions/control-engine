@@ -59,7 +59,7 @@ def mission(*, carry: dict, revision: str = "2026-09-02-r3") -> dict:
         "gaps": [
             {
                 "gap_id": "GAP_01",
-                "gap_state": "OPEN",
+                "gap_state": "RETIRED",
                 "depends_on": [],
                 "repository": "example/secondary",
                 "acceptance": ["secondary repository work is proven"],
@@ -149,6 +149,7 @@ def active_task(task_id: str, *, gap_id: str = "GAP_01") -> dict:
 def test_active_task_requires_exactly_one_matching_lock(tmp_path):
     current = mission(carry=migration_carry())
     current.pop("done_carry_forward")
+    current["gaps"][0]["gap_state"] = "OPEN"
     current["gaps"].append(
         {
             "gap_id": "GAP_02",
@@ -162,8 +163,6 @@ def test_active_task_requires_exactly_one_matching_lock(tmp_path):
     )
     root = authority_root(tmp_path, current)
 
-    # Current-task authority hashes are intentionally refreshed from disk so the
-    # failure under test is exclusively the ACTIVE/lock invariant.
     from v4.authority import git_blob_sha
 
     task = active_task("task-1")
