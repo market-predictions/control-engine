@@ -89,6 +89,15 @@ def _revision_precedes(source: object, current: object) -> bool:
     return source_sequence < current_sequence and source_day <= current_day
 
 
+def _canonical_repository(value: object) -> str:
+    if not isinstance(value, str) or value.count("/") != 1:
+        raise V4ValidationError("repository identity invalid")
+    owner, repository = value.split("/", 1)
+    if not owner or not repository:
+        raise V4ValidationError("repository identity invalid")
+    return f"{owner.lower()}/{repository.lower()}"
+
+
 def _validate_v31_migration_facts(queue: dict[str, Any]) -> None:
     try:
         v31_migration.validate_migration_facts(queue)
@@ -215,6 +224,13 @@ def load_v4_authority(
         mission_id = mission["mission_id"]
         if mission_id in missions:
             raise V4ValidationError(f"duplicate mission_id: {mission_id}")
+        supersedes = mission.get("supersedes_revision")
+        if supersedes is not None and not _revision_precedes(
+            supersedes, mission["mission_revision"]
+        ):
+            raise V4ValidationError(
+                f"{mission_id}: Mission revision must advance monotonically"
+            )
         _validate_mission_graph(mission)
         missions[mission_id] = mission
         mission_shas[mission_id] = git_blob_sha(path)
@@ -222,17 +238,17 @@ def load_v4_authority(
     for path in repository_paths:
         authority = load_json(path)
         _validate(authority, repository_schema, str(path.relative_to(authority_root)))
-        repository = authority["repository"]
+        repository = _canonical_repository(authority["repository"])
         if repository in repositories:
             raise V4ValidationError(f"duplicate repository authority: {repository}")
         repositories[repository] = authority
         repository_shas[repository] = git_blob_sha(path)
 
     for mission in missions.values():
-        if mission["repository"] not in repositories:
+        if _canonical_repository(mission["repository"]) not in repositories:
             raise V4ValidationError(f"{mission['mission_id']}: missing repository authority")
         for gap in mission["gaps"]:
-            if gap["repository"] not in repositories:
+            if _canonical_repository(gap["repository"]) not in repositories:
                 raise V4ValidationError(
                     f"{mission['mission_id']}:{gap['gap_id']}: missing repository authority"
                 )
@@ -247,7 +263,9 @@ def _validate_source_fact(
     task_by_id: dict[str, dict[str, Any]],
 ) -> None:
     source_ref = carry["source_fact_ref"]
-    target_repository = _gap(mission, carry["target_gap_id"])["repository"]
+    target_repository = _canonical_repository(
+        _gap(mission, carry["target_gap_id"])["repository"]
+    )
     expected = (
         mission["mission_id"],
         carry["source_mission_revision"],
@@ -263,7 +281,7 @@ def _validate_source_fact(
             fact["mission_id"],
             fact["mission_revision"],
             fact["gap_id"],
-            fact["repository"],
+            _canonical_repository(fact["repository"]),
         )
         if actual != expected:
             raise V4ValidationError(f"carry-forward migration fact mismatch: {source_ref}")
@@ -278,7 +296,7 @@ def _validate_source_fact(
         task["mission_id"],
         task["mission_revision"],
         task["gap_id"],
-        task["repository"],
+        _canonical_repository(task["repository"]),
     )
     if actual != expected:
         raise V4ValidationError(f"carry-forward V4_DONE task mismatch: {source_ref}")
@@ -343,7 +361,9 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
                 "review_policy": gap["review_policy"],
                 "convergence_required": _convergence_required(gap),
                 "mission_contract_blob_sha": mission_shas[task["mission_id"]],
-                "repository_authority_blob_sha": repository_shas[gap["repository"]],
+                "repository_authority_blob_sha": repository_shas[
+                    _canonical_repository(gap["repository"])
+                ],
             }
             for field, expected_value in expected.items():
                 if task[field] != expected_value:
@@ -415,7 +435,9 @@ def forward_queue_v31_to_v4(
         if mission is None or mission.get("supersedes_revision") != old_task.get("mission_revision"):
             raise V4ValidationError("queued V3.1 task does not map to exact V4 Mission supersession")
         gap = _gap(mission, old_task["gap_id"])
-        if gap["repository"] != old_task.get("repository"):
+        if _canonical_repository(gap["repository"]) != _canonical_repository(
+            old_task.get("repository")
+        ):
             raise V4ValidationError("queued V3.1 task repository does not match V4 gap repository")
         if gap["gap_state"] != "OPEN":
             continue
@@ -426,7 +448,9 @@ def forward_queue_v31_to_v4(
                 "mission_id": mission["mission_id"],
                 "mission_revision": mission["mission_revision"],
                 "mission_contract_blob_sha": mission_shas[mission["mission_id"]],
-                "repository_authority_blob_sha": repository_shas[gap["repository"]],
+                "repository_authority_blob_sha": repository_shas[
+                    _canonical_repository(gap["repository"])
+                ],
                 "gap_id": gap["gap_id"],
                 "repository": gap["repository"],
                 "acceptance": copy.deepcopy(gap["acceptance"]),
@@ -466,7 +490,7 @@ def _validated_realized_gaps(
         if fact["mission_id"] != v4_mission["mission_id"] or fact["mission_revision"] != v4_mission["mission_revision"]:
             raise V4ValidationError("rollback realized fact targets wrong Mission revision")
         gap = _gap(v4_mission, fact["gap_id"])
-        if fact["repository"] != gap["repository"]:
+        if _canonical_repository(fact["repository"]) != _canonical_repository(gap["repository"]):
             raise V4ValidationError("rollback realized fact repository mismatch")
         if len(fact["candidate_sha"]) != 40 or any(c not in "0123456789abcdef" for c in fact["candidate_sha"]):
             raise V4ValidationError("rollback realized fact requires exact 40-char candidate SHA")
@@ -492,7 +516,9 @@ def _legacy_completed_gaps(
             expected_repository = source_gap.get(
                 "repository", pre_cutover_v31_mission["repository"]
             )
-            if fact["repository"] != expected_repository:
+            if _canonical_repository(fact["repository"]) != _canonical_repository(
+                expected_repository
+            ):
                 raise V4ValidationError("legacy completion repository mismatch")
             completed.add(fact["gap_id"])
     return completed
@@ -515,6 +541,10 @@ def derive_rollback_v31_mission(
         raise V4ValidationError("rollback Mission identity mismatch")
     if v4_mission.get("supersedes_revision") != pre_cutover_v31_mission.get("mission_revision"):
         raise V4ValidationError("V4 Mission is not based on frozen V3.1 revision")
+    if not _revision_precedes(
+        pre_cutover_v31_mission["mission_revision"], v4_mission["mission_revision"]
+    ):
+        raise V4ValidationError("V4 Mission revision must advance monotonically")
 
     prior_revision = pre_cutover_v31_mission["mission_revision"]
     prior_sequence, prior_day = _revision_key(prior_revision)
