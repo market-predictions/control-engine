@@ -24,7 +24,7 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
-def mission(revision="2026-09-02-r1", supersedes="2026-08-20-r2", carry=None):
+def mission(revision="2026-09-02-r3", supersedes="2026-08-20-r2", carry=None):
     result = {
         "protocol_id": "MISSION_CONTRACT_V4",
         "mission_id": "TEST_MISSION",
@@ -303,7 +303,7 @@ def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results():
         realized_facts=[
             {
                 "mission_id": "TEST_MISSION",
-                "mission_revision": "2026-09-02-r1",
+                "mission_revision": "2026-09-02-r3",
                 "gap_id": "GAP_02",
                 "repository": "example/project",
                 "candidate_sha": "a" * 40,
