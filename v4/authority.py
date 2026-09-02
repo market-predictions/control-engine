@@ -10,11 +10,14 @@ import argparse
 import copy
 import hashlib
 import json
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+
+from control_engine import migration_v31 as v31_migration
 
 MISSION_SCHEMA = Path("schemas/mission_contract_v4.schema.json")
 REPOSITORY_SCHEMA = Path("schemas/repository_authority_v4.schema.json")
@@ -22,6 +25,7 @@ QUEUE_SCHEMA = Path("schemas/dispatch_queue_v4.schema.json")
 MISSION_DIR = Path("control/missions")
 REPOSITORY_DIR = Path("control/repository-authority")
 LEASE_SECONDS = 5400
+REVISION_RE = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})-r(?P<sequence>[1-9]\d*)$")
 
 
 class V4ValidationError(ValueError):
@@ -54,6 +58,26 @@ def _parse_time(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise V4ValidationError(f"timestamp must be timezone-aware: {value}")
     return parsed.astimezone(timezone.utc)
+
+
+def _revision_key(value: object) -> tuple[int, date]:
+    if not isinstance(value, str):
+        raise V4ValidationError("Mission revision invalid")
+    match = REVISION_RE.fullmatch(value)
+    if match is None:
+        raise V4ValidationError("Mission revision invalid")
+    try:
+        day = date.fromisoformat(match.group("day"))
+    except ValueError as exc:
+        raise V4ValidationError("Mission revision invalid") from exc
+    return int(match.group("sequence")), day
+
+
+def _validate_v31_migration_facts(queue: dict[str, Any]) -> None:
+    try:
+        v31_migration.validate_migration_facts(queue)
+    except v31_migration.MigrationError as exc:
+        raise V4ValidationError("V3.1 migration facts are invalid") from exc
 
 
 def _load_schema(schema_root: Path, relative: Path) -> dict[str, Any]:
@@ -202,8 +226,14 @@ def _validate_source_fact(
             mission["mission_id"],
             carry["source_mission_revision"],
             carry["source_gap_id"],
+            mission["repository"],
         )
-        actual = (fact["mission_id"], fact["mission_revision"], fact["gap_id"])
+        actual = (
+            fact["mission_id"],
+            fact["mission_revision"],
+            fact["gap_id"],
+            fact["repository"],
+        )
         if actual != expected:
             raise V4ValidationError(f"carry-forward migration fact mismatch: {source_ref}")
         return
@@ -215,14 +245,21 @@ def _validate_source_fact(
         mission["mission_id"],
         carry["source_mission_revision"],
         carry["source_gap_id"],
+        mission["repository"],
     )
-    actual = (task["mission_id"], task["mission_revision"], task["gap_id"])
+    actual = (
+        task["mission_id"],
+        task["mission_revision"],
+        task["gap_id"],
+        task["repository"],
+    )
     if actual != expected:
         raise V4ValidationError(f"carry-forward V4_DONE task mismatch: {source_ref}")
 
 
 def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_root: Path) -> None:
     _validate(queue, _load_schema(schema_root, QUEUE_SCHEMA), "V4 queue")
+    _validate_v31_migration_facts(queue)
     missions, _, mission_shas, repository_shas = load_v4_authority(
         authority_root, schema_root=schema_root
     )
@@ -231,7 +268,7 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
     for fact in queue["migration_facts"]:
         ref = fact["source_task_id"]
         if ref in migration_by_ref:
-            raise V4ValidationError(f"duplicate migration fact identity: {ref}")
+            raise V4ValidationError(f"duplicate migration fact source identity: {ref}")
         migration_by_ref[ref] = fact
 
     task_by_id: dict[str, dict[str, Any]] = {}
@@ -301,34 +338,11 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
     if lock is not None:
         started = _parse_time(lock["started_at"])
         expires = _parse_time(lock["expires_at"])
-        if int((expires - started).total_seconds()) != LEASE_SECONDS:
+        if expires - started != timedelta(seconds=LEASE_SECONDS):
             raise V4ValidationError("execution_lock lease must be exactly 5400 seconds")
         task = task_by_id.get(lock["task_id"])
         if task is None or task["status"] != "ACTIVE":
             raise V4ValidationError("execution_lock must reference exactly one ACTIVE task")
-
-
-def _validate_imported_v31_fact(fact: dict[str, Any]) -> None:
-    required = {
-        "protocol_id",
-        "fact",
-        "mission_id",
-        "mission_revision",
-        "gap_id",
-        "repository",
-        "source_task_id",
-        "source_result_ref",
-        "imported_at",
-        "principal_manual_relay_count",
-    }
-    if set(fact) != required:
-        raise V4ValidationError("unsupported V3.1 migration fact shape")
-    if fact["protocol_id"] != "CONTROL_V3_1_MIGRATION_FACT":
-        raise V4ValidationError("unsupported V3.1 migration fact protocol")
-    if fact["fact"] != "LEGACY_PROJECT_INTEGRATION_COMPLETED":
-        raise V4ValidationError("unsupported V3.1 migration fact kind")
-    if fact["principal_manual_relay_count"] != 0:
-        raise V4ValidationError("migration fact relay must remain zero")
 
 
 def forward_queue_v31_to_v4(
@@ -340,14 +354,12 @@ def forward_queue_v31_to_v4(
     """Transform only a quiescent V3.1 snapshot; never invent V4 carry-forward authority."""
     if old_queue.get("version") != "3.1" or old_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("forward transform requires V3.1 queue with relay 0")
+    _validate_v31_migration_facts(old_queue)
 
     missions, _, mission_shas, repository_shas = load_v4_authority(
         authority_root, schema_root=schema_root
     )
-
     migration_facts = copy.deepcopy(old_queue.get("migration_facts", []))
-    for fact in migration_facts:
-        _validate_imported_v31_fact(fact)
 
     tasks: list[dict[str, Any]] = []
     for old_task in old_queue.get("tasks", []):
@@ -364,6 +376,8 @@ def forward_queue_v31_to_v4(
         if mission is None or mission.get("supersedes_revision") != old_task.get("mission_revision"):
             raise V4ValidationError("queued V3.1 task does not map to exact V4 Mission supersession")
         gap = _gap(mission, old_task["gap_id"])
+        if gap["repository"] != old_task.get("repository"):
+            raise V4ValidationError("queued V3.1 task repository does not match V4 gap repository")
         if gap["gap_state"] != "OPEN" or gap["gap_id"] in _carry_map(mission):
             continue
 
@@ -423,11 +437,28 @@ def _validated_realized_gaps(
     return realized
 
 
+def _legacy_completed_gaps(
+    pre_cutover_v31_queue: dict[str, Any], pre_cutover_v31_mission: dict[str, Any]
+) -> set[str]:
+    if pre_cutover_v31_queue.get("version") != "3.1" or pre_cutover_v31_queue.get("principal_manual_relay_count") != 0:
+        raise V4ValidationError("rollback requires frozen V3.1 queue with relay 0")
+    _validate_v31_migration_facts(pre_cutover_v31_queue)
+    completed: set[str] = set()
+    for fact in pre_cutover_v31_queue.get("migration_facts", []):
+        if (
+            fact["mission_id"] == pre_cutover_v31_mission["mission_id"]
+            and fact["mission_revision"] == pre_cutover_v31_mission["mission_revision"]
+            and fact["repository"] == pre_cutover_v31_mission["repository"]
+        ):
+            completed.add(fact["gap_id"])
+    return completed
+
+
 def derive_rollback_v31_mission(
     pre_cutover_v31_mission: dict[str, Any],
     v4_mission: dict[str, Any],
     *,
-    legacy_completed_gap_ids: set[str],
+    pre_cutover_v31_queue: dict[str, Any],
     realized_facts: list[dict[str, Any]],
     rollback_revision: str,
 ) -> dict[str, Any]:
@@ -441,7 +472,16 @@ def derive_rollback_v31_mission(
     if v4_mission.get("supersedes_revision") != pre_cutover_v31_mission.get("mission_revision"):
         raise V4ValidationError("V4 Mission is not based on frozen V3.1 revision")
 
+    prior_revision = pre_cutover_v31_mission["mission_revision"]
+    prior_sequence, prior_day = _revision_key(prior_revision)
+    rollback_sequence, rollback_day = _revision_key(rollback_revision)
+    if rollback_sequence <= prior_sequence or rollback_day < prior_day:
+        raise V4ValidationError("rollback Mission revision must advance monotonically")
+
     known = {gap["gap_id"] for gap in pre_cutover_v31_mission["gaps"]}
+    legacy_completed_gap_ids = _legacy_completed_gaps(
+        pre_cutover_v31_queue, pre_cutover_v31_mission
+    )
     if not legacy_completed_gap_ids <= known:
         raise V4ValidationError("legacy completion references unknown gap")
     realized = _validated_realized_gaps(v4_mission, realized_facts)
@@ -449,7 +489,6 @@ def derive_rollback_v31_mission(
         raise V4ValidationError("realized V4 work cannot map to frozen V3.1 Mission")
 
     rollback = copy.deepcopy(pre_cutover_v31_mission)
-    prior_revision = rollback["mission_revision"]
     rollback["mission_revision"] = rollback_revision
     rollback["supersedes_revision"] = prior_revision
     retired = legacy_completed_gap_ids | realized
@@ -462,6 +501,7 @@ def derive_empty_rollback_v31_queue(pre_cutover_queue: dict[str, Any]) -> dict[s
     """Return an empty V3.1 work queue; restored V3.1 TICK rematerializes OPEN work."""
     if pre_cutover_queue.get("version") != "3.1" or pre_cutover_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("rollback requires frozen V3.1 queue with relay 0")
+    _validate_v31_migration_facts(pre_cutover_queue)
     return {
         "version": "3.1",
         "principal_manual_relay_count": 0,
