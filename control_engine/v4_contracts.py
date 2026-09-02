@@ -18,7 +18,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError as JsonSchemaValidationError
 
-from control_engine import kernel_v31
+from control_engine import kernel_v31, migration_v31
 
 
 PUBLIC_ROOT = Path(__file__).resolve().parents[1]
@@ -368,7 +368,8 @@ def acquire_task_v4(
         task["status"] = "ACTIVE"
         task["phase"] = "BUILD"
     elif status == "ACTIVE":
-        pass
+        if task.get("phase") == "INTEGRATE" and integration_enabled is not True:
+            raise V4ValidationError("protected integration disabled: INTEGRATE reacquisition forbidden")
     elif status == "READY" and ready_drift_reconciliation:
         task["status"] = "ACTIVE"
         task["phase"] = "REVIEW"
@@ -632,7 +633,8 @@ def build_rollback_v31_queue(
     """
     try:
         kernel_v31.validate(pre_v31_queue)
-    except kernel_v31.KernelError as exc:
+        migration_v31.validate_migration_facts(pre_v31_queue)
+    except (kernel_v31.KernelError, migration_v31.MigrationError) as exc:
         raise V4ValidationError("pre-cutover V3.1 queue invalid") from exc
     validate_queue_v4(v4_queue)
     if v4_queue.get("execution_lock") is not None:
@@ -651,7 +653,8 @@ def build_rollback_v31_queue(
     }
     try:
         kernel_v31.validate(output)
-    except kernel_v31.KernelError as exc:
+        migration_v31.validate_migration_facts(output)
+    except (kernel_v31.KernelError, migration_v31.MigrationError) as exc:
         raise V4ValidationError("derived rollback queue is not V3.1-valid") from exc
     return output
 
