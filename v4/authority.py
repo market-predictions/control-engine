@@ -493,6 +493,11 @@ def _validated_realized_gaps(
 ) -> set[str]:
     """Derive realized work only from the validated canonical current V4 queue."""
     validate_v4_queue(v4_queue, authority_root, schema_root=schema_root)
+    missions, _, _, _ = load_v4_authority(authority_root, schema_root=schema_root)
+    authoritative_mission = missions.get(v4_mission.get("mission_id"))
+    if authoritative_mission != v4_mission:
+        raise V4ValidationError("rollback V4 Mission differs from trusted authority")
+
     realized: set[str] = set()
     for task in v4_queue["tasks"]:
         if (
