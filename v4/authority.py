@@ -130,7 +130,11 @@ def _carry_map(mission: dict[str, Any]) -> dict[str, dict[str, Any]]:
         target = carry["target_gap_id"]
         if target in result:
             raise V4ValidationError(f"{mission['mission_id']}: duplicate carry-forward target {target}")
-        _gap(mission, target)
+        target_gap = _gap(mission, target)
+        if target_gap["gap_state"] != "RETIRED":
+            raise V4ValidationError(
+                f"{mission['mission_id']}:{target}: carry-forward target must be RETIRED"
+            )
         if not _revision_precedes(carry["source_mission_revision"], mission["mission_revision"]):
             raise V4ValidationError(
                 f"{mission['mission_id']}:{target}: carry-forward source must be an older revision"
@@ -170,7 +174,16 @@ def _validate_mission_graph(mission: dict[str, Any]) -> None:
 
     for gap_id in sorted(gaps):
         visit(gap_id)
-    _carry_map(mission)
+
+    carry_by_target = _carry_map(mission)
+    for gap in gaps.values():
+        if gap["gap_state"] != "OPEN":
+            continue
+        for dependency in gap["depends_on"]:
+            if gaps[dependency]["gap_state"] == "RETIRED" and dependency not in carry_by_target:
+                raise V4ValidationError(
+                    f"{mission['mission_id']}:{gap['gap_id']}: RETIRED dependency {dependency} requires carry-forward"
+                )
 
 
 def load_v4_authority(
@@ -404,7 +417,7 @@ def forward_queue_v31_to_v4(
         gap = _gap(mission, old_task["gap_id"])
         if gap["repository"] != old_task.get("repository"):
             raise V4ValidationError("queued V3.1 task repository does not match V4 gap repository")
-        if gap["gap_state"] != "OPEN" or gap["gap_id"] in _carry_map(mission):
+        if gap["gap_state"] != "OPEN":
             continue
 
         tasks.append(
@@ -474,8 +487,13 @@ def _legacy_completed_gaps(
         if (
             fact["mission_id"] == pre_cutover_v31_mission["mission_id"]
             and fact["mission_revision"] == pre_cutover_v31_mission["mission_revision"]
-            and fact["repository"] == pre_cutover_v31_mission["repository"]
         ):
+            source_gap = _gap(pre_cutover_v31_mission, fact["gap_id"])
+            expected_repository = source_gap.get(
+                "repository", pre_cutover_v31_mission["repository"]
+            )
+            if fact["repository"] != expected_repository:
+                raise V4ValidationError("legacy completion repository mismatch")
             completed.add(fact["gap_id"])
     return completed
 
@@ -519,7 +537,10 @@ def derive_rollback_v31_mission(
     rollback["supersedes_revision"] = prior_revision
     retired = legacy_completed_gap_ids | realized
     for gap in rollback["gaps"]:
-        gap["gap_state"] = "RETIRED" if gap["gap_id"] in retired else "OPEN"
+        gap_id = gap["gap_id"]
+        gap["gap_state"] = "RETIRED" if gap_id in retired else "OPEN"
+        if gap_id not in retired and isinstance(gap.get("depends_on"), list):
+            gap["depends_on"] = [dependency for dependency in gap["depends_on"] if dependency not in retired]
     return rollback
 
 
