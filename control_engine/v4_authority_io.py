@@ -18,6 +18,7 @@ from control_engine.v4_contracts import (
     V4ValidationError,
     derive_rollback_v31,
     forward_transform_v31_to_v4,
+    v4_root_task_id,
     validate_authority_set,
     validate_mission_v4,
     validate_queue_v4,
@@ -65,7 +66,7 @@ def _strict_json(raw: bytes) -> dict[str, Any]:
 def _git(root: Path, *args: str) -> bytes:
     try:
         result = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", *args],
             cwd=root,
             check=True,
             stdout=subprocess.PIPE,
@@ -173,18 +174,22 @@ def load_v31_missions_from_git(authority_root: Path) -> tuple[dict[str, Any], ..
     return tuple(missions[mission_id] for mission_id in sorted(missions))
 
 
+def _require_frozen_v4_mission_set(
+    frozen_bundle: V4AuthorityBundle,
+    current_bundle: V4AuthorityBundle,
+) -> None:
+    if dict(current_bundle.mission_blob_shas) != dict(frozen_bundle.mission_blob_shas):
+        raise V4ValidationError("trusted V4 Mission blob set drifted from frozen cutover Git authority")
+
+
 def assert_v4_queue_bound_to_authority(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
-    *,
-    expected_mission_blob_shas: Mapping[str, str] | None = None,
 ) -> None:
-    """Prove runtime task authority fields bind the exact committed authority set."""
+    """Prove every Mission-derived runtime field binds exact committed authority."""
     validate_queue_v4(queue)
-    if expected_mission_blob_shas is not None and dict(bundle.mission_blob_shas) != dict(expected_mission_blob_shas):
-        raise V4ValidationError("trusted V4 Mission blob set drifted from frozen cutover set")
-
     mission_by_id = {mission["mission_id"]: mission for mission in bundle.missions}
+
     for task in queue["tasks"]:
         mission = mission_by_id.get(task["mission_id"])
         if mission is None:
@@ -193,9 +198,29 @@ def assert_v4_queue_bound_to_authority(
             raise V4ValidationError("V4 task Mission revision differs from trusted authority")
         if task["mission_contract_blob_sha"] != bundle.mission_blob_shas[task["mission_id"]]:
             raise V4ValidationError("V4 task Mission blob SHA differs from trusted Git authority")
+
+        gap_matches = [gap for gap in mission["gaps"] if gap["gap_id"] == task["gap_id"]]
+        if len(gap_matches) != 1:
+            raise V4ValidationError("V4 task gap does not resolve exactly in trusted Mission")
+        gap = gap_matches[0]
+        if gap["gap_state"] != "OPEN":
+            raise V4ValidationError("V4 task exists for non-materializable trusted Mission gap")
+
+        expected_task_id = v4_root_task_id(mission["mission_id"], mission["mission_revision"], gap["gap_id"])
+        if task["task_id"] != expected_task_id:
+            raise V4ValidationError("V4 task identity differs from trusted Mission-derived identity")
+        if task["repository"].lower() != gap["repository"].lower():
+            raise V4ValidationError("V4 task repository differs from trusted Mission gap")
+        if task["acceptance"] != gap["acceptance"]:
+            raise V4ValidationError("V4 task acceptance differs from trusted Mission gap")
+        if task["integration_policy"] != gap["integration_policy"]:
+            raise V4ValidationError("V4 task integration policy differs from trusted Mission gap")
+        if task["review_policy"] != gap["review_policy"]:
+            raise V4ValidationError("V4 task review policy differs from trusted Mission gap")
+        if task["convergence_required"] is not bool(gap.get("convergence_required", False)):
+            raise V4ValidationError("V4 task convergence policy differs from trusted Mission gap")
+
         repository = mission["repository"].lower()
-        if task["repository"].lower() != repository:
-            raise V4ValidationError("V4 task repository differs from trusted Mission")
         if task["repository_authority_blob_sha"] != bundle.authority_blob_shas.get(repository):
             raise V4ValidationError("V4 task repository authority SHA differs from trusted Git authority")
 
@@ -222,17 +247,16 @@ def derive_rollback_v31_from_git(
     pre_v31_queue: Mapping[str, Any],
     v4_queue: Mapping[str, Any],
     frozen_v31_authority_root: Path,
+    frozen_v4_authority_root: Path,
     current_v4_authority_root: Path,
-    expected_v4_mission_blob_shas: Mapping[str, str],
     rollback_revisions: Mapping[str, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, set[str]]]:
-    """Run bounded rollback only against exact frozen/current committed authority."""
-    bundle = load_v4_authority_from_git(current_v4_authority_root)
-    assert_v4_queue_bound_to_authority(
-        v4_queue,
-        bundle,
-        expected_mission_blob_shas=expected_v4_mission_blob_shas,
-    )
+    """Run bounded rollback against exact frozen/current committed Git authority."""
+    frozen_v4_bundle = load_v4_authority_from_git(frozen_v4_authority_root)
+    current_v4_bundle = load_v4_authority_from_git(current_v4_authority_root)
+    _require_frozen_v4_mission_set(frozen_v4_bundle, current_v4_bundle)
+    assert_v4_queue_bound_to_authority(v4_queue, current_v4_bundle)
+
     pre_cutover_missions: Sequence[Mapping[str, Any]] = load_v31_missions_from_git(frozen_v31_authority_root)
     return derive_rollback_v31(
         pre_v31_queue=pre_v31_queue,
