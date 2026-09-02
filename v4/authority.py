@@ -608,26 +608,41 @@ def _validated_realized_gaps(
 
 
 def _legacy_completed_gaps(
-    pre_cutover_v31_queue: dict[str, Any], pre_cutover_v31_mission: dict[str, Any]
+    pre_cutover_v31_queue: dict[str, Any],
+    pre_cutover_v31_mission: dict[str, Any],
+    v4_mission: dict[str, Any],
 ) -> set[str]:
+    """Reuse legacy completion only when current V4 authority explicitly carries it forward."""
     if pre_cutover_v31_queue.get("version") != "3.1" or pre_cutover_v31_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("rollback requires frozen V3.1 queue with relay 0")
     _validate_v31_migration_facts(pre_cutover_v31_queue)
+    facts_by_ref = {
+        fact["source_task_id"]: fact
+        for fact in pre_cutover_v31_queue.get("migration_facts", [])
+    }
     completed: set[str] = set()
-    for fact in pre_cutover_v31_queue.get("migration_facts", []):
-        if (
-            fact["mission_id"] == pre_cutover_v31_mission["mission_id"]
-            and fact["mission_revision"] == pre_cutover_v31_mission["mission_revision"]
-        ):
-            source_gap = _gap(pre_cutover_v31_mission, fact["gap_id"])
-            expected_repository = source_gap.get(
-                "repository", pre_cutover_v31_mission["repository"]
-            )
-            if _canonical_repository(fact["repository"]) != _canonical_repository(
-                expected_repository
-            ):
-                raise V4ValidationError("legacy completion repository mismatch")
-            completed.add(fact["gap_id"])
+    for target, carry in _carry_map(v4_mission).items():
+        if carry["source_fact_kind"] != "MIGRATION_FACT":
+            continue
+        fact = facts_by_ref.get(carry["source_fact_ref"])
+        if fact is None:
+            raise V4ValidationError("rollback carry-forward source missing from frozen V3.1 facts")
+        actual = (
+            fact["mission_id"],
+            fact["mission_revision"],
+            fact["gap_id"],
+            _canonical_repository(fact["repository"]),
+        )
+        expected = (
+            v4_mission["mission_id"],
+            carry["source_mission_revision"],
+            carry["source_gap_id"],
+            _canonical_repository(_gap(v4_mission, target)["repository"]),
+        )
+        if actual != expected:
+            raise V4ValidationError("rollback carry-forward source does not match frozen V3.1 fact")
+        _gap(pre_cutover_v31_mission, target)
+        completed.add(target)
     return completed
 
 
@@ -662,17 +677,17 @@ def derive_rollback_v31_mission(
         raise V4ValidationError("rollback Mission revision must advance monotonically")
 
     known = {gap["gap_id"] for gap in pre_cutover_v31_mission["gaps"]}
-    legacy_completed_gap_ids = _legacy_completed_gaps(
-        pre_cutover_v31_queue, pre_cutover_v31_mission
-    )
-    if not legacy_completed_gap_ids <= known:
-        raise V4ValidationError("legacy completion references unknown gap")
     realized = _validated_realized_gaps(
         v4_mission,
         v4_queue,
         authority_root=authority_root,
         schema_root=schema_root,
     )
+    legacy_completed_gap_ids = _legacy_completed_gaps(
+        pre_cutover_v31_queue, pre_cutover_v31_mission, v4_mission
+    )
+    if not legacy_completed_gap_ids <= known:
+        raise V4ValidationError("legacy completion references unknown gap")
     if not realized <= known:
         raise V4ValidationError("realized V4 work cannot map to frozen V3.1 Mission")
 
