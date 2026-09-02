@@ -28,14 +28,28 @@ REPOSITORY_DIR = Path("control/repository-authority")
 LEASE_SECONDS = 5400
 PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
 REVISION_RE = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})-r(?P<sequence>[1-9]\d*)$")
+GITHUB_OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 
 
 class V4ValidationError(ValueError):
     """Raised when V4 authority or runtime data fails closed validation."""
 
 
+def _reject_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise V4ValidationError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_duplicate_object_pairs,
+    )
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -95,7 +109,12 @@ def _canonical_repository(value: object) -> str:
     if not isinstance(value, str) or value.count("/") != 1:
         raise V4ValidationError("repository identity invalid")
     owner, repository = value.split("/", 1)
-    if not owner or not repository:
+    if (
+        GITHUB_OWNER_RE.fullmatch(owner) is None
+        or "--" in owner
+        or GITHUB_REPOSITORY_RE.fullmatch(repository) is None
+        or repository in {".", ".."}
+    ):
         raise V4ValidationError("repository identity invalid")
     return f"{owner.lower()}/{repository.lower()}"
 
@@ -473,6 +492,68 @@ def forward_queue_v31_to_v4(
                 "updated_at": old_task["updated_at"],
             }
         )
+
+    produced = {
+        (task["mission_id"], task["mission_revision"], task["gap_id"])
+        for task in tasks
+    }
+    for mission_id in sorted(missions):
+        mission = missions[mission_id]
+        for gap in mission["gaps"]:
+            if gap["gap_state"] != "OPEN":
+                continue
+            logical = (mission_id, mission["mission_revision"], gap["gap_id"])
+            if logical in produced:
+                continue
+            matching_facts = [
+                fact
+                for fact in migration_facts
+                if fact["mission_id"] == mission_id
+                and fact["mission_revision"] == mission.get("supersedes_revision")
+                and fact["gap_id"] == gap["gap_id"]
+                and _canonical_repository(fact["repository"])
+                == _canonical_repository(gap["repository"])
+            ]
+            if len(matching_facts) != 1:
+                raise V4ValidationError(
+                    f"forward transform cannot materialize current OPEN gap from frozen V3.1 evidence: {logical}"
+                )
+            source_fact = matching_facts[0]
+            tasks.append(
+                {
+                    "task_id": f"MISSION--{mission_id}--{mission['mission_revision']}--{gap['gap_id']}",
+                    "mission_id": mission_id,
+                    "mission_revision": mission["mission_revision"],
+                    "mission_contract_blob_sha": mission_shas[mission_id],
+                    "repository_authority_blob_sha": repository_shas[
+                        _canonical_repository(gap["repository"])
+                    ],
+                    "gap_id": gap["gap_id"],
+                    "repository": gap["repository"],
+                    "acceptance": copy.deepcopy(gap["acceptance"]),
+                    "integration_policy": gap["integration_policy"],
+                    "review_policy": gap["review_policy"],
+                    "convergence_required": _convergence_required(gap),
+                    "status": "QUEUED",
+                    "phase": "BUILD",
+                    "candidate": None,
+                    "last_review": None,
+                    "external_review": None,
+                    "blocker": None,
+                    "created_at": source_fact["imported_at"],
+                    "updated_at": source_fact["imported_at"],
+                }
+            )
+            produced.add(logical)
+
+    expected = {
+        (mission_id, mission["mission_revision"], gap["gap_id"])
+        for mission_id, mission in missions.items()
+        for gap in mission["gaps"]
+        if gap["gap_state"] == "OPEN"
+    }
+    if produced != expected:
+        raise V4ValidationError("forward transform must represent every current OPEN gap exactly once")
 
     queue = {
         "version": "4.0",
