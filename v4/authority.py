@@ -480,23 +480,38 @@ def forward_queue_v31_to_v4(
 
 
 def _validated_realized_gaps(
-    v4_mission: dict[str, Any], realized_facts: list[dict[str, Any]]
+    v4_mission: dict[str, Any],
+    v4_queue: dict[str, Any],
+    *,
+    authority_root: Path,
+    schema_root: Path,
 ) -> set[str]:
-    required = {"mission_id", "mission_revision", "gap_id", "repository", "candidate_sha", "target_ref"}
+    """Derive realized work only from the validated canonical current V4 queue."""
+    validate_v4_queue(v4_queue, authority_root, schema_root=schema_root)
     realized: set[str] = set()
-    for fact in realized_facts:
-        if set(fact) != required:
-            raise V4ValidationError("rollback realized fact has unexpected shape")
-        if fact["mission_id"] != v4_mission["mission_id"] or fact["mission_revision"] != v4_mission["mission_revision"]:
-            raise V4ValidationError("rollback realized fact targets wrong Mission revision")
-        gap = _gap(v4_mission, fact["gap_id"])
-        if _canonical_repository(fact["repository"]) != _canonical_repository(gap["repository"]):
-            raise V4ValidationError("rollback realized fact repository mismatch")
-        if len(fact["candidate_sha"]) != 40 or any(c not in "0123456789abcdef" for c in fact["candidate_sha"]):
-            raise V4ValidationError("rollback realized fact requires exact 40-char candidate SHA")
-        if not fact["target_ref"]:
-            raise V4ValidationError("rollback realized fact requires target_ref")
-        realized.add(fact["gap_id"])
+    for task in v4_queue["tasks"]:
+        if (
+            task["mission_id"] != v4_mission["mission_id"]
+            or task["mission_revision"] != v4_mission["mission_revision"]
+            or task["status"] != "DONE"
+        ):
+            continue
+        gap = _gap(v4_mission, task["gap_id"])
+        if _canonical_repository(task["repository"]) != _canonical_repository(gap["repository"]):
+            raise V4ValidationError("rollback DONE task repository mismatch")
+        candidate = task["candidate"]
+        review = task["last_review"]
+        if candidate is None or review is None:
+            raise V4ValidationError("rollback DONE task lacks reviewed candidate evidence")
+        if review.get("outcome") != "PASS":
+            raise V4ValidationError("rollback DONE task review is not PASS")
+        if task["review_policy"] == "EXTERNAL":
+            external = task["external_review"]
+            if external is None or external.get("status") != "PASS":
+                raise V4ValidationError("rollback DONE task external review is not PASS")
+        if task["blocker"] is not None:
+            raise V4ValidationError("rollback DONE task cannot retain blocker")
+        realized.add(task["gap_id"])
     return realized
 
 
@@ -529,7 +544,9 @@ def derive_rollback_v31_mission(
     v4_mission: dict[str, Any],
     *,
     pre_cutover_v31_queue: dict[str, Any],
-    realized_facts: list[dict[str, Any]],
+    v4_queue: dict[str, Any],
+    authority_root: Path,
+    schema_root: Path,
     rollback_revision: str,
 ) -> dict[str, Any]:
     """Create a governed V3.1 rollback Mission without fabricating V3.1 results."""
@@ -558,7 +575,12 @@ def derive_rollback_v31_mission(
     )
     if not legacy_completed_gap_ids <= known:
         raise V4ValidationError("legacy completion references unknown gap")
-    realized = _validated_realized_gaps(v4_mission, realized_facts)
+    realized = _validated_realized_gaps(
+        v4_mission,
+        v4_queue,
+        authority_root=authority_root,
+        schema_root=schema_root,
+    )
     if not realized <= known:
         raise V4ValidationError("realized V4 work cannot map to frozen V3.1 Mission")
 
