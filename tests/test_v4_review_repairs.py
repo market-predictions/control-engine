@@ -122,15 +122,15 @@ def test_carry_forward_rejects_future_or_nonmonotone_source_revision(tmp_path):
         validate_v4_queue(empty_queue(), root, schema_root=SCHEMA_ROOT)
 
 
-def active_task(task_id: str, repository: str = "example/secondary") -> dict:
+def active_task(task_id: str, *, gap_id: str = "GAP_01") -> dict:
     return {
         "task_id": task_id,
         "mission_id": "TEST_MULTI",
         "mission_revision": "2026-09-02-r3",
         "mission_contract_blob_sha": "1" * 40,
         "repository_authority_blob_sha": "2" * 40,
-        "gap_id": "GAP_01",
-        "repository": repository,
+        "gap_id": gap_id,
+        "repository": "example/secondary",
         "acceptance": ["secondary repository work is proven"],
         "integration_policy": "HOLD_AFTER_PASS",
         "review_policy": "INTERNAL",
@@ -149,6 +149,17 @@ def active_task(task_id: str, repository: str = "example/secondary") -> dict:
 def test_active_task_requires_exactly_one_matching_lock(tmp_path):
     current = mission(carry=migration_carry())
     current.pop("done_carry_forward")
+    current["gaps"].append(
+        {
+            "gap_id": "GAP_02",
+            "gap_state": "OPEN",
+            "depends_on": [],
+            "repository": "example/secondary",
+            "acceptance": ["secondary repository work is proven"],
+            "integration_policy": "HOLD_AFTER_PASS",
+            "review_policy": "INTERNAL"
+        }
+    )
     root = authority_root(tmp_path, current)
 
     # Current-task authority hashes are intentionally refreshed from disk so the
@@ -164,8 +175,9 @@ def test_active_task_requires_exactly_one_matching_lock(tmp_path):
     with pytest.raises(V4ValidationError, match="ACTIVE task requires exactly one execution_lock"):
         validate_v4_queue(empty_queue(tasks=[task]), root, schema_root=SCHEMA_ROOT)
 
-    second = copy.deepcopy(task)
-    second["task_id"] = "task-2"
+    second = active_task("task-2", gap_id="GAP_02")
+    second["mission_contract_blob_sha"] = task["mission_contract_blob_sha"]
+    second["repository_authority_blob_sha"] = task["repository_authority_blob_sha"]
     lock = {
         "run_id": "run-1",
         "task_id": "task-1",
