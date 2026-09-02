@@ -443,7 +443,7 @@ def rollback_kwargs(root: Path, *, pre_cutover_queue=None, v4_queue=None):
     }
 
 
-def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results(tmp_path):
+def test_rollback_keeps_v4_reopened_gap_open_and_retires_only_realized_v4_work(tmp_path):
     root = authority_root(tmp_path)
     v4_queue = v4_queue_for_rollback(root, done_gap_02=True)
     rollback = derive_rollback_v31_mission(
@@ -454,7 +454,7 @@ def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results(tm
     )
     assert rollback["mission_revision"] == "2026-09-02-r3"
     assert {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]} == {
-        "GAP_01": "RETIRED",
+        "GAP_01": "OPEN",
         "GAP_02": "RETIRED",
     }
 
@@ -464,11 +464,12 @@ def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results(tm
     assert queue["principal_manual_relay_count"] == 0
 
 
-def test_rollback_removes_proven_retired_prerequisites_from_open_dependencies(tmp_path):
-    root = authority_root(tmp_path)
+def test_rollback_removes_only_protected_carried_prerequisites_from_open_dependencies(tmp_path):
+    current = mission(carry=[migration_carry()])
+    root = authority_root(tmp_path, current_mission=current)
     rollback = derive_rollback_v31_mission(
         v31_mission(),
-        mission(),
+        current,
         **rollback_kwargs(root),
         rollback_revision="2026-09-02-r3",
     )
@@ -501,6 +502,21 @@ def test_rollback_does_not_accept_unproven_legacy_completion(tmp_path):
     }
 
 
+def test_rollback_protected_legacy_carry_requires_exact_frozen_source_fact(tmp_path):
+    current = mission(carry=[migration_carry()])
+    root = authority_root(tmp_path, current_mission=current)
+    valid_v4_queue = v4_queue_for_rollback(root)
+    frozen = old_v31_queue()
+    frozen["migration_facts"] = []
+    with pytest.raises(V4ValidationError, match="source missing from frozen V3.1 facts"):
+        derive_rollback_v31_mission(
+            v31_mission(),
+            current,
+            **rollback_kwargs(root, pre_cutover_queue=frozen, v4_queue=valid_v4_queue),
+            rollback_revision="2026-09-02-r3",
+        )
+
+
 def test_rollback_has_no_free_form_realization_channel(tmp_path):
     assert "realized_facts" not in inspect.signature(derive_rollback_v31_mission).parameters
     root = authority_root(tmp_path)
@@ -511,6 +527,7 @@ def test_rollback_has_no_free_form_realization_channel(tmp_path):
         rollback_revision="2026-09-02-r3",
     )
     states = {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]}
+    assert states["GAP_01"] == "OPEN"
     assert states["GAP_02"] == "OPEN"
 
 
@@ -537,19 +554,6 @@ def test_rollback_revision_must_advance_v31_discipline(tmp_path):
             mission(),
             **rollback_kwargs(root),
             rollback_revision="2026-09-02-r2",
-        )
-
-
-def test_rollback_rejects_legacy_completion_repository_mismatch(tmp_path):
-    root = authority_root(tmp_path)
-    queue = old_v31_queue()
-    queue["migration_facts"][0]["repository"] = "other/project"
-    with pytest.raises(V4ValidationError, match="legacy completion repository mismatch"):
-        derive_rollback_v31_mission(
-            v31_mission(),
-            mission(),
-            **rollback_kwargs(root, pre_cutover_queue=queue),
-            rollback_revision="2026-09-02-r3",
         )
 
 
