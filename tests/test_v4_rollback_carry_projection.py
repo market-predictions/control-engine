@@ -69,7 +69,7 @@ def v4_mission(carry: dict) -> dict:
     return {
         "protocol_id": "MISSION_CONTRACT_V4",
         "mission_id": "ROLLBACK_CARRY",
-        "mission_revision": "2026-09-02-r3",
+        "mission_revision": "2026-09-02-r4",
         "repository": "example/project",
         "desired_outcome": "Preserve exact completed work across rollback.",
         "gaps": [
@@ -139,7 +139,7 @@ def historical_done_task() -> dict:
     return {
         "task_id": "historical-old-gap",
         "mission_id": "ROLLBACK_CARRY",
-        "mission_revision": "2026-08-20-r2",
+        "mission_revision": "2026-09-01-r3",
         "mission_contract_blob_sha": "1" * 40,
         "repository_authority_blob_sha": "2" * 40,
         "gap_id": "OLD_GAP",
@@ -162,13 +162,13 @@ def historical_done_task() -> dict:
             "expected_base_branch": "main",
             "expected_base_sha": "b" * 40,
             "outcome": "PASS",
-            "reviewed_at": "2026-08-20T12:00:00Z",
+            "reviewed_at": "2026-09-01T12:00:00Z",
             "reviewer": "control-runner",
         },
         "external_review": None,
         "blocker": None,
-        "created_at": "2026-08-20T10:00:00Z",
-        "updated_at": "2026-08-20T12:00:00Z",
+        "created_at": "2026-09-01T10:00:00Z",
+        "updated_at": "2026-09-01T12:00:00Z",
     }
 
 
@@ -217,7 +217,7 @@ def test_protected_historical_v4_done_survives_rollback(tmp_path):
     carry = {
         "protocol_id": "DONE_CARRY_FORWARD",
         "target_gap_id": "NEW_GAP",
-        "source_mission_revision": "2026-08-20-r2",
+        "source_mission_revision": "2026-09-01-r3",
         "source_gap_id": "OLD_GAP",
         "source_fact_kind": "V4_DONE",
         "source_fact_ref": source["task_id"],
@@ -238,13 +238,38 @@ def test_protected_historical_v4_done_survives_rollback(tmp_path):
     ]
 
 
+def test_historical_v4_done_from_frozen_v31_revision_fails_closed(tmp_path):
+    frozen = v31_mission("OLD_GAP")
+    source = historical_done_task()
+    source["mission_revision"] = frozen["mission_revision"]
+    carry = {
+        "protocol_id": "DONE_CARRY_FORWARD",
+        "target_gap_id": "NEW_GAP",
+        "source_mission_revision": frozen["mission_revision"],
+        "source_gap_id": "OLD_GAP",
+        "source_fact_kind": "V4_DONE",
+        "source_fact_ref": source["task_id"],
+        "source_task_sha256": canonical_sha256(source),
+    }
+    current = v4_mission(carry)
+
+    with pytest.raises(V4ValidationError, match="must postdate frozen V3.1 revision"):
+        derive(
+            tmp_path,
+            frozen,
+            current,
+            old_queue=v31_queue(),
+            current_queue=v4_queue(tasks=[source]),
+        )
+
+
 def test_historical_v4_done_ambiguous_frozen_mapping_fails_closed(tmp_path):
     frozen = v31_mission("OLD_GAP", "NEW_GAP")
     source = historical_done_task()
     carry = {
         "protocol_id": "DONE_CARRY_FORWARD",
         "target_gap_id": "NEW_GAP",
-        "source_mission_revision": "2026-08-20-r2",
+        "source_mission_revision": "2026-09-01-r3",
         "source_gap_id": "OLD_GAP",
         "source_fact_kind": "V4_DONE",
         "source_fact_ref": source["task_id"],
