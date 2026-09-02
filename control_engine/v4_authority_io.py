@@ -14,11 +14,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Mapping, Sequence
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-
 from control_engine.v4_contracts import (
-    PUBLIC_ROOT,
     V4ValidationError,
     derive_rollback_v31,
     forward_transform_v31_to_v4,
@@ -27,9 +23,9 @@ from control_engine.v4_contracts import (
     validate_queue_v4,
     validate_repository_authority_v4,
 )
+from scripts import validate_private_control_v31 as v31_private_validator
 
 
-V31_MISSION_SCHEMA_REL = "schemas/mission_contract_v31.schema.json"
 MISSION_PREFIX = "control/missions/"
 AUTHORITY_PREFIX = "control/repository-authority/"
 
@@ -164,32 +160,17 @@ def load_v4_authority_from_git(authority_root: Path) -> V4AuthorityBundle:
 
 
 def load_v31_missions_from_git(authority_root: Path) -> tuple[dict[str, Any], ...]:
-    """Load exact committed V3.1 Mission data from a frozen pre-cutover checkout."""
+    """Load Missions only after validating the complete frozen V3.1 authority root."""
     root = Path(authority_root)
-    entries = _committed_tree(root)
-    mission_paths = _single_level_json_paths(entries, MISSION_PREFIX, ".mission.json")
-    if not mission_paths:
-        raise V4ValidationError("frozen V3.1 Mission registry is empty")
     try:
-        schema = json.loads((PUBLIC_ROOT / V31_MISSION_SCHEMA_REL).read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise V4ValidationError("trusted V3.1 Mission schema unavailable") from exc
-
-    missions: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for path in mission_paths:
-        raw, _oid = _blob(root, entries, path)
-        mission = _strict_json(raw)
-        try:
-            Draft202012Validator(schema).validate(mission)
-        except JsonSchemaValidationError as exc:
-            raise V4ValidationError("frozen V3.1 Mission violates trusted schema") from exc
-        mission_id = mission.get("mission_id")
-        if not isinstance(mission_id, str) or not mission_id or mission_id in seen:
-            raise V4ValidationError("frozen V3.1 Mission identity invalid or duplicated")
-        seen.add(mission_id)
-        missions.append(mission)
-    return tuple(missions)
+        v31_private_validator.validate_candidate(root)
+        entries = v31_private_validator.committed_tree(root)
+        missions = v31_private_validator.mission_documents_by_identity(root, entries)
+    except v31_private_validator.ValidationError as exc:
+        raise V4ValidationError("frozen V3.1 authority fails trusted validation") from exc
+    if not missions:
+        raise V4ValidationError("frozen V3.1 Mission registry is empty")
+    return tuple(missions[mission_id] for mission_id in sorted(missions))
 
 
 def assert_v4_queue_bound_to_authority(
