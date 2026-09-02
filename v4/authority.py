@@ -49,6 +49,16 @@ def git_blob_sha(path: Path) -> str:
     return git_blob_sha_bytes(path.read_bytes())
 
 
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _parse_time(value: str) -> datetime:
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
@@ -71,6 +81,12 @@ def _revision_key(value: object) -> tuple[int, date]:
     except ValueError as exc:
         raise V4ValidationError("Mission revision invalid") from exc
     return int(match.group("sequence")), day
+
+
+def _revision_precedes(source: object, current: object) -> bool:
+    source_sequence, source_day = _revision_key(source)
+    current_sequence, current_day = _revision_key(current)
+    return source_sequence < current_sequence and source_day <= current_day
 
 
 def _validate_v31_migration_facts(queue: dict[str, Any]) -> None:
@@ -115,7 +131,7 @@ def _carry_map(mission: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if target in result:
             raise V4ValidationError(f"{mission['mission_id']}: duplicate carry-forward target {target}")
         _gap(mission, target)
-        if carry["source_mission_revision"] == mission["mission_revision"]:
+        if not _revision_precedes(carry["source_mission_revision"], mission["mission_revision"]):
             raise V4ValidationError(
                 f"{mission['mission_id']}:{target}: carry-forward source must be an older revision"
             )
@@ -218,16 +234,18 @@ def _validate_source_fact(
     task_by_id: dict[str, dict[str, Any]],
 ) -> None:
     source_ref = carry["source_fact_ref"]
+    target_repository = _gap(mission, carry["target_gap_id"])["repository"]
+    expected = (
+        mission["mission_id"],
+        carry["source_mission_revision"],
+        carry["source_gap_id"],
+        target_repository,
+    )
+
     if carry["source_fact_kind"] == "MIGRATION_FACT":
         fact = migration_by_ref.get(source_ref)
         if fact is None:
             raise V4ValidationError(f"missing carry-forward migration fact: {source_ref}")
-        expected = (
-            mission["mission_id"],
-            carry["source_mission_revision"],
-            carry["source_gap_id"],
-            mission["repository"],
-        )
         actual = (
             fact["mission_id"],
             fact["mission_revision"],
@@ -241,12 +259,8 @@ def _validate_source_fact(
     task = task_by_id.get(source_ref)
     if task is None or task["status"] != "DONE":
         raise V4ValidationError(f"missing terminal V4_DONE source task: {source_ref}")
-    expected = (
-        mission["mission_id"],
-        carry["source_mission_revision"],
-        carry["source_gap_id"],
-        mission["repository"],
-    )
+    if _canonical_sha256(task) != carry["source_task_sha256"]:
+        raise V4ValidationError(f"carry-forward V4_DONE digest mismatch: {source_ref}")
     actual = (
         task["mission_id"],
         task["mission_revision"],
@@ -255,6 +269,14 @@ def _validate_source_fact(
     )
     if actual != expected:
         raise V4ValidationError(f"carry-forward V4_DONE task mismatch: {source_ref}")
+    if task["candidate"] is None or task["last_review"] is None:
+        raise V4ValidationError(f"V4_DONE source lacks reviewed candidate evidence: {source_ref}")
+    if task["last_review"].get("outcome") != "PASS":
+        raise V4ValidationError(f"V4_DONE source review is not PASS: {source_ref}")
+    if task["review_policy"] == "EXTERNAL":
+        external = task["external_review"]
+        if external is None or external.get("status") != "PASS":
+            raise V4ValidationError(f"V4_DONE source external review is not PASS: {source_ref}")
 
 
 def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_root: Path) -> None:
@@ -334,15 +356,19 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
                 if record["candidate_sha"] != candidate["candidate_sha"]:
                     raise V4ValidationError(f"{record_field} candidate drift: {logical}")
 
+    active_tasks = [task for task in queue["tasks"] if task["status"] == "ACTIVE"]
     lock = queue["execution_lock"]
-    if lock is not None:
-        started = _parse_time(lock["started_at"])
-        expires = _parse_time(lock["expires_at"])
-        if expires - started != timedelta(seconds=LEASE_SECONDS):
-            raise V4ValidationError("execution_lock lease must be exactly 5400 seconds")
-        task = task_by_id.get(lock["task_id"])
-        if task is None or task["status"] != "ACTIVE":
-            raise V4ValidationError("execution_lock must reference exactly one ACTIVE task")
+    if lock is None:
+        if active_tasks:
+            raise V4ValidationError("ACTIVE task requires exactly one execution_lock")
+        return
+
+    started = _parse_time(lock["started_at"])
+    expires = _parse_time(lock["expires_at"])
+    if expires - started != timedelta(seconds=LEASE_SECONDS):
+        raise V4ValidationError("execution_lock lease must be exactly 5400 seconds")
+    if len(active_tasks) != 1 or active_tasks[0]["task_id"] != lock["task_id"]:
+        raise V4ValidationError("execution_lock must match the complete ACTIVE task set")
 
 
 def forward_queue_v31_to_v4(
