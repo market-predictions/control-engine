@@ -101,8 +101,19 @@
         "source_mission_revision": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"},
         "source_gap_id": {"type": "string", "minLength": 1},
         "source_fact_kind": {"enum": ["V4_DONE", "MIGRATION_FACT"]},
-        "source_fact_ref": {"type": "string", "minLength": 1}
-      }
+        "source_fact_ref": {"type": "string", "minLength": 1},
+        "source_task_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"source_fact_kind": {"const": "V4_DONE"}},
+            "required": ["source_fact_kind"]
+          },
+          "then": {"required": ["source_task_sha256"]},
+          "else": {"not": {"required": ["source_task_sha256"]}}
+        }
+      ]
     }
   }
 }
