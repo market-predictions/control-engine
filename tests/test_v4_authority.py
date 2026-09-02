@@ -174,7 +174,7 @@ def test_authority_rejects_invalid_github_repository_identity(tmp_path):
         load_v4_authority(root, schema_root=SCHEMA_ROOT)
 
 
-def test_forward_transform_preserves_source_facts_without_inventing_carry_authority(tmp_path):
+def test_forward_transform_materializes_only_currently_eligible_roots(tmp_path):
     old = old_v31_queue()
     root = authority_root(tmp_path)
     result = forward_queue_v31_to_v4(old, root, schema_root=SCHEMA_ROOT)
@@ -183,21 +183,20 @@ def test_forward_transform_preserves_source_facts_without_inventing_carry_author
     assert result["execution_lock"] is None
     assert result["migration_facts"] == old["migration_facts"]
     assert all(fact["fact"] != "DONE_CARRY_FORWARD" for fact in result["migration_facts"])
-    assert len(result["tasks"]) == 2
+    assert len(result["tasks"]) == 1
     tasks = {task["gap_id"]: task for task in result["tasks"]}
-    assert set(tasks) == {"GAP_01", "GAP_02"}
+    assert set(tasks) == {"GAP_01"}
     assert tasks["GAP_01"]["created_at"] == old["migration_facts"][0]["imported_at"]
-    assert tasks["GAP_02"]["status"] == "QUEUED"
-    assert tasks["GAP_02"]["phase"] == "BUILD"
-    assert tasks["GAP_02"]["convergence_required"] is True
-    assert tasks["GAP_02"]["candidate"] is None
+    assert tasks["GAP_01"]["status"] == "QUEUED"
+    assert tasks["GAP_01"]["phase"] == "BUILD"
+    assert tasks["GAP_01"]["candidate"] is None
 
 
-def test_forward_transform_fails_if_open_gap_has_no_frozen_source_evidence(tmp_path):
+def test_forward_transform_fails_if_eligible_gap_has_no_frozen_source_evidence(tmp_path):
     old = old_v31_queue()
     old["migration_facts"] = []
     root = authority_root(tmp_path)
-    with pytest.raises(V4ValidationError, match="cannot materialize current OPEN gap"):
+    with pytest.raises(V4ValidationError, match="cannot materialize eligible current OPEN gap"):
         forward_queue_v31_to_v4(old, root, schema_root=SCHEMA_ROOT)
 
 
@@ -208,7 +207,7 @@ def test_protected_mission_carry_forward_validates_against_imported_source_fact(
     current = json.loads((root / "control/missions/TEST_MISSION.mission.json").read_text())
     assert current["done_carry_forward"] == [migration_carry()]
     assert current["gaps"][0]["gap_state"] == "RETIRED"
-    assert all(task["gap_id"] != "GAP_01" for task in result["tasks"])
+    assert {task["gap_id"] for task in result["tasks"]} == {"GAP_02"}
 
 
 def test_carry_forward_target_must_be_retired(tmp_path):
@@ -444,11 +443,13 @@ def rollback_kwargs(root: Path, *, pre_cutover_queue=None, v4_queue=None):
 
 
 def test_rollback_keeps_v4_reopened_gap_open_and_retires_only_realized_v4_work(tmp_path):
-    root = authority_root(tmp_path)
+    current = mission()
+    current["gaps"][1]["depends_on"] = []
+    root = authority_root(tmp_path, current_mission=current)
     v4_queue = v4_queue_for_rollback(root, done_gap_02=True)
     rollback = derive_rollback_v31_mission(
         v31_mission(),
-        mission(),
+        current,
         **rollback_kwargs(root, v4_queue=v4_queue),
         rollback_revision="2026-09-02-r3",
     )
@@ -534,7 +535,7 @@ def test_rollback_has_no_free_form_realization_channel(tmp_path):
 def test_rollback_done_task_requires_pass_review_evidence(tmp_path):
     root = authority_root(tmp_path)
     v4_queue = v4_queue_for_rollback(root)
-    task = next(task for task in v4_queue["tasks"] if task["gap_id"] == "GAP_02")
+    task = next(task for task in v4_queue["tasks"] if task["gap_id"] == "GAP_01")
     task["status"] = "DONE"
     task["phase"] = None
     with pytest.raises(V4ValidationError, match="lacks reviewed candidate evidence"):
