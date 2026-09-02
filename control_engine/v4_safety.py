@@ -34,8 +34,10 @@ def assert_integration_target_exact(
     live_candidate_sha: str,
     live_base_branch: str,
     live_base_sha: str,
+    native_stale_base_guard: bool,
+    runner_can_bypass_stale_base_guard: bool,
 ) -> dict[str, Any]:
-    """Prove live candidate/base facts still match the exact reviewed candidate."""
+    """Prove exact reviewed target identity and native atomic stale-base rejection."""
     validate_queue_v4(queue)
     matches = [task for task in queue["tasks"] if task["task_id"] == task_id]
     if len(matches) != 1:
@@ -52,4 +54,8 @@ def assert_integration_target_exact(
         raise V4ValidationError("live base branch drifted from reviewed candidate")
     if live_base_sha != candidate.get("expected_base_sha"):
         raise V4ValidationError("live base SHA drifted from reviewed candidate")
+    if native_stale_base_guard is not True:
+        raise V4ValidationError("native GitHub stale-base rejection is not proven")
+    if runner_can_bypass_stale_base_guard is not False:
+        raise V4ValidationError("Runner bypass of stale-base guard is not excluded")
     return deepcopy(task)
