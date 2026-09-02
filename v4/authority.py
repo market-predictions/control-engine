@@ -23,6 +23,7 @@ from control_engine import migration_v31 as v31_migration
 MISSION_SCHEMA = Path("schemas/mission_contract_v4.schema.json")
 REPOSITORY_SCHEMA = Path("schemas/repository_authority_v4.schema.json")
 QUEUE_SCHEMA = Path("schemas/dispatch_queue_v4.schema.json")
+V31_MISSION_SCHEMA = Path("schemas/mission_contract_v31.schema.json")
 MISSION_DIR = Path("control/missions")
 REPOSITORY_DIR = Path("control/repository-authority")
 LEASE_SECONDS = 5400
@@ -141,6 +142,22 @@ def _validate(instance: Any, schema: dict[str, Any], label: str) -> None:
         for error in errors[:8]
     )
     raise V4ValidationError(f"{label}: {detail}")
+
+
+def _load_trusted_v31_mission(
+    authority_root: Path,
+    mission_id: str,
+    *,
+    schema_root: Path,
+) -> dict[str, Any]:
+    path = authority_root / MISSION_DIR / f"{mission_id}.mission.json"
+    if not path.is_file():
+        raise V4ValidationError("frozen V3.1 Mission missing from trusted authority")
+    mission = load_json(path)
+    _validate(mission, _load_schema(schema_root, V31_MISSION_SCHEMA), "frozen V3.1 Mission")
+    if mission.get("mission_id") != mission_id:
+        raise V4ValidationError("frozen V3.1 Mission identity mismatch")
+    return mission
 
 
 def _convergence_required(gap: dict[str, Any]) -> bool:
@@ -641,8 +658,24 @@ def _legacy_completed_gaps(
         )
         if actual != expected:
             raise V4ValidationError("rollback carry-forward source does not match frozen V3.1 fact")
-        _gap(pre_cutover_v31_mission, target)
-        completed.add(target)
+        _gap(pre_cutover_v31_mission, carry["source_gap_id"])
+        completed.add(carry["source_gap_id"])
+    return completed
+
+
+def _historical_v4_completed_gaps(
+    pre_cutover_v31_mission: dict[str, Any],
+    v4_mission: dict[str, Any],
+) -> set[str]:
+    known = {gap["gap_id"] for gap in pre_cutover_v31_mission["gaps"]}
+    completed: set[str] = set()
+    for target, carry in _carry_map(v4_mission).items():
+        if carry["source_fact_kind"] != "V4_DONE":
+            continue
+        candidates = {gap_id for gap_id in {target, carry["source_gap_id"]} if gap_id in known}
+        if len(candidates) != 1:
+            raise V4ValidationError("historical V4 completion cannot map unambiguously to frozen V3.1 gap")
+        completed.update(candidates)
     return completed
 
 
@@ -650,6 +683,7 @@ def derive_rollback_v31_mission(
     pre_cutover_v31_mission: dict[str, Any],
     v4_mission: dict[str, Any],
     *,
+    pre_cutover_v31_authority_root: Path,
     pre_cutover_v31_queue: dict[str, Any],
     v4_queue: dict[str, Any],
     authority_root: Path,
@@ -657,26 +691,32 @@ def derive_rollback_v31_mission(
     rollback_revision: str,
 ) -> dict[str, Any]:
     """Create a governed V3.1 rollback Mission without fabricating V3.1 results."""
-    if pre_cutover_v31_mission.get("protocol_id") != "MISSION_CONTRACT_V3_1":
-        raise V4ValidationError("rollback requires frozen V3.1 Mission")
     if v4_mission.get("protocol_id") != "MISSION_CONTRACT_V4":
         raise V4ValidationError("rollback requires current V4 Mission")
-    if v4_mission.get("mission_id") != pre_cutover_v31_mission.get("mission_id"):
-        raise V4ValidationError("rollback Mission identity mismatch")
-    if v4_mission.get("supersedes_revision") != pre_cutover_v31_mission.get("mission_revision"):
+    mission_id = v4_mission.get("mission_id")
+    if not isinstance(mission_id, str) or not mission_id:
+        raise V4ValidationError("rollback Mission identity invalid")
+    trusted_v31_mission = _load_trusted_v31_mission(
+        pre_cutover_v31_authority_root,
+        mission_id,
+        schema_root=schema_root,
+    )
+    if pre_cutover_v31_mission != trusted_v31_mission:
+        raise V4ValidationError("rollback frozen V3.1 Mission differs from trusted authority")
+    if v4_mission.get("supersedes_revision") != trusted_v31_mission.get("mission_revision"):
         raise V4ValidationError("V4 Mission is not based on frozen V3.1 revision")
     if not _revision_precedes(
-        pre_cutover_v31_mission["mission_revision"], v4_mission["mission_revision"]
+        trusted_v31_mission["mission_revision"], v4_mission["mission_revision"]
     ):
         raise V4ValidationError("V4 Mission revision must advance monotonically")
 
-    prior_revision = pre_cutover_v31_mission["mission_revision"]
+    prior_revision = trusted_v31_mission["mission_revision"]
     prior_sequence, prior_day = _revision_key(prior_revision)
     rollback_sequence, rollback_day = _revision_key(rollback_revision)
     if rollback_sequence <= prior_sequence or rollback_day < prior_day:
         raise V4ValidationError("rollback Mission revision must advance monotonically")
 
-    known = {gap["gap_id"] for gap in pre_cutover_v31_mission["gaps"]}
+    known = {gap["gap_id"] for gap in trusted_v31_mission["gaps"]}
     realized = _validated_realized_gaps(
         v4_mission,
         v4_queue,
@@ -684,22 +724,26 @@ def derive_rollback_v31_mission(
         schema_root=schema_root,
     )
     legacy_completed_gap_ids = _legacy_completed_gaps(
-        pre_cutover_v31_queue, pre_cutover_v31_mission, v4_mission
+        pre_cutover_v31_queue, trusted_v31_mission, v4_mission
+    )
+    historical_v4_completed_gap_ids = _historical_v4_completed_gaps(
+        trusted_v31_mission, v4_mission
     )
     if not legacy_completed_gap_ids <= known:
         raise V4ValidationError("legacy completion references unknown gap")
     if not realized <= known:
         raise V4ValidationError("realized V4 work cannot map to frozen V3.1 Mission")
 
-    rollback = copy.deepcopy(pre_cutover_v31_mission)
+    rollback = copy.deepcopy(trusted_v31_mission)
     rollback["mission_revision"] = rollback_revision
     rollback["supersedes_revision"] = prior_revision
-    retired = legacy_completed_gap_ids | realized
+    retired = legacy_completed_gap_ids | historical_v4_completed_gap_ids | realized
     for gap in rollback["gaps"]:
         gap_id = gap["gap_id"]
         gap["gap_state"] = "RETIRED" if gap_id in retired else "OPEN"
         if gap_id not in retired and isinstance(gap.get("depends_on"), list):
             gap["depends_on"] = [dependency for dependency in gap["depends_on"] if dependency not in retired]
+    _validate(rollback, _load_schema(schema_root, V31_MISSION_SCHEMA), "rollback V3.1 Mission")
     return rollback
 
 
