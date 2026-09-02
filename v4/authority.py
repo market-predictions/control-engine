@@ -435,7 +435,7 @@ def forward_queue_v31_to_v4(
     *,
     schema_root: Path,
 ) -> dict[str, Any]:
-    """Transform only a quiescent V3.1 snapshot; never invent V4 carry-forward authority."""
+    """Transform one quiescent V3.1 snapshot into the eligible current V4 roots."""
     if old_queue.get("version") != "3.1" or old_queue.get("principal_manual_relay_count") != 0:
         raise V4ValidationError("forward transform requires V3.1 queue with relay 0")
     _validate_v31_migration_facts(old_queue)
@@ -444,8 +444,9 @@ def forward_queue_v31_to_v4(
         authority_root, schema_root=schema_root
     )
     migration_facts = copy.deepcopy(old_queue.get("migration_facts", []))
+    migration_by_ref = {fact["source_task_id"]: fact for fact in migration_facts}
 
-    tasks: list[dict[str, Any]] = []
+    legacy_sources: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for old_task in old_queue.get("tasks", []):
         forbidden_values = (
             old_task.get("claim"),
@@ -464,18 +465,68 @@ def forward_queue_v31_to_v4(
             old_task.get("repository")
         ):
             raise V4ValidationError("queued V3.1 task repository does not match V4 gap repository")
-        if gap["gap_state"] != "OPEN":
-            continue
+        key = (
+            mission["mission_id"],
+            mission["mission_revision"],
+            gap["gap_id"],
+            _canonical_repository(gap["repository"]),
+        )
+        if key in legacy_sources:
+            raise V4ValidationError(f"duplicate frozen V3.1 logical task source: {key[:3]}")
+        legacy_sources[key] = old_task
+
+    carry_targets_by_mission: dict[str, set[str]] = {}
+    for mission_id, mission in missions.items():
+        carry_targets: set[str] = set()
+        for target, carry in _carry_map(mission).items():
+            _validate_source_fact(mission, carry, migration_by_ref, {})
+            carry_targets.add(target)
+        carry_targets_by_mission[mission_id] = carry_targets
+
+    eligible: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for mission_id in sorted(missions):
+        mission = missions[mission_id]
+        carry_targets = carry_targets_by_mission[mission_id]
+        for gap in mission["gaps"]:
+            if gap["gap_state"] != "OPEN":
+                continue
+            if any(dependency not in carry_targets for dependency in gap["depends_on"]):
+                continue
+            eligible.append((mission_id, mission, gap))
+
+    tasks: list[dict[str, Any]] = []
+    for mission_id, mission, gap in eligible:
+        repository = _canonical_repository(gap["repository"])
+        source_key = (mission_id, mission["mission_revision"], gap["gap_id"], repository)
+        source_task = legacy_sources.get(source_key)
+
+        source_fact_matches = [
+            fact
+            for fact in migration_facts
+            if fact["mission_id"] == mission_id
+            and fact["mission_revision"] == mission.get("supersedes_revision")
+            and fact["gap_id"] == gap["gap_id"]
+            and _canonical_repository(fact["repository"]) == repository
+        ]
+        if source_task is not None:
+            created_at = source_task["created_at"]
+            updated_at = source_task["updated_at"]
+        elif len(source_fact_matches) == 1:
+            created_at = source_fact_matches[0]["imported_at"]
+            updated_at = source_fact_matches[0]["imported_at"]
+        else:
+            raise V4ValidationError(
+                "forward transform cannot materialize eligible current OPEN gap from frozen V3.1 evidence: "
+                f"{(mission_id, mission['mission_revision'], gap['gap_id'])}"
+            )
 
         tasks.append(
             {
-                "task_id": f"MISSION--{mission['mission_id']}--{mission['mission_revision']}--{gap['gap_id']}",
-                "mission_id": mission["mission_id"],
+                "task_id": f"MISSION--{mission_id}--{mission['mission_revision']}--{gap['gap_id']}",
+                "mission_id": mission_id,
                 "mission_revision": mission["mission_revision"],
-                "mission_contract_blob_sha": mission_shas[mission["mission_id"]],
-                "repository_authority_blob_sha": repository_shas[
-                    _canonical_repository(gap["repository"])
-                ],
+                "mission_contract_blob_sha": mission_shas[mission_id],
+                "repository_authority_blob_sha": repository_shas[repository],
                 "gap_id": gap["gap_id"],
                 "repository": gap["repository"],
                 "acceptance": copy.deepcopy(gap["acceptance"]),
@@ -488,72 +539,21 @@ def forward_queue_v31_to_v4(
                 "last_review": None,
                 "external_review": None,
                 "blocker": None,
-                "created_at": old_task["created_at"],
-                "updated_at": old_task["updated_at"],
+                "created_at": created_at,
+                "updated_at": updated_at,
             }
         )
 
+    expected = {
+        (mission_id, mission["mission_revision"], gap["gap_id"])
+        for mission_id, mission, gap in eligible
+    }
     produced = {
         (task["mission_id"], task["mission_revision"], task["gap_id"])
         for task in tasks
     }
-    for mission_id in sorted(missions):
-        mission = missions[mission_id]
-        for gap in mission["gaps"]:
-            if gap["gap_state"] != "OPEN":
-                continue
-            logical = (mission_id, mission["mission_revision"], gap["gap_id"])
-            if logical in produced:
-                continue
-            matching_facts = [
-                fact
-                for fact in migration_facts
-                if fact["mission_id"] == mission_id
-                and fact["mission_revision"] == mission.get("supersedes_revision")
-                and fact["gap_id"] == gap["gap_id"]
-                and _canonical_repository(fact["repository"])
-                == _canonical_repository(gap["repository"])
-            ]
-            if len(matching_facts) != 1:
-                raise V4ValidationError(
-                    f"forward transform cannot materialize current OPEN gap from frozen V3.1 evidence: {logical}"
-                )
-            source_fact = matching_facts[0]
-            tasks.append(
-                {
-                    "task_id": f"MISSION--{mission_id}--{mission['mission_revision']}--{gap['gap_id']}",
-                    "mission_id": mission_id,
-                    "mission_revision": mission["mission_revision"],
-                    "mission_contract_blob_sha": mission_shas[mission_id],
-                    "repository_authority_blob_sha": repository_shas[
-                        _canonical_repository(gap["repository"])
-                    ],
-                    "gap_id": gap["gap_id"],
-                    "repository": gap["repository"],
-                    "acceptance": copy.deepcopy(gap["acceptance"]),
-                    "integration_policy": gap["integration_policy"],
-                    "review_policy": gap["review_policy"],
-                    "convergence_required": _convergence_required(gap),
-                    "status": "QUEUED",
-                    "phase": "BUILD",
-                    "candidate": None,
-                    "last_review": None,
-                    "external_review": None,
-                    "blocker": None,
-                    "created_at": source_fact["imported_at"],
-                    "updated_at": source_fact["imported_at"],
-                }
-            )
-            produced.add(logical)
-
-    expected = {
-        (mission_id, mission["mission_revision"], gap["gap_id"])
-        for mission_id, mission in missions.items()
-        for gap in mission["gaps"]
-        if gap["gap_state"] == "OPEN"
-    }
     if produced != expected:
-        raise V4ValidationError("forward transform must represent every current OPEN gap exactly once")
+        raise V4ValidationError("forward transform must represent every eligible current OPEN gap exactly once")
 
     queue = {
         "version": "4.0",
