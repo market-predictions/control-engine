@@ -381,6 +381,8 @@ def _validate_source_fact(
     )
     if actual != expected:
         raise V4ValidationError(f"carry-forward V4_DONE task mismatch: {source_ref}")
+    if task["blocker"] is not None:
+        raise V4ValidationError(f"V4_DONE source retains blocker: {source_ref}")
     if task["candidate"] is None or task["last_review"] is None:
         raise V4ValidationError(f"V4_DONE source lacks reviewed candidate evidence: {source_ref}")
     if task["last_review"].get("outcome") != "PASS":
@@ -720,11 +722,16 @@ def _historical_v4_completed_gaps(
     pre_cutover_v31_mission: dict[str, Any],
     v4_mission: dict[str, Any],
 ) -> set[str]:
+    frozen_revision = pre_cutover_v31_mission["mission_revision"]
     known = {gap["gap_id"] for gap in pre_cutover_v31_mission["gaps"]}
     completed: set[str] = set()
     for target, carry in _carry_map(v4_mission).items():
         if carry["source_fact_kind"] != "V4_DONE":
             continue
+        if not _revision_precedes(frozen_revision, carry["source_mission_revision"]):
+            raise V4ValidationError(
+                "historical V4 completion must postdate frozen V3.1 revision"
+            )
         candidates = {gap_id for gap_id in {target, carry["source_gap_id"]} if gap_id in known}
         if len(candidates) != 1:
             raise V4ValidationError("historical V4 completion cannot map unambiguously to frozen V3.1 gap")
