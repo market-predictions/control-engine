@@ -392,17 +392,29 @@ def v31_mission():
                 "gap_state": "OPEN",
                 "depends_on": [],
                 "repository": "example/project",
+                "operation": "IMPLEMENTATION",
+                "acceptance": ["prior GAP_01 acceptance"],
+                "integration_policy": "HOLD_AFTER_PASS",
             },
             {
                 "gap_id": "GAP_02",
                 "gap_state": "OPEN",
                 "depends_on": ["GAP_01"],
                 "repository": "example/project",
+                "operation": "IMPLEMENTATION",
+                "acceptance": ["prior GAP_02 acceptance"],
+                "integration_policy": "AUTO_AFTER_PASS",
             },
         ],
         "authority_boundaries": ["old"],
         "principal_manual_relay_count": 0,
     }
+
+
+def v31_authority_root(root: Path) -> Path:
+    frozen = root.parent / "v31-authority"
+    write_json(frozen / "control/missions/TEST_MISSION.mission.json", v31_mission())
+    return frozen
 
 
 def v4_queue_for_rollback(root: Path, *, old_queue=None, done_gap_02=False):
@@ -435,6 +447,7 @@ def rollback_kwargs(root: Path, *, pre_cutover_queue=None, v4_queue=None):
     old_queue = pre_cutover_queue if pre_cutover_queue is not None else old_v31_queue()
     current_v4_queue = v4_queue if v4_queue is not None else v4_queue_for_rollback(root)
     return {
+        "pre_cutover_v31_authority_root": v31_authority_root(root),
         "pre_cutover_v31_queue": old_queue,
         "v4_queue": current_v4_queue,
         "authority_root": root,
