@@ -61,6 +61,28 @@ def v31_mission(*gap_ids: str) -> dict:
 
 def v31_authority_root(tmp_path: Path, mission: dict) -> Path:
     root = tmp_path / "v31-authority"
+    write_json(
+        root / "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+        {
+            "protocol_id": "CONTROL_RUNTIME_AUTHORITY_V3_1",
+            "control_runtime_enabled": True,
+            "integration_enabled": True,
+            "semantic_claim_lease_seconds": 5400,
+            "principal_manual_relay_count": 0,
+        },
+    )
+    write_json(
+        root / "control/repository-authority/example__project.json",
+        {
+            "protocol_id": "CONTROL_REPOSITORY_AUTHORITY_V3_1",
+            "repository": "example/project",
+            "integration_policy": "AUTO_AFTER_PASS",
+            "control_auto_profile": "CONTROL_AUTO_V1",
+            "integration_enabled": True,
+            "required_check_runs": [],
+            "principal_manual_relay_count": 0,
+        },
+    )
     write_json(root / "control/missions/ROLLBACK_CARRY.mission.json", mission)
     return root
 
