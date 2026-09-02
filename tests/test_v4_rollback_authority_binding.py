@@ -51,6 +51,9 @@ def v31_mission() -> dict:
                 "gap_state": "OPEN",
                 "depends_on": [],
                 "repository": "example/project",
+                "operation": "IMPLEMENTATION",
+                "acceptance": ["prior acceptance"],
+                "integration_policy": "HOLD_AFTER_PASS",
             }
         ],
         "authority_boundaries": ["prior"],
@@ -69,6 +72,15 @@ def authority_root(tmp_path: Path) -> Path:
             "required_check_runs": [],
             "principal_manual_relay_count": 0,
         },
+    )
+    return root
+
+
+def v31_authority_root(tmp_path: Path, *, current_mission=None) -> Path:
+    root = tmp_path / "v31-authority"
+    write_json(
+        root / "control/missions/ROLLBACK_BINDING.mission.json",
+        current_mission or v31_mission(),
     )
     return root
 
@@ -92,7 +104,18 @@ def empty_v4_queue() -> dict:
     }
 
 
-def test_rollback_rejects_same_identity_mission_that_differs_from_trusted_authority(tmp_path):
+def rollback_kwargs(tmp_path: Path, root: Path) -> dict:
+    return {
+        "pre_cutover_v31_authority_root": v31_authority_root(tmp_path),
+        "pre_cutover_v31_queue": empty_v31_queue(),
+        "v4_queue": empty_v4_queue(),
+        "authority_root": root,
+        "schema_root": SCHEMA_ROOT,
+        "rollback_revision": "2026-09-02-r2",
+    }
+
+
+def test_rollback_rejects_same_identity_v4_mission_that_differs_from_trusted_authority(tmp_path):
     root = authority_root(tmp_path)
     tampered = copy.deepcopy(v4_mission())
     tampered["gaps"][0]["acceptance"] = ["caller supplied replacement acceptance"]
@@ -101,6 +124,34 @@ def test_rollback_rejects_same_identity_mission_that_differs_from_trusted_author
         derive_rollback_v31_mission(
             v31_mission(),
             tampered,
+            **rollback_kwargs(tmp_path, root),
+        )
+
+
+def test_rollback_rejects_caller_supplied_v31_mission_that_differs_from_frozen_authority(tmp_path):
+    root = authority_root(tmp_path)
+    tampered = copy.deepcopy(v31_mission())
+    tampered["gaps"][0]["acceptance"] = ["caller supplied rollback authority"]
+
+    with pytest.raises(V4ValidationError, match="frozen V3.1 Mission differs from trusted authority"):
+        derive_rollback_v31_mission(
+            tampered,
+            v4_mission(),
+            **rollback_kwargs(tmp_path, root),
+        )
+
+
+def test_rollback_rejects_schema_invalid_frozen_v31_authority(tmp_path):
+    root = authority_root(tmp_path)
+    broken = v31_mission()
+    del broken["gaps"][0]["operation"]
+    frozen_root = v31_authority_root(tmp_path, current_mission=broken)
+
+    with pytest.raises(V4ValidationError, match="frozen V3.1 Mission"):
+        derive_rollback_v31_mission(
+            broken,
+            v4_mission(),
+            pre_cutover_v31_authority_root=frozen_root,
             pre_cutover_v31_queue=empty_v31_queue(),
             v4_queue=empty_v4_queue(),
             authority_root=root,
