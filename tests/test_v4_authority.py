@@ -58,6 +58,10 @@ def mission(revision="2026-09-02-r3", supersedes="2026-08-20-r2", carry=None):
     }
     if carry is not None:
         result["done_carry_forward"] = carry
+        targets = {item["target_gap_id"] for item in carry}
+        for gap in result["gaps"]:
+            if gap["gap_id"] in targets:
+                gap["gap_state"] = "RETIRED"
     return result
 
 
@@ -170,6 +174,32 @@ def test_protected_mission_carry_forward_validates_against_imported_source_fact(
     validate_v4_queue(result, root, schema_root=SCHEMA_ROOT)
     current = json.loads((root / "control/missions/TEST_MISSION.mission.json").read_text())
     assert current["done_carry_forward"] == [migration_carry()]
+    assert current["gaps"][0]["gap_state"] == "RETIRED"
+    assert all(task["gap_id"] != "GAP_01" for task in result["tasks"])
+
+
+def test_carry_forward_target_must_be_retired(tmp_path):
+    current = mission(carry=[migration_carry()])
+    current["gaps"][0]["gap_state"] = "OPEN"
+    root = authority_root(tmp_path, current_mission=current)
+    with pytest.raises(V4ValidationError, match="carry-forward target must be RETIRED"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
+
+
+def test_open_gap_cannot_depend_on_retired_gap_without_carry_forward(tmp_path):
+    current = mission()
+    current["gaps"][0]["gap_state"] = "RETIRED"
+    root = authority_root(tmp_path, current_mission=current)
+    with pytest.raises(V4ValidationError, match="RETIRED dependency GAP_01 requires carry-forward"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
+
+
+def test_future_revision_cannot_be_carry_forward_source(tmp_path):
+    carry = migration_carry()
+    carry["source_mission_revision"] = "2026-09-03-r4"
+    root = authority_root(tmp_path, current_mission=mission(carry=[carry]))
+    with pytest.raises(V4ValidationError, match="source must be an older revision"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
 
 
 def test_carry_forward_missing_source_fact_fails_closed(tmp_path):
@@ -241,6 +271,16 @@ def test_queue_lock_requires_exact_5400_second_lease_and_active_task(tmp_path):
         validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
 
 
+def test_active_task_requires_lock_and_lock_targets_only_active_task(tmp_path):
+    root = authority_root(tmp_path)
+    queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    task = queue["tasks"][0]
+    task["status"] = "ACTIVE"
+    task["phase"] = "BUILD"
+    with pytest.raises(V4ValidationError, match="ACTIVE task requires exactly one execution_lock"):
+        validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+
 def test_fractional_lock_extension_is_not_truncated(tmp_path):
     root = authority_root(tmp_path)
     queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
@@ -287,8 +327,18 @@ def v31_mission():
         "repository": "example/project",
         "desired_outcome": "old",
         "gaps": [
-            {"gap_id": "GAP_01", "gap_state": "OPEN"},
-            {"gap_id": "GAP_02", "gap_state": "OPEN"},
+            {
+                "gap_id": "GAP_01",
+                "gap_state": "OPEN",
+                "depends_on": [],
+                "repository": "example/project",
+            },
+            {
+                "gap_id": "GAP_02",
+                "gap_state": "OPEN",
+                "depends_on": ["GAP_01"],
+                "repository": "example/project",
+            },
         ],
         "authority_boundaries": ["old"],
         "principal_manual_relay_count": 0,
@@ -324,6 +374,20 @@ def test_rollback_retires_only_fact_proven_work_and_fabricates_no_v31_results():
     assert queue["principal_manual_relay_count"] == 0
 
 
+def test_rollback_removes_proven_retired_prerequisites_from_open_dependencies():
+    rollback = derive_rollback_v31_mission(
+        v31_mission(),
+        mission(),
+        pre_cutover_v31_queue=old_v31_queue(),
+        realized_facts=[],
+        rollback_revision="2026-09-02-r3",
+    )
+    states = {gap["gap_id"]: gap for gap in rollback["gaps"]}
+    assert states["GAP_01"]["gap_state"] == "RETIRED"
+    assert states["GAP_02"]["gap_state"] == "OPEN"
+    assert states["GAP_02"]["depends_on"] == []
+
+
 def test_rollback_does_not_accept_unproven_legacy_completion():
     queue = old_v31_queue()
     queue["migration_facts"] = []
@@ -348,6 +412,19 @@ def test_rollback_revision_must_advance_v31_discipline():
             pre_cutover_v31_queue=old_v31_queue(),
             realized_facts=[],
             rollback_revision="2026-09-02-r2",
+        )
+
+
+def test_rollback_rejects_legacy_completion_repository_mismatch():
+    queue = old_v31_queue()
+    queue["migration_facts"][0]["repository"] = "other/project"
+    with pytest.raises(V4ValidationError, match="legacy completion repository mismatch"):
+        derive_rollback_v31_mission(
+            v31_mission(),
+            mission(),
+            pre_cutover_v31_queue=queue,
+            realized_facts=[],
+            rollback_revision="2026-09-02-r3",
         )
 
 
