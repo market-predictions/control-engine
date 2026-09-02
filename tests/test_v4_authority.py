@@ -1,0 +1,252 @@
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from v4.authority import (
+    LEASE_SECONDS,
+    V4ValidationError,
+    derive_empty_rollback_v31_queue,
+    derive_rollback_v31_mission,
+    forward_queue_v31_to_v4,
+    git_blob_sha,
+    load_v4_authority,
+    validate_v4_queue,
+)
+
+SCHEMA_ROOT = Path(__file__).resolve().parents[1]
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def mission(revision="2026-09-02-r1", supersedes="2026-08-20-r2"):
+    return {
+        "protocol_id": "MISSION_CONTRACT_V4",
+        "mission_id": "TEST_MISSION",
+        "mission_revision": revision,
+        "repository": "example/project",
+        "desired_outcome": "Prove the smallest V4 contract.",
+        "gaps": [
+            {
+                "gap_id": "GAP_01",
+                "gap_state": "OPEN",
+                "depends_on": [],
+                "repository": "example/project",
+                "acceptance": ["one deterministic acceptance"],
+                "integration_policy": "HOLD_AFTER_PASS",
+                "review_policy": "EXTERNAL",
+            },
+            {
+                "gap_id": "GAP_02",
+                "gap_state": "OPEN",
+                "depends_on": ["GAP_01"],
+                "repository": "example/project",
+                "acceptance": ["second deterministic acceptance"],
+                "integration_policy": "AUTO_AFTER_PASS",
+                "review_policy": "INTERNAL",
+                "convergence_required": True,
+            },
+        ],
+        "authority_boundaries": ["no deployment authority"],
+        "supersedes_revision": supersedes,
+        "principal_manual_relay_count": 0,
+    }
+
+
+def repository_authority():
+    return {
+        "protocol_id": "CONTROL_REPOSITORY_AUTHORITY_V4",
+        "repository": "example/project",
+        "required_check_runs": ["tests"],
+        "principal_manual_relay_count": 0,
+    }
+
+
+def authority_root(tmp_path: Path) -> Path:
+    root = tmp_path / "authority"
+    write_json(root / "control/missions/TEST_MISSION.mission.json", mission())
+    write_json(
+        root / "control/repository-authority/example__project.json",
+        repository_authority(),
+    )
+    return root
+
+
+def old_v31_queue(*, claimed=False):
+    claim = {"run_id": "old"} if claimed else None
+    return {
+        "version": "3.1",
+        "principal_manual_relay_count": 0,
+        "migration_facts": [
+            {
+                "fact": "LEGACY_PROJECT_INTEGRATION_COMPLETED",
+                "mission_id": "TEST_MISSION",
+                "mission_revision": "2026-08-20-r2",
+                "gap_id": "GAP_01",
+                "repository": "example/project",
+                "source_result_ref": "control/worker-results/legacy.json",
+            }
+        ],
+        "tasks": [
+            {
+                "task_id": "old-gap-02",
+                "status": "QUEUED",
+                "claim": claim,
+                "outcome": None,
+                "result_ref": None,
+                "terminal_run_id": None,
+                "created_at": "2026-09-01T12:00:00Z",
+                "updated_at": "2026-09-01T12:00:00Z",
+                "mission_id": "TEST_MISSION",
+                "mission_revision": "2026-08-20-r2",
+                "gap_id": "GAP_02",
+            }
+        ],
+    }
+
+
+def test_v4_contracts_keep_global_admin_flags_out_of_queue_and_repository():
+    queue_schema = json.loads((SCHEMA_ROOT / "schemas/dispatch_queue_v4.schema.json").read_text())
+    repo_schema = json.loads((SCHEMA_ROOT / "schemas/repository_authority_v4.schema.json").read_text())
+    assert "control_runtime_enabled" not in queue_schema["properties"]
+    assert "integration_enabled" not in queue_schema["properties"]
+    assert "integration_enabled" not in repo_schema["properties"]
+
+
+def test_authority_accepts_omitted_convergence_as_false(tmp_path):
+    root = authority_root(tmp_path)
+    missions, _, _, _ = load_v4_authority(root, schema_root=SCHEMA_ROOT)
+    assert "convergence_required" not in missions["TEST_MISSION"]["gaps"][0]
+
+
+def test_forward_transform_preserves_completed_fact_and_maps_open_work(tmp_path):
+    root = authority_root(tmp_path)
+    result = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+
+    assert result.keys() == {
+        "version",
+        "principal_manual_relay_count",
+        "execution_lock",
+        "migration_facts",
+        "tasks",
+    }
+    assert result["version"] == "4.0"
+    assert result["execution_lock"] is None
+    assert result["migration_facts"] == [
+        {
+            "fact": "DONE_CARRY_FORWARD",
+            "mission_id": "TEST_MISSION",
+            "target_mission_revision": "2026-09-02-r1",
+            "gap_id": "GAP_01",
+            "source_ref": "control/worker-results/legacy.json",
+        }
+    ]
+    assert len(result["tasks"]) == 1
+    task = result["tasks"][0]
+    assert task["gap_id"] == "GAP_02"
+    assert task["status"] == "QUEUED"
+    assert task["phase"] == "BUILD"
+    assert task["convergence_required"] is True
+    assert task["candidate"] is None
+
+
+def test_forward_transform_rejects_live_or_nonquiescent_v31_work(tmp_path):
+    root = authority_root(tmp_path)
+    with pytest.raises(V4ValidationError, match="quiescent"):
+        forward_queue_v31_to_v4(old_v31_queue(claimed=True), root, schema_root=SCHEMA_ROOT)
+
+
+def test_queue_binding_fails_closed_on_authority_drift(tmp_path):
+    root = authority_root(tmp_path)
+    queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    queue["tasks"][0]["acceptance"] = ["drifted"]
+    with pytest.raises(V4ValidationError, match="acceptance drift"):
+        validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+
+def test_queue_lock_requires_exact_5400_second_lease_and_active_task(tmp_path):
+    root = authority_root(tmp_path)
+    queue = forward_queue_v31_to_v4(old_v31_queue(), root, schema_root=SCHEMA_ROOT)
+    task = queue["tasks"][0]
+    task["status"] = "ACTIVE"
+    task["phase"] = "BUILD"
+    started = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
+    queue["execution_lock"] = {
+        "run_id": "run-1",
+        "task_id": task["task_id"],
+        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "expires_at": (started + timedelta(seconds=LEASE_SECONDS)).isoformat().replace("+00:00", "Z"),
+    }
+    validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+    queue["execution_lock"]["expires_at"] = (
+        started + timedelta(seconds=LEASE_SECONDS - 1)
+    ).isoformat().replace("+00:00", "Z")
+    with pytest.raises(V4ValidationError, match="5400"):
+        validate_v4_queue(queue, root, schema_root=SCHEMA_ROOT)
+
+
+def test_dependency_cycle_is_rejected(tmp_path):
+    root = authority_root(tmp_path)
+    current = mission()
+    current["gaps"][0]["depends_on"] = ["GAP_02"]
+    write_json(root / "control/missions/TEST_MISSION.mission.json", current)
+    with pytest.raises(V4ValidationError, match="cycle"):
+        load_v4_authority(root, schema_root=SCHEMA_ROOT)
+
+
+def test_rollback_retires_only_proven_work_and_fabricates_no_v31_results():
+    v31 = {
+        "protocol_id": "MISSION_CONTRACT_V3_1",
+        "mission_id": "TEST_MISSION",
+        "mission_revision": "2026-08-20-r2",
+        "repository": "example/project",
+        "desired_outcome": "old",
+        "gaps": [
+            {"gap_id": "GAP_01", "gap_state": "OPEN"},
+            {"gap_id": "GAP_02", "gap_state": "OPEN"},
+        ],
+        "authority_boundaries": ["old"],
+        "principal_manual_relay_count": 0,
+    }
+    v4 = mission()
+    rollback = derive_rollback_v31_mission(
+        v31,
+        v4,
+        legacy_completed_gap_ids={"GAP_01"},
+        realized_facts=[
+            {
+                "mission_id": "TEST_MISSION",
+                "mission_revision": "2026-09-02-r1",
+                "gap_id": "GAP_02",
+                "repository": "example/project",
+                "candidate_sha": "a" * 40,
+                "target_ref": "refs/heads/main",
+            }
+        ],
+        rollback_revision="2026-09-02-r2",
+    )
+    assert rollback["mission_revision"] == "2026-09-02-r2"
+    assert {gap["gap_id"]: gap["gap_state"] for gap in rollback["gaps"]} == {
+        "GAP_01": "RETIRED",
+        "GAP_02": "RETIRED",
+    }
+
+    queue = derive_empty_rollback_v31_queue(old_v31_queue())
+    assert queue["tasks"] == []
+    assert "worker_results" not in queue
+    assert queue["principal_manual_relay_count"] == 0
+
+
+def test_git_blob_binding_changes_when_authority_changes(tmp_path):
+    root = authority_root(tmp_path)
+    path = root / "control/missions/TEST_MISSION.mission.json"
+    first = git_blob_sha(path)
+    changed = mission()
+    changed["desired_outcome"] = "changed"
+    write_json(path, changed)
+    assert git_blob_sha(path) != first
