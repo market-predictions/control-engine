@@ -144,6 +144,48 @@ def _validate(instance: Any, schema: dict[str, Any], label: str) -> None:
     raise V4ValidationError(f"{label}: {detail}")
 
 
+def _validate_v31_mission_semantics(mission: dict[str, Any]) -> None:
+    """Apply the canonical V3.1 Mission invariants used by rollback materialization."""
+    _revision_key(mission["mission_revision"])
+    mission_repository = _canonical_repository(mission["repository"])
+    gaps = {gap["gap_id"]: gap for gap in mission["gaps"]}
+    if len(gaps) != len(mission["gaps"]):
+        raise V4ValidationError(f"{mission['mission_id']}: duplicate V3.1 gap_id")
+
+    for gap in gaps.values():
+        if _canonical_repository(gap["repository"]) != mission_repository:
+            raise V4ValidationError(
+                f"{mission['mission_id']}:{gap['gap_id']}: V3.1 gap repository mismatch"
+            )
+        dependencies = set(gap["depends_on"])
+        unknown = dependencies - gaps.keys()
+        if unknown:
+            raise V4ValidationError(
+                f"{mission['mission_id']}:{gap['gap_id']} unknown V3.1 dependencies: {sorted(unknown)}"
+            )
+        if gap["gap_id"] in dependencies:
+            raise V4ValidationError(
+                f"{mission['mission_id']}:{gap['gap_id']} V3.1 gap depends on itself"
+            )
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(gap_id: str) -> None:
+        if gap_id in visited:
+            return
+        if gap_id in visiting:
+            raise V4ValidationError(f"{mission['mission_id']} V3.1 dependency cycle at {gap_id}")
+        visiting.add(gap_id)
+        for dependency in gaps[gap_id]["depends_on"]:
+            visit(dependency)
+        visiting.remove(gap_id)
+        visited.add(gap_id)
+
+    for gap_id in sorted(gaps):
+        visit(gap_id)
+
+
 def _load_trusted_v31_mission(
     authority_root: Path,
     mission_id: str,
@@ -157,6 +199,7 @@ def _load_trusted_v31_mission(
     _validate(mission, _load_schema(schema_root, V31_MISSION_SCHEMA), "frozen V3.1 Mission")
     if mission.get("mission_id") != mission_id:
         raise V4ValidationError("frozen V3.1 Mission identity mismatch")
+    _validate_v31_mission_semantics(mission)
     return mission
 
 
@@ -430,8 +473,18 @@ def validate_v4_queue(queue: dict[str, Any], authority_root: Path, *, schema_roo
             if record is not None:
                 if candidate is None:
                     raise V4ValidationError(f"{record_field} exists without candidate: {logical}")
-                if record["candidate_sha"] != candidate["candidate_sha"]:
-                    raise V4ValidationError(f"{record_field} candidate drift: {logical}")
+                record_identity = (
+                    record["candidate_sha"],
+                    record["expected_base_branch"],
+                    record["expected_base_sha"],
+                )
+                candidate_identity = (
+                    candidate["candidate_sha"],
+                    candidate["expected_base_branch"],
+                    candidate["expected_base_sha"],
+                )
+                if record_identity != candidate_identity:
+                    raise V4ValidationError(f"{record_field} candidate/base drift: {logical}")
 
     lock = queue["execution_lock"]
     if lock is None:
@@ -744,6 +797,7 @@ def derive_rollback_v31_mission(
         if gap_id not in retired and isinstance(gap.get("depends_on"), list):
             gap["depends_on"] = [dependency for dependency in gap["depends_on"] if dependency not in retired]
     _validate(rollback, _load_schema(schema_root, V31_MISSION_SCHEMA), "rollback V3.1 Mission")
+    _validate_v31_mission_semantics(rollback)
     return rollback
 
 
