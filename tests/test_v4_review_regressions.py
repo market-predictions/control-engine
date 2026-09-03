@@ -11,6 +11,7 @@ from control_engine.v4_contracts import (
     V4ValidationError,
     acquire_task_v4,
     build_rollback_v31_queue,
+    derive_rollback_v31,
 )
 from scripts import validate_private_control_v31 as v31_private_validator
 
@@ -118,6 +119,57 @@ def test_rollback_rejects_malformed_preserved_v31_migration_fact() -> None:
 
     with pytest.raises(V4ValidationError, match="pre-cutover V3.1 queue invalid"):
         build_rollback_v31_queue(pre_v31_queue, _empty_v4_queue())
+
+
+def test_old_revision_migration_fact_does_not_retire_newer_frozen_gap() -> None:
+    old_fact = {
+        "protocol_id": "CONTROL_V3_1_MIGRATION_FACT",
+        "fact": "LEGACY_PROJECT_INTEGRATION_COMPLETED",
+        "mission_id": "M",
+        "mission_revision": "2026-09-01-r1",
+        "gap_id": "G1",
+        "repository": "example/repo",
+        "source_task_id": "legacy-G1",
+        "source_result_ref": "control/worker-results/G1.json",
+        "imported_at": "2026-09-02T21:00:00Z",
+        "principal_manual_relay_count": 0,
+    }
+    pre_v31_queue = {
+        "version": "3.1",
+        "principal_manual_relay_count": 0,
+        "migration_facts": [old_fact],
+        "tasks": [],
+    }
+    frozen_mission = {
+        "protocol_id": "MISSION_CONTRACT_V3_1",
+        "mission_id": "M",
+        "mission_revision": "2026-09-02-r2",
+        "repository": "example/repo",
+        "desired_outcome": "bounded outcome",
+        "gaps": [{
+            "gap_id": "G1",
+            "gap_state": "OPEN",
+            "depends_on": [],
+            "repository": "example/repo",
+            "operation": "IMPLEMENTATION",
+            "acceptance": ["accept G1 in r2"],
+            "integration_policy": "HOLD_AFTER_PASS",
+        }],
+        "authority_boundaries": ["no production authority"],
+        "supersedes_revision": "2026-09-01-r1",
+        "principal_manual_relay_count": 0,
+    }
+
+    missions, rollback_queue, satisfied = derive_rollback_v31(
+        pre_v31_queue=pre_v31_queue,
+        v4_queue=_empty_v4_queue(),
+        pre_cutover_missions=[frozen_mission],
+        rollback_revisions={"M": "2026-09-03-r3"},
+    )
+
+    assert satisfied == {}
+    assert missions[0]["gaps"][0]["gap_state"] == "OPEN"
+    assert rollback_queue["migration_facts"] == [old_fact]
 
 
 def _git(root: Path, *args: str) -> str:
