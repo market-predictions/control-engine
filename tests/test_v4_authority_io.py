@@ -189,6 +189,23 @@ def test_changed_committed_mission_changes_trusted_blob_identity(tmp_path: Path)
     assert after != before
 
 
+def test_immutable_v4_commit_pin_reads_original_authority_after_checkout_moves(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    frozen_pin = _git(root, "rev-parse", "HEAD")
+    frozen_blob = load_v4_authority_from_git(root, commit_sha=frozen_pin).mission_blob_shas["M"]
+
+    changed = _mission()
+    changed["desired_outcome"] = "post-cutover Mission drift"
+    _commit_authority(root, changed)
+
+    assert _git(root, "rev-parse", "HEAD") != frozen_pin
+    frozen = load_v4_authority_from_git(root, commit_sha=frozen_pin)
+    current = load_v4_authority_from_git(root)
+    assert frozen.mission_blob_shas["M"] == frozen_blob
+    assert current.mission_blob_shas["M"] != frozen_blob
+    assert frozen.missions[0]["desired_outcome"] == "bounded outcome"
+
+
 def test_forward_transform_uses_actual_authority_blob_shas(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     bundle = load_v4_authority_from_git(root)
@@ -254,8 +271,9 @@ def test_queue_binding_rejects_task_for_unknown_trusted_gap(tmp_path: Path) -> N
         assert_v4_queue_bound_to_authority(forged, bundle)
 
 
-def test_rollback_derives_frozen_v4_mission_set_from_git_and_rejects_drift(tmp_path: Path) -> None:
+def test_rollback_derives_frozen_v4_mission_set_from_pin_and_rejects_drift(tmp_path: Path) -> None:
     frozen = _repo(tmp_path, "frozen-v4")
+    frozen_pin = _git(frozen, "rev-parse", "HEAD")
     changed = _mission()
     changed["desired_outcome"] = "post-cutover Mission drift"
     current = _repo(tmp_path, "current-v4", changed)
@@ -268,8 +286,33 @@ def test_rollback_derives_frozen_v4_mission_set_from_git_and_rejects_drift(tmp_p
             pre_v31_queue=_v31_queue(),
             v4_queue=current_queue,
             frozen_v31_authority_root=tmp_path / "unused-because-drift-fails-first",
+            frozen_v31_authority_commit_sha="1" * 40,
             frozen_v4_authority_root=frozen,
+            frozen_v4_authority_commit_sha=frozen_pin,
             current_v4_authority_root=current,
+            rollback_revisions={"M": "2026-09-03-r3"},
+        )
+
+
+def test_rollback_same_checkout_cannot_redefine_frozen_v4_authority(tmp_path: Path) -> None:
+    root = _repo(tmp_path, "moving-v4")
+    frozen_pin = _git(root, "rev-parse", "HEAD")
+    changed = _mission()
+    changed["desired_outcome"] = "post-cutover Mission drift"
+    _commit_authority(root, changed)
+    current_queue = forward_transform_v31_to_v4_from_git(
+        _v31_queue(), authority_root=root, transformed_at=NOW
+    )
+
+    with pytest.raises(V4ValidationError, match="drifted from frozen cutover Git authority"):
+        derive_rollback_v31_from_git(
+            pre_v31_queue=_v31_queue(),
+            v4_queue=current_queue,
+            frozen_v31_authority_root=tmp_path / "unused-because-drift-fails-first",
+            frozen_v31_authority_commit_sha="1" * 40,
+            frozen_v4_authority_root=root,
+            frozen_v4_authority_commit_sha=frozen_pin,
+            current_v4_authority_root=root,
             rollback_revisions={"M": "2026-09-03-r3"},
         )
 
