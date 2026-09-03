@@ -95,7 +95,6 @@ def _head_commit(root: Path) -> str:
 
 def _committed_tree(root: Path, *, commit_sha: str | None = None) -> dict[str, tuple[str, str, str]]:
     treeish = _commit_sha(commit_sha) if commit_sha is not None else _head_commit(root)
-    # `ls-tree <exact commit>` is immutable-object based; replacement refs are disabled by _git.
     raw = _git(root, "ls-tree", "-rz", "-r", "--full-tree", treeish)
     entries: dict[str, tuple[str, str, str]] = {}
     for record in raw.split(b"\0"):
@@ -191,21 +190,12 @@ def load_v31_missions_from_git(
     *,
     commit_sha: str | None = None,
 ) -> tuple[dict[str, Any], ...]:
-    """Load Missions only after validating complete frozen V3.1 authority.
-
-    When `commit_sha` is supplied, the checkout must still be exactly at that
-    immutable pin before the existing replacement-ref-resistant V3.1 validator
-    is allowed to read HEAD. A moved checkout therefore fails closed instead of
-    silently redefining what "frozen" means.
-    """
+    """Load Missions after validating one exact committed V3.1 authority object."""
     root = Path(authority_root)
-    if commit_sha is not None:
-        pin = _commit_sha(commit_sha)
-        if _head_commit(root) != pin:
-            raise V4ValidationError("frozen V3.1 authority checkout moved from immutable commit pin")
+    pin = _commit_sha(commit_sha) if commit_sha is not None else None
     try:
-        v31_private_validator.validate_candidate(root)
-        entries = v31_private_validator.committed_tree(root)
+        v31_private_validator.validate_candidate(root, commit_sha=pin)
+        entries = v31_private_validator.committed_tree(root, commit_sha=pin)
         missions = v31_private_validator.mission_documents_by_identity(root, entries)
     except v31_private_validator.ValidationError as exc:
         raise V4ValidationError("frozen V3.1 authority fails trusted validation") from exc
