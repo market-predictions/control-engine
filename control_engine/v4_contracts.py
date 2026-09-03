@@ -232,6 +232,10 @@ def validate_queue_v4(queue: Mapping[str, Any]) -> None:
     _validate_schema(queue, QUEUE_SCHEMA_REL)
     if queue.get("version") != V4_VERSION or not _zero(queue.get("principal_manual_relay_count")):
         raise V4ValidationError("V4 queue identity invalid")
+    try:
+        migration_v31.validate_migration_facts(queue)
+    except migration_v31.MigrationError as exc:
+        raise V4ValidationError("V4 queue contains noncanonical V3.1 migration facts") from exc
 
     fact_keys: set[tuple[str, str, str]] = set()
     for fact in queue["migration_facts"]:
