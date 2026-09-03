@@ -108,26 +108,20 @@ def git_bytes(root: Path, *args: str) -> bytes:
 def _commit_sha(value: object) -> str:
     if not isinstance(value, str) or COMMIT_SHA_RE.fullmatch(value) is None:
         raise ValidationError("trusted commit pin must be an exact 40-char lowercase SHA")
-    try:
-        resolved = git_bytes(Path.cwd(), "--version")
-        del resolved
-    except ValidationError:
-        raise
     return value
 
 
 def committed_tree(root: Path, *, commit_sha: str | None = None) -> dict[str, tuple[str, str, str]]:
     treeish = "HEAD"
     if commit_sha is not None:
-        if not isinstance(commit_sha, str) or COMMIT_SHA_RE.fullmatch(commit_sha) is None:
-            raise ValidationError("trusted commit pin must be an exact 40-char lowercase SHA")
+        pin = _commit_sha(commit_sha)
         try:
-            resolved = git_bytes(root, "rev-parse", "--verify", f"{commit_sha}^{{commit}}").decode("ascii", "strict").strip()
+            resolved = git_bytes(root, "rev-parse", "--verify", f"{pin}^{{commit}}").decode("ascii", "strict").strip()
         except UnicodeDecodeError as exc:
             raise ValidationError("trusted commit pin is not a commit") from exc
-        if resolved != commit_sha:
+        if resolved != pin:
             raise ValidationError("trusted commit pin is not the exact requested commit")
-        treeish = commit_sha
+        treeish = pin
     raw = git_bytes(root, "ls-tree", "-rz", "-r", "--full-tree", treeish)
     entries: dict[str, tuple[str, str, str]] = {}
     for record in raw.split(b"\0"):
