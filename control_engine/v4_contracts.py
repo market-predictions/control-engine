@@ -582,20 +582,13 @@ def _frozen_v31_gap_index(
     return index
 
 
-def derive_satisfied_gap_ids(
+def _derive_satisfied_gap_keys(
     pre_v31_queue: Mapping[str, Any],
     v4_queue: Mapping[str, Any],
     *,
     pre_cutover_missions: Sequence[Mapping[str, Any]],
-) -> dict[str, set[str]]:
-    """Derive only completion that exact frozen-revision evidence can prove.
-
-    V3.1 migration facts count only through the canonical V3.1 satisfaction
-    predicate against the exact frozen pre-cutover Mission revision. A valid
-    historical fact for an older revision remains evidence but cannot satisfy a
-    newer frozen Mission revision. V4 DONE may satisfy the corresponding frozen
-    gap only after exact PASS evidence is already canonical in the V4 queue.
-    """
+) -> set[tuple[str, str, str]]:
+    """Return only exact frozen `(mission, revision, gap)` completion identities."""
     try:
         kernel_v31.validate(pre_v31_queue)
         migration_v31.validate_migration_facts(pre_v31_queue)
@@ -611,10 +604,10 @@ def derive_satisfied_gap_ids(
             raise V4ValidationError("frozen rollback Mission/gap identity is ambiguous")
         by_mission_gap[key] = revision
 
-    satisfied: dict[str, set[str]] = {}
+    satisfied: set[tuple[str, str, str]] = set()
     for (mission_id, gap_id), revision in sorted(by_mission_gap.items()):
         if migration_v31.gap_satisfied_by_fact(pre_v31_queue, mission_id, revision, gap_id):
-            satisfied.setdefault(mission_id, set()).add(gap_id)
+            satisfied.add((mission_id, revision, gap_id))
 
     for task in v4_queue["tasks"]:
         if task["status"] != "DONE":
@@ -622,39 +615,70 @@ def derive_satisfied_gap_ids(
         if not _task_review_passed(task):
             raise V4ValidationError("V4 DONE task lacks exact review evidence")
         key = (task["mission_id"], task["gap_id"])
-        if key not in by_mission_gap:
+        revision = by_mission_gap.get(key)
+        if revision is None:
             raise V4ValidationError("V4 DONE task does not map to frozen V3.1 Mission gap")
-        satisfied.setdefault(task["mission_id"], set()).add(task["gap_id"])
+        satisfied.add((task["mission_id"], revision, task["gap_id"]))
     return satisfied
+
+
+def derive_satisfied_gap_ids(
+    pre_v31_queue: Mapping[str, Any],
+    v4_queue: Mapping[str, Any],
+    *,
+    pre_cutover_missions: Sequence[Mapping[str, Any]],
+) -> dict[str, set[str]]:
+    """Compatibility/reporting view derived only after exact revision binding.
+
+    This reduced view is not accepted by the rollback-Mission transformer. It is
+    returned only for reporting/backward-compatible evidence display.
+    """
+    keys = _derive_satisfied_gap_keys(
+        pre_v31_queue,
+        v4_queue,
+        pre_cutover_missions=pre_cutover_missions,
+    )
+    reduced: dict[str, set[str]] = {}
+    for mission_id, _revision, gap_id in keys:
+        reduced.setdefault(mission_id, set()).add(gap_id)
+    return reduced
 
 
 def derive_rollback_missions_v31(
     pre_cutover_missions: Sequence[Mapping[str, Any]],
     *,
-    satisfied_gap_ids: Mapping[str, Iterable[str]],
+    satisfied_gap_keys: Iterable[tuple[str, str, str]] | None = None,
     rollback_revisions: Mapping[str, str],
+    satisfied_gap_ids: Mapping[str, Iterable[str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Derive dependency-live V3.1 rollback Missions from frozen V3.1 truth.
+    """Derive rollback Missions using only full frozen Mission/gap identities."""
+    if satisfied_gap_ids is not None:
+        raise V4ValidationError(
+            "satisfied gap does not exist as an exact frozen Mission/revision identity; reduced IDs are forbidden"
+        )
 
-    `satisfied_gap_ids` must come from `derive_satisfied_gap_ids`, which binds
-    migration-fact satisfaction to each exact frozen Mission revision.
-    """
+    gap_index = _frozen_v31_gap_index(pre_cutover_missions)
+    satisfied_keys = set(satisfied_gap_keys or ())
+    if not satisfied_keys.issubset(gap_index):
+        raise V4ValidationError("satisfied gap does not exist in exact frozen Mission/revision authority")
+
     output: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in pre_cutover_missions:
-        if source.get("protocol_id") != "MISSION_CONTRACT_V3_1":
-            raise V4ValidationError("rollback source Mission is not V3.1")
         mission_id = source.get("mission_id")
         if not isinstance(mission_id, str) or not mission_id or mission_id in seen:
             raise V4ValidationError("rollback Mission identity invalid or duplicated")
         seen.add(mission_id)
+        source_revision = source.get("mission_revision")
         new_revision = rollback_revisions.get(mission_id)
-        if not isinstance(new_revision, str) or not revision_strictly_precedes(source.get("mission_revision"), new_revision):
+        if not isinstance(new_revision, str) or not revision_strictly_precedes(source_revision, new_revision):
             raise V4ValidationError("rollback Mission revision must move forward monotonically")
         ids = {gap["gap_id"] for gap in source.get("gaps", [])}
-        satisfied = set(satisfied_gap_ids.get(mission_id, ()))
-        if not satisfied.issubset(ids):
-            raise V4ValidationError("satisfied gap does not exist in frozen Mission")
+        satisfied = {
+            gap_id
+            for key_mission_id, key_revision, gap_id in satisfied_keys
+            if key_mission_id == mission_id and key_revision == source_revision
+        }
 
         mission = deepcopy(source)
         old_revision = mission["mission_revision"]
@@ -717,15 +741,18 @@ def derive_rollback_v31(
     pre_cutover_missions: Sequence[Mapping[str, Any]],
     rollback_revisions: Mapping[str, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, set[str]]]:
-    satisfied = derive_satisfied_gap_ids(
+    satisfied_keys = _derive_satisfied_gap_keys(
         pre_v31_queue,
         v4_queue,
         pre_cutover_missions=pre_cutover_missions,
     )
     missions = derive_rollback_missions_v31(
         pre_cutover_missions,
-        satisfied_gap_ids=satisfied,
+        satisfied_gap_keys=satisfied_keys,
         rollback_revisions=rollback_revisions,
     )
     queue = build_rollback_v31_queue(pre_v31_queue, v4_queue)
+    satisfied: dict[str, set[str]] = {}
+    for mission_id, _revision, gap_id in satisfied_keys:
+        satisfied.setdefault(mission_id, set()).add(gap_id)
     return missions, queue, satisfied
