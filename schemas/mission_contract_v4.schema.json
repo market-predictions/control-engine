@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://control.local/schemas/mission_contract_v4.schema.json",
+  "title": "MISSION_CONTRACT_V4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_id",
+    "mission_id",
+    "mission_revision",
+    "repository",
+    "desired_outcome",
+    "gaps",
+    "authority_boundaries",
+    "principal_manual_relay_count"
+  ],
+  "properties": {
+    "protocol_id": {"const": "MISSION_CONTRACT_V4"},
+    "mission_id": {"type": "string", "minLength": 1, "pattern": "^(?!.*--)(?!.*[\\r\\n])[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$"},
+    "mission_revision": {"type": "string", "pattern": "^(?!.*[\\r\\n])[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"},
+    "project_id": {"type": "string", "minLength": 1},
+    "effective_at": {"type": "string", "minLength": 1},
+    "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+    "project_governance_ref": {"type": "string", "minLength": 1},
+    "desired_outcome": {"type": "string", "minLength": 1},
+    "success_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion_id", "description", "required"],
+        "properties": {
+          "criterion_id": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"}
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gap_id",
+          "gap_state",
+          "depends_on",
+          "repository",
+          "acceptance",
+          "integration_policy",
+          "review_policy"
+        ],
+        "properties": {
+          "gap_id": {"type": "string", "minLength": 1, "pattern": "^(?!.*--)(?!.*[\\r\\n])[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$"},
+          "criterion_id": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "gap_state": {"enum": ["OPEN", "RETIRED"]},
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "pattern": "^(?!.*--)(?!.*[\\r\\n])[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$"},
+            "uniqueItems": true
+          },
+          "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "integration_policy": {"enum": ["AUTO_AFTER_PASS", "HOLD_AFTER_PASS"]},
+          "review_policy": {"enum": ["INTERNAL", "EXTERNAL"]},
+          "convergence_required": {"type": "boolean"}
+        }
+      }
+    },
+    "done_carry_forward": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol_id",
+          "target_gap_id",
+          "source_mission_revision",
+          "source_gap_id",
+          "source_fact_kind",
+          "source_fact_ref"
+        ],
+        "properties": {
+          "protocol_id": {"const": "DONE_CARRY_FORWARD"},
+          "target_gap_id": {"type": "string", "minLength": 1},
+          "source_mission_revision": {"type": "string", "pattern": "^(?!.*[\\r\\n])[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"},
+          "source_gap_id": {"type": "string", "minLength": 1},
+          "source_fact_kind": {"enum": ["MIGRATION_FACT", "V4_DONE"]},
+          "source_fact_ref": {"type": "string", "minLength": 1},
+          "source_task_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"source_fact_kind": {"const": "V4_DONE"}}, "required": ["source_fact_kind"]},
+            "then": {"required": ["source_task_sha256"]},
+            "else": {"not": {"required": ["source_task_sha256"]}}
+          }
+        ]
+      }
+    },
+    "authority_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "terminal_conditions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "supersedes_revision": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^(?!.*[\\r\\n])[0-9]{4}-[0-9]{2}-[0-9]{2}-r[1-9][0-9]*$"}
+      ]
+    },
+    "principal_manual_relay_count": {"const": 0}
+  }
+}

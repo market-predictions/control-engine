@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://control.local/schemas/repository_authority_v4.schema.json",
+  "title": "CONTROL_REPOSITORY_AUTHORITY_V4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_id",
+    "repository",
+    "required_check_runs",
+    "principal_manual_relay_count"
+  ],
+  "properties": {
+    "protocol_id": {"const": "CONTROL_REPOSITORY_AUTHORITY_V4"},
+    "repository": {"type": "string", "pattern": "^(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$"},
+    "required_check_runs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "principal_manual_relay_count": {"const": 0}
+  }
+}

@@ -24,6 +24,7 @@ REPOSITORY_SCHEMA_REL = "schemas/repository_authority_v31.schema.json"
 OWNER_RE = re.compile(r"^(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 REVISION_RE = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})-r(?P<sequence>[1-9]\d*)$")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ValidationError(ValueError):
@@ -93,7 +94,7 @@ def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
 def git_bytes(root: Path, *args: str) -> bytes:
     try:
         result = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", *args],
             cwd=root,
             check=True,
             stdout=subprocess.PIPE,
@@ -104,8 +105,24 @@ def git_bytes(root: Path, *args: str) -> bytes:
     return result.stdout
 
 
-def committed_tree(root: Path) -> dict[str, tuple[str, str, str]]:
-    raw = git_bytes(root, "ls-tree", "-rz", "-r", "--full-tree", "HEAD")
+def _commit_sha(value: object) -> str:
+    if not isinstance(value, str) or COMMIT_SHA_RE.fullmatch(value) is None:
+        raise ValidationError("trusted commit pin must be an exact 40-char lowercase SHA")
+    return value
+
+
+def committed_tree(root: Path, *, commit_sha: str | None = None) -> dict[str, tuple[str, str, str]]:
+    treeish = "HEAD"
+    if commit_sha is not None:
+        pin = _commit_sha(commit_sha)
+        try:
+            resolved = git_bytes(root, "rev-parse", "--verify", f"{pin}^{{commit}}").decode("ascii", "strict").strip()
+        except UnicodeDecodeError as exc:
+            raise ValidationError("trusted commit pin is not a commit") from exc
+        if resolved != pin:
+            raise ValidationError("trusted commit pin is not the exact requested commit")
+        treeish = pin
+    raw = git_bytes(root, "ls-tree", "-rz", "-r", "--full-tree", treeish)
     entries: dict[str, tuple[str, str, str]] = {}
     for record in raw.split(b"\0"):
         if not record:
@@ -283,8 +300,8 @@ def assert_gap_integration_authorized(
         raise ValidationError("gap integration policy exceeds Control authority")
 
 
-def validate_candidate(root: Path) -> None:
-    entries = committed_tree(root)
+def validate_candidate(root: Path, *, commit_sha: str | None = None) -> None:
+    entries = committed_tree(root, commit_sha=commit_sha)
     mission_paths, authority_paths = validate_surface(entries)
     mission_schema, repository_schema = validate_trusted_schema_mirrors(root, entries)
 
