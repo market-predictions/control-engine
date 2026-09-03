@@ -211,3 +211,27 @@ def test_trusted_v31_git_reader_ignores_local_replacement_refs(tmp_path: Path) -
 
     trusted = v31_private_validator.git_bytes(root, "cat-file", "blob", original_oid)
     assert trusted == b'{"value":"committed"}\n'
+
+
+def test_trusted_v31_tree_pin_survives_head_movement(tmp_path: Path) -> None:
+    root = tmp_path / "pinned-v31"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "Control Test")
+
+    authority_path = root / "authority.json"
+    authority_path.write_text('{"value":"frozen"}\n', encoding="utf-8")
+    _git(root, "add", "authority.json")
+    _git(root, "commit", "-m", "frozen")
+    frozen_pin = _git(root, "rev-parse", "HEAD")
+
+    authority_path.write_text('{"value":"current"}\n', encoding="utf-8")
+    _git(root, "add", "authority.json")
+    _git(root, "commit", "-m", "current")
+    assert _git(root, "rev-parse", "HEAD") != frozen_pin
+
+    frozen_entries = v31_private_validator.committed_tree(root, commit_sha=frozen_pin)
+    current_entries = v31_private_validator.committed_tree(root)
+    assert v31_private_validator.blob_bytes(root, frozen_entries, "authority.json") == b'{"value":"frozen"}\n'
+    assert v31_private_validator.blob_bytes(root, current_entries, "authority.json") == b'{"value":"current"}\n'
