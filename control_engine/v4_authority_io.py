@@ -11,6 +11,7 @@ schemas/contracts, and then delegates to the pure V4 transforms.
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Any, Mapping, Sequence
 
@@ -29,6 +30,7 @@ from scripts import validate_private_control_v31 as v31_private_validator
 
 MISSION_PREFIX = "control/missions/"
 AUTHORITY_PREFIX = "control/repository-authority/"
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -77,8 +79,24 @@ def _git(root: Path, *args: str) -> bytes:
     return result.stdout
 
 
-def _committed_tree(root: Path) -> dict[str, tuple[str, str, str]]:
-    raw = _git(root, "ls-tree", "-rz", "-r", "--full-tree", "HEAD")
+def _commit_sha(value: object) -> str:
+    if not isinstance(value, str) or COMMIT_SHA_RE.fullmatch(value) is None:
+        raise V4ValidationError("frozen authority commit pin must be an exact 40-char lowercase SHA")
+    return value
+
+
+def _head_commit(root: Path) -> str:
+    try:
+        value = _git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii", "strict").strip()
+    except UnicodeDecodeError as exc:
+        raise V4ValidationError("trusted Git HEAD identity invalid") from exc
+    return _commit_sha(value)
+
+
+def _committed_tree(root: Path, *, commit_sha: str | None = None) -> dict[str, tuple[str, str, str]]:
+    treeish = _commit_sha(commit_sha) if commit_sha is not None else _head_commit(root)
+    # `ls-tree <exact commit>` is immutable-object based; replacement refs are disabled by _git.
+    raw = _git(root, "ls-tree", "-rz", "-r", "--full-tree", treeish)
     entries: dict[str, tuple[str, str, str]] = {}
     for record in raw.split(b"\0"):
         if not record:
@@ -117,10 +135,18 @@ def _blob(root: Path, entries: Mapping[str, tuple[str, str, str]], path: str) ->
     return _git(root, "cat-file", "blob", oid), oid
 
 
-def load_v4_authority_from_git(authority_root: Path) -> V4AuthorityBundle:
-    """Load V4 Missions/repository authority from exact committed HEAD data."""
+def load_v4_authority_from_git(
+    authority_root: Path,
+    *,
+    commit_sha: str | None = None,
+) -> V4AuthorityBundle:
+    """Load V4 authority from one exact committed Git object.
+
+    Generic callers may omit `commit_sha` to snapshot the checkout's current HEAD
+    once. Rollback frozen authority must pass the immutable V4-40 commit pin.
+    """
     root = Path(authority_root)
-    entries = _committed_tree(root)
+    entries = _committed_tree(root, commit_sha=commit_sha)
     mission_paths = _single_level_json_paths(entries, MISSION_PREFIX, ".mission.json")
     authority_paths = _single_level_json_paths(entries, AUTHORITY_PREFIX, ".json")
     if not mission_paths or not authority_paths:
@@ -160,9 +186,23 @@ def load_v4_authority_from_git(authority_root: Path) -> V4AuthorityBundle:
     )
 
 
-def load_v31_missions_from_git(authority_root: Path) -> tuple[dict[str, Any], ...]:
-    """Load Missions only after validating the complete frozen V3.1 authority root."""
+def load_v31_missions_from_git(
+    authority_root: Path,
+    *,
+    commit_sha: str | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Load Missions only after validating complete frozen V3.1 authority.
+
+    When `commit_sha` is supplied, the checkout must still be exactly at that
+    immutable pin before the existing replacement-ref-resistant V3.1 validator
+    is allowed to read HEAD. A moved checkout therefore fails closed instead of
+    silently redefining what "frozen" means.
+    """
     root = Path(authority_root)
+    if commit_sha is not None:
+        pin = _commit_sha(commit_sha)
+        if _head_commit(root) != pin:
+            raise V4ValidationError("frozen V3.1 authority checkout moved from immutable commit pin")
     try:
         v31_private_validator.validate_candidate(root)
         entries = v31_private_validator.committed_tree(root)
@@ -247,17 +287,25 @@ def derive_rollback_v31_from_git(
     pre_v31_queue: Mapping[str, Any],
     v4_queue: Mapping[str, Any],
     frozen_v31_authority_root: Path,
+    frozen_v31_authority_commit_sha: str,
     frozen_v4_authority_root: Path,
+    frozen_v4_authority_commit_sha: str,
     current_v4_authority_root: Path,
     rollback_revisions: Mapping[str, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, set[str]]]:
-    """Run bounded rollback against exact frozen/current committed Git authority."""
-    frozen_v4_bundle = load_v4_authority_from_git(frozen_v4_authority_root)
+    """Run bounded rollback against immutable frozen and current Git authority."""
+    frozen_v4_bundle = load_v4_authority_from_git(
+        frozen_v4_authority_root,
+        commit_sha=_commit_sha(frozen_v4_authority_commit_sha),
+    )
     current_v4_bundle = load_v4_authority_from_git(current_v4_authority_root)
     _require_frozen_v4_mission_set(frozen_v4_bundle, current_v4_bundle)
     assert_v4_queue_bound_to_authority(v4_queue, current_v4_bundle)
 
-    pre_cutover_missions: Sequence[Mapping[str, Any]] = load_v31_missions_from_git(frozen_v31_authority_root)
+    pre_cutover_missions: Sequence[Mapping[str, Any]] = load_v31_missions_from_git(
+        frozen_v31_authority_root,
+        commit_sha=_commit_sha(frozen_v31_authority_commit_sha),
+    )
     return derive_rollback_v31(
         pre_v31_queue=pre_v31_queue,
         v4_queue=v4_queue,
