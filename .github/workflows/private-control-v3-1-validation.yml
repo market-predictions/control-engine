@@ -148,7 +148,7 @@ jobs:
             python scripts/validate_private_control_v31.py private-candidate private-base
           elif [ "$VALIDATION_PROFILE" = "V4" ]; then
             python -m py_compile scripts/validate_private_control_v4.py
-            python scripts/validate_private_control_v4.py private-candidate private-base
+            python -m scripts.validate_private_control_v4 private-candidate private-base
           else
             echo 'unsupported private validation profile' >&2
             exit 2
