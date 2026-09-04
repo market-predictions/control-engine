@@ -1,0 +1,258 @@
+name: Control V4 Authority Adoption Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: PROBE proves the exact-old-SHA primitive without moving main; ADOPT performs the reviewed authority adoption.
+        required: true
+        type: choice
+        options: [PROBE, ADOPT]
+      expected_base_sha:
+        description: Exact reviewed private control-plane main base SHA.
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact reviewed private authority candidate SHA.
+        required: true
+        type: string
+      confirm_adopt:
+        description: For ADOPT only, enter ADOPT_REVIEWED_PRIVATE_MAIN exactly.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authority-adoption:
+    if: ${{ github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main' && github.actor == 'market-predictions' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create exact private authority capability
+        id: private-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: write
+
+      - name: Prove or perform exact-old-SHA authority adoption
+        shell: bash
+        env:
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          MODE: ${{ inputs.mode }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CONFIRM_ADOPT: ${{ inputs.confirm_adopt }}
+          CONTROL_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          TOKEN = os.environ['CONTROL_PLANE_TOKEN']
+          MODE = os.environ['MODE']
+          EXPECTED_BASE = os.environ['EXPECTED_BASE_SHA']
+          CANDIDATE = os.environ['CANDIDATE_SHA']
+          CONFIRM_ADOPT = os.environ.get('CONFIRM_ADOPT', '')
+          RUN_ID = os.environ['CONTROL_RUN_ID']
+          REPOSITORY = 'market-predictions/control-plane'
+          MAIN_REF = 'refs/heads/main'
+          ZERO_OID = '0' * 40
+          SHA_RE = re.compile(r'^[0-9a-f]{40}$')
+
+          class GateError(RuntimeError):
+              pass
+
+          headers = {
+              'Authorization': f'Bearer {TOKEN}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'control-v4-authority-adoption',
+          }
+
+          def rest_get(path, *, allow_404=False):
+              request = urllib.request.Request(
+                  f'https://api.github.com/{path}',
+                  headers=headers,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as exc:
+                  if allow_404 and exc.code == 404:
+                      return None
+                  raise GateError(f'GitHub REST read failed with HTTP {exc.code}') from exc
+
+          mutation = '''
+          mutation UpdateRefs($input: UpdateRefsInput!) {
+            updateRefs(input: $input) {
+              clientMutationId
+            }
+          }
+          '''
+
+          def update_refs(*, name, before_oid, after_oid, client_id, expect_rejection=False):
+              payload = {
+                  'query': mutation,
+                  'variables': {
+                      'input': {
+                          'repositoryId': repository_node_id,
+                          'clientMutationId': client_id,
+                          'refUpdates': [{
+                              'name': name,
+                              'beforeOid': before_oid,
+                              'afterOid': after_oid,
+                              'force': False,
+                          }],
+                      }
+                  },
+              }
+              request = urllib.request.Request(
+                  'https://api.github.com/graphql',
+                  data=json.dumps(payload).encode('utf-8'),
+                  headers={**headers, 'Content-Type': 'application/json'},
+                  method='POST',
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      result = json.load(response)
+              except urllib.error.HTTPError as exc:
+                  raise GateError(f'GitHub GraphQL transport failed with HTTP {exc.code}') from exc
+
+              errors = result.get('errors')
+              update_result = (result.get('data') or {}).get('updateRefs')
+              if expect_rejection:
+                  if not isinstance(errors, list) or not errors:
+                      raise GateError('negative exact-old-SHA probe was unexpectedly accepted')
+                  return
+              if errors:
+                  raise GateError('updateRefs returned GraphQL errors')
+              if not isinstance(update_result, dict):
+                  raise GateError('updateRefs returned no success payload')
+
+          if MODE not in {'PROBE', 'ADOPT'}:
+              raise GateError('unsupported authority-adoption mode')
+          if SHA_RE.fullmatch(EXPECTED_BASE) is None or SHA_RE.fullmatch(CANDIDATE) is None:
+              raise GateError('candidate/base must be exact lowercase 40-char SHAs')
+          if EXPECTED_BASE == CANDIDATE:
+              raise GateError('candidate must advance the reviewed base')
+          if MODE == 'ADOPT' and CONFIRM_ADOPT != 'ADOPT_REVIEWED_PRIVATE_MAIN':
+              raise GateError('ADOPT confirmation phrase is absent or incorrect')
+
+          repository = rest_get(f'repos/{REPOSITORY}')
+          if repository.get('full_name') != REPOSITORY or repository.get('private') is not True:
+              raise GateError('private authority repository identity invalid')
+          repository_node_id = repository.get('node_id')
+          if not isinstance(repository_node_id, str) or not repository_node_id:
+              raise GateError('private repository GraphQL node id unavailable')
+
+          main = rest_get(f'repos/{REPOSITORY}/branches/main')
+          live_main = (main.get('commit') or {}).get('sha')
+          if live_main != EXPECTED_BASE:
+              raise GateError('private main no longer equals the reviewed base')
+
+          comparison = rest_get(f'repos/{REPOSITORY}/compare/{EXPECTED_BASE}...{CANDIDATE}')
+          merge_base = (comparison.get('merge_base_commit') or {}).get('sha')
+          if (
+              comparison.get('status') != 'ahead'
+              or comparison.get('behind_by') != 0
+              or not isinstance(comparison.get('ahead_by'), int)
+              or comparison.get('ahead_by') < 1
+              or merge_base != EXPECTED_BASE
+          ):
+              raise GateError('candidate is not a strict descendant of the exact reviewed base')
+
+          if MODE == 'PROBE':
+              # Main must reject an intentionally impossible exact-old-SHA condition.
+              update_refs(
+                  name=MAIN_REF,
+                  before_oid=ZERO_OID,
+                  after_oid=live_main,
+                  client_id=f'control-v4-main-negative-{RUN_ID}',
+                  expect_rejection=True,
+              )
+              if (rest_get(f'repos/{REPOSITORY}/branches/main').get('commit') or {}).get('sha') != live_main:
+                  raise GateError('private main changed during the negative probe')
+
+              # Positive disposable-ref proof uses the same updateRefs primitive, then fact-first exact-SHA cleanup.
+              canary_branch = f'control-v4-authority-canary-{RUN_ID}'
+              canary_ref = f'refs/heads/{canary_branch}'
+              canary_path = f'repos/{REPOSITORY}/git/ref/heads/{urllib.parse.quote(canary_branch, safe="")}'
+              if rest_get(canary_path, allow_404=True) is not None:
+                  raise GateError('disposable authority canary ref already exists')
+
+              canary_create_attempted = False
+              try:
+                  canary_create_attempted = True
+                  update_refs(
+                      name=canary_ref,
+                      before_oid=ZERO_OID,
+                      after_oid=live_main,
+                      client_id=f'control-v4-canary-create-{RUN_ID}',
+                  )
+                  canary = rest_get(canary_path)
+                  if (canary.get('object') or {}).get('sha') != live_main:
+                      raise GateError('disposable authority canary readback mismatch')
+              finally:
+                  if canary_create_attempted:
+                      # A failed/ambiguous create response does not prove the remote mutation failed.
+                      # Reconcile authoritative ref state before deciding whether cleanup is required.
+                      canary = rest_get(canary_path, allow_404=True)
+                      if canary is not None:
+                          canary_sha = (canary.get('object') or {}).get('sha')
+                          if canary_sha != live_main:
+                              raise GateError(
+                                  'disposable authority canary entered unexpected state; refusing cleanup'
+                              )
+
+                          delete_error = None
+                          try:
+                              update_refs(
+                                  name=canary_ref,
+                                  before_oid=live_main,
+                                  after_oid=ZERO_OID,
+                                  client_id=f'control-v4-canary-delete-{RUN_ID}',
+                              )
+                          except Exception as exc:
+                              # The delete request may have committed remotely despite a lost response.
+                              delete_error = exc
+
+                          remaining = rest_get(canary_path, allow_404=True)
+                          if remaining is not None:
+                              remaining_sha = (remaining.get('object') or {}).get('sha')
+                              if remaining_sha != live_main:
+                                  raise GateError(
+                                      'disposable authority canary changed during cleanup; refusing delete'
+                                  )
+                              if delete_error is not None:
+                                  raise GateError(
+                                      'disposable authority canary delete outcome ambiguous and ref remains'
+                                  ) from delete_error
+                              raise GateError('disposable authority canary cleanup failed')
+
+              if (rest_get(f'repos/{REPOSITORY}/branches/main').get('commit') or {}).get('sha') != live_main:
+                  raise GateError('private main changed during authority probe')
+              print('CONTROL_V4_AUTHORITY_UPDATE_REFS_PROBE=PASS')
+          else:
+              update_refs(
+                  name=MAIN_REF,
+                  before_oid=EXPECTED_BASE,
+                  after_oid=CANDIDATE,
+                  client_id=f'control-v4-authority-adopt-{RUN_ID}',
+              )
+              adopted = (rest_get(f'repos/{REPOSITORY}/branches/main').get('commit') or {}).get('sha')
+              if adopted != CANDIDATE:
+                  raise GateError('mandatory exact authority post-adoption readback failed')
+              print('CONTROL_V4_AUTHORITY_ADOPTION=PASS')
+          PY
