@@ -2,9 +2,9 @@
   "schema_version": "1.0",
   "engine_id": "CONTROL_ENGINE",
   "engine_version": "3.1.0",
-  "control_runtime": "CONTROL_AUTONOMY_V3_1",
+  "control_runtime": "NONE_ACTIVE",
   "repository": "market-predictions/control-engine",
-  "public_boundary": "docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md",
+  "public_boundary": "docs/PUBLIC_PRIVATE_BOUNDARY_V4.md",
   "consumer_bundle": "ENGINE_BUNDLE_V1.json",
   "modules": [
     {

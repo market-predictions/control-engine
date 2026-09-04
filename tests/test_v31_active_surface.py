@@ -5,31 +5,24 @@ def workflows() -> dict[str, str]:
     return {p.name: p.read_text(encoding='utf-8') for p in Path('.github/workflows').glob('*.yml')}
 
 
-def test_current_surface_is_fenced_v31_plus_bounded_v4_authority_carrier():
+def test_current_surface_is_retired_v31_writer_plus_bounded_v4_authority_carrier():
     names = sorted(workflows())
     assert names == [
         'ci.yml',
-        'control-kernel-v3-1.yml',
         'control-v4-authority-adoption.yml',
         'private-control-v3-1-validation.yml',
     ]
 
 
-def test_no_reachable_semantic_runtime_writer_remains_while_v31_fence_is_active():
+def test_no_reachable_semantic_runtime_writer_remains_after_v31_writer_retirement():
     current = workflows()
+    assert 'control-kernel-v3-1.yml' not in current
     assert 'control-runtime-state' not in current['ci.yml']
 
     validator = current['private-control-v3-1-validation.yml']
     assert 'control-runtime-state' not in validator
     assert 'permission-contents: write' not in validator
     assert 'CONTROL_PRIVATE_RUNTIME_MUTATION=false' in validator
-
-    kernel = current['control-kernel-v3-1.yml']
-    assert '    if: ${{ false }}' in kernel
-    assert 'control-runtime-mutation' in kernel
-    assert 'CONTROL_RUNTIME_WRITER=CONTROL_KERNEL' in kernel
-    assert 'CONTROL_PROVIDER_FALLBACK=false' in kernel
-    assert 'CONTROL_A2=false' in kernel
 
     carrier = current['control-v4-authority-adoption.yml']
     assert 'control-runtime-state' not in carrier
@@ -111,6 +104,7 @@ def test_v4_authority_probe_reconciles_ambiguous_canary_writes_fact_first():
 
 def test_no_legacy_runtime_workflow_names_or_provider_markers():
     forbidden = {
+        'control-kernel-v3-1.yml',
         'canonical-b1-dual-executor-v1.yml',
         'scheduled-worker-a-v2.yml',
         'scheduled-worker-b-v2.yml',
