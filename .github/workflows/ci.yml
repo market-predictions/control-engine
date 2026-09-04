@@ -57,7 +57,7 @@ jobs:
           PY
       - name: Compile retained engine and trusted passive validators
         run: |
-          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py control_engine/v4_contracts.py control_engine/v4_safety.py control_engine/v4_authority_io.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py control_engine/v4_contracts.py control_engine/v4_safety.py control_engine/v4_authority_io.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py scripts/validate_private_control_v4.py
           bash -n scripts/github_app_preflight.sh
       - name: Verify immutable consumer bundle
         run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort)" = $'ci.yml\ncontrol-v4-authority-adoption.yml\nprivate-control-v3-1-validation.yml'
           test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nbundle.py\nkernel_v31.py\nmigration_v31.py\ntimeline.py\nv4_authority_io.py\nv4_contracts.py\nv4_safety.py'
-          test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py'
+          test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py\nvalidate_private_control_v4.py'
           grep -q 'control_runtime.*NONE_ACTIVE' ENGINE_MANIFEST.json
           ! test -e .github/workflows/control-kernel-v3-1.yml
           ! grep -q 'permission-contents: write' .github/workflows/private-control-v3-1-validation.yml
@@ -78,6 +78,7 @@ jobs:
           echo 'CONTROL_ENGINE_PASSIVE_V4_SURFACE=PASS'
           echo 'CONTROL_V4_AUTHORITY_CARRIER_PRESENT=true'
           echo 'CONTROL_V4_RUNTIME_WRITER_PRESENT=false'
+          echo 'CONTROL_PRIVATE_V4_VALIDATOR_PRESENT=true'
       - name: Synthetic engine smoke
         run: |
           python - <<'PY'
