@@ -1,26 +1,17 @@
 # Control Engine
 
-Public deterministic execution kernel for Control Autonomy V3.1.
+Public deterministic Control library and validation surface.
 
-## Canonical runtime model
+## V4 boundary
 
-Control Engine contains no persisted private Control runtime state. The private `market-predictions/control-plane` remains the sole planning/authority and runtime-state plane.
+Under Control V4 this repository owns **no active Control runtime writer** and persists no private Control runtime state.
 
-Exactly one public workflow owns canonical Control runtime mutation:
+Canonical Mission authority and runtime state remain in the private `market-predictions/control-plane` repository. After V4 cutover, the one recurring ChatGPT Control Runner operates that state through connected GitHub exact blob-SHA compare-and-swap.
 
-`/.github/workflows/control-kernel-v3-1.yml`
+The former V3.1 runtime workflow is retired at the V4 activation fence before V4 cutover. Retained V3.1 kernel, migration and validation code remains required deterministic rollback/migration/validation material while that concrete dependency exists; its presence does not make it an active runtime authority.
 
-Its deterministic implementation is:
+Normal CI and the existing read-only private validation carrier may remain active because neither can mutate canonical Control runtime state.
 
-`/scripts/control_kernel_v31.py`
+There is no replacement V4 runtime workflow, second queue, provider fallback or semantic worker infrastructure in this repository.
 
-The kernel supports only `TICK`, `CLAIM`, atomic `RECORD`, and `RELEASE`. `TICK` performs `RECONCILE -> INTEGRATE -> FEED`. It performs no semantic inference.
-
-Semantic lanes are exactly:
-
-- A1: `IMPLEMENTATION`, `REPAIR`;
-- B1: `ASSURANCE`.
-
-There is no baseline A2, provider fallback, semantic `PROJECT_INTEGRATION` task, worker-direct runtime write, project-intake routing plane, mandatory handover projection, or second queue.
-
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md` for the V3.1 trust boundary. Historical implementations remain available through Git history, not the active source surface.
+See `docs/PUBLIC_PRIVATE_BOUNDARY_V4.md` for the V4 public/private boundary.
