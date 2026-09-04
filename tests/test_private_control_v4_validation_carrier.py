@@ -20,7 +20,8 @@ def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_work
     assert 'sha != base_ref' in workflow
     assert 'profile = "V4"' in workflow
     assert 'ref: ${{ steps.gate.outputs.base_ref }}' in workflow
-    assert "python scripts/validate_private_control_v4.py private-candidate private-base" in workflow
+    assert "python -m scripts.validate_private_control_v4 private-candidate private-base" in workflow
+    assert "python scripts/validate_private_control_v4.py private-candidate private-base" not in workflow
     assert "permission-contents: read" in workflow
     assert "permission-contents: write" not in workflow
     assert "permission-pull-requests: write" not in workflow
