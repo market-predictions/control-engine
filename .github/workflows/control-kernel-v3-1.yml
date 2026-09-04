@@ -41,7 +41,7 @@ env:
 
 jobs:
   kernel:
-    if: github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
