@@ -1,4 +1,4 @@
-name: Validate Private Control V3.1
+name: Validate Private Control Authority
 
 on:
   issue_comment:
@@ -25,23 +25,56 @@ jobs:
           with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
               event = json.load(handle)
 
-          prefix = "CONTROL_PRIVATE_V31_VALIDATE "
           body = event.get("comment", {}).get("body", "")
-          authorized = (
+          common = (
               event.get("repository", {}).get("full_name") == "market-predictions/control-engine"
-              and event.get("issue", {}).get("number") == 87
               and event.get("comment", {}).get("user", {}).get("login") == "market-predictions"
               and isinstance(body, str)
+          )
+
+          prefix = "CONTROL_PRIVATE_V31_VALIDATE "
+          authorized = (
+              common
+              and event.get("issue", {}).get("number") == 87
               and body.startswith(prefix)
           )
           sha = body[len(prefix):] if authorized else ""
-          authorized = authorized and re.fullmatch(r"[0-9a-f]{40}", sha) is not None
+          profile = "V31" if authorized else ""
+          base_ref = "main" if authorized else ""
+
+          if not authorized:
+              v4_prefix = "CONTROL_PRIVATE_V4_VALIDATE "
+              v4_payload = body[len(v4_prefix):] if common and body.startswith(v4_prefix) else ""
+              v4_parts = v4_payload.split(" ") if v4_payload else []
+              v4_authorized = (
+                  common
+                  and event.get("issue", {}).get("number") == 106
+                  and len(v4_parts) == 2
+                  and all(re.fullmatch(r"[0-9a-f]{40}", part) is not None for part in v4_parts)
+              )
+              if v4_authorized:
+                  sha, base_ref = v4_parts
+                  profile = "V4"
+                  authorized = True
+
+          if profile == "V31":
+              authorized = re.fullmatch(r"[0-9a-f]{40}", sha) is not None
+          elif profile == "V4":
+              authorized = (
+                  re.fullmatch(r"[0-9a-f]{40}", sha) is not None
+                  and re.fullmatch(r"[0-9a-f]{40}", base_ref) is not None
+                  and sha != base_ref
+              )
+          else:
+              authorized = False
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"authorized={'true' if authorized else 'false'}\n")
               if authorized:
                   output.write(f"sha={sha}\n")
-          print("CONTROL_PRIVATE_V31_EVENT_GATE=" + ("AUTHORIZED" if authorized else "IGNORED"))
+                  output.write(f"profile={profile}\n")
+                  output.write(f"base_ref={base_ref}\n")
+          print("CONTROL_PRIVATE_EVENT_GATE=" + (f"AUTHORIZED_{profile}" if authorized else "IGNORED"))
           PY
 
       - name: Checkout trusted validator from public main
@@ -92,24 +125,34 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Checkout current private main as comparison data
+      - name: Checkout exact private comparison authority as data
         if: steps.gate.outputs.authorized == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: market-predictions/control-plane
-          ref: main
+          ref: ${{ steps.gate.outputs.base_ref }}
           token: ${{ steps.private-token.outputs.token }}
           path: private-base
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Validate candidate with trusted public code and schemas only
         if: steps.gate.outputs.authorized == 'true'
         shell: bash
+        env:
+          VALIDATION_PROFILE: ${{ steps.gate.outputs.profile }}
         run: |
           set -euo pipefail
-          python -m py_compile scripts/validate_private_control_v31.py
-          python scripts/validate_private_control_v31.py private-candidate private-base
+          if [ "$VALIDATION_PROFILE" = "V31" ]; then
+            python -m py_compile scripts/validate_private_control_v31.py
+            python scripts/validate_private_control_v31.py private-candidate private-base
+          elif [ "$VALIDATION_PROFILE" = "V4" ]; then
+            python -m py_compile scripts/validate_private_control_v4.py
+            python scripts/validate_private_control_v4.py private-candidate private-base
+          else
+            echo 'unsupported private validation profile' >&2
+            exit 2
+          fi
 
       - name: Prove read-only carrier boundary
         if: ${{ always() && steps.gate.outputs.authorized == 'true' }}
@@ -118,3 +161,5 @@ jobs:
           echo 'CONTROL_PRIVATE_RUNTIME_MUTATION=false'
           echo 'CONTROL_PRIVATE_VALIDATOR_SOURCE=PUBLIC_MAIN'
           echo 'CONTROL_PRIVATE_SCHEMA_AUTHORITY=PUBLIC_MAIN'
+          echo 'CONTROL_PRIVATE_VALIDATION_PROFILE=${{ steps.gate.outputs.profile }}'
+          echo 'CONTROL_PRIVATE_VALIDATED_BASE=${{ steps.gate.outputs.base_ref }}'
