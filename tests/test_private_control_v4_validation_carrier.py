@@ -284,10 +284,9 @@ def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots_an
     ).encode("utf-8")
     validator.validate_system_index(valid, runtime)
 
-    with pytest.raises(validator.ValidationError, match="stale V3.1"):
-        validator.validate_system_index(valid + b"\nv4_status=CANDIDATE_INERT_UNADOPTED\n", runtime)
-
     for injected in (
+        b"\nv4_status=V4_CURRENT\n",
+        b"\n- v4_status=CANDIDATE_INERT_UNADOPTED\n",
         b"\ncontrol_runtime_enabled=true\n",
         b"\n- control_runtime_enabled=false\n",
         b"\n> `integration_enabled=true`\n",
