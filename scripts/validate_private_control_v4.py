@@ -48,7 +48,11 @@ SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = "cfef93333aaf0a88ef72db3e3a4bd37c384217fc"
+REPAIRED_RUNNER_PROMPT_BLOB_SHA = "079edd313503a8e11f733b4b56f3fef669ab2f09"
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
+FORBIDDEN_RUNTIME_SELF_ATTESTATION = (
+    "this invocation is the exact reviewed scheduled Runner object/effective capability"
+)
 
 
 class ValidationError(ValueError):
@@ -91,6 +95,13 @@ def require_zero_relay_count(value: Mapping[str, Any]) -> None:
 def require_reviewed_automation_object_id(value: object) -> None:
     if value != REVIEWED_AUTOMATION_OBJECT_ID:
         raise ValidationError("Runner automation object differs from exact reviewed V4-30 object")
+
+
+def validate_runner_prompt_runtime_binding_semantics(prompt_text: str) -> None:
+    if FORBIDDEN_RUNTIME_SELF_ATTESTATION in prompt_text:
+        raise ValidationError(
+            "Runner prompt retains impossible in-run scheduler identity self-attestation"
+        )
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -218,10 +229,11 @@ def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
 
     prompt_text = _text(root, entries, RUNNER_PROMPT_PATH)
     _, prompt_oid = _blob(root, entries, RUNNER_PROMPT_PATH)
-    if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
+    if prompt_oid not in {REVIEWED_RUNNER_PROMPT_BLOB_SHA, REPAIRED_RUNNER_PROMPT_BLOB_SHA}:
         raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
     if config.get("prompt_blob_sha") != prompt_oid:
         raise ValidationError("Runner config does not bind the exact trusted reviewed prompt blob")
+    validate_runner_prompt_runtime_binding_semantics(prompt_text)
     if "status=CANDIDATE_INERT" in prompt_text or "status=CANDIDATE" in prompt_text:
         raise ValidationError("active Runner prompt retains candidate/inert lifecycle metadata")
 
