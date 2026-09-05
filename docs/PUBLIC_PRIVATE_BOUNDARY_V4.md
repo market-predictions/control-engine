@@ -12,6 +12,22 @@ After V4 cutover, canonical runtime mutation is performed only by the one recurr
 
 The V3.1 GitHub Actions runtime writer is retired at the V4 activation fence only after reversible fencing, proof of the exact private-main authority-adoption path using the reviewed exact-old-SHA `updateRefs.beforeOid` condition, and proof of the exact scheduled Runner effective capability. Native branch protection on private `control-plane@main` is optional defense in depth under the accepted V4 risk posture; it is not a retirement prerequisite. No GitHub Actions workflow in this repository may mutate `control-runtime-state` under normal V4 operation.
 
+## Status scope
+
+`ENGINE_MANIFEST.json` is a **component-local manifest** for `market-predictions/control-engine`. Its runtime-related fields describe only whether this public engine component owns semantic runtime authority or an active runtime writer.
+
+The manifest is never a source for current **global Control runtime status**. In particular:
+
+```text
+semantic_runtime_authority=false
+```
+
+means that the public engine is deterministic tooling and does not itself own the V4 semantic runtime. It does **not** mean that the canonical Control V4 Runner is inactive.
+
+Current global Control status must be reconstructed from the current private V4 runtime authority and the canonical `control-runtime-state` queue, with bounded recent Git/target evidence when activity details are required. Scheduler observations may corroborate liveness but are not semantic authority. Durable documentation may interpret those live facts but may not override them.
+
+A consumer must never promote a component-local manifest field into global Control state. If the authoritative private current-state sources cannot be read, the correct result is incomplete observability, not a fallback conclusion derived from this manifest.
+
 ## Retained V3.1 code
 
 V3.1 kernel/migration/validation code may remain while it has concrete rollback, migration, carry-forward-validation or historical validation value. Retained code is passive library material once writer reachability is retired; executable source presence alone grants no runtime authority.
