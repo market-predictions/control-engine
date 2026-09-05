@@ -196,8 +196,45 @@ def test_each_legacy_current_authority_path_is_behaviorally_rejected(
         validator.validate_current_surface(tmp_path, entries)
 
 
-def _runner_validation_payloads(prompt_oid: str) -> tuple[bytes, bytes, str]:
-    config_oid = "b" * 40
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout.strip()
+
+
+def _init_git_fixture(root: Path) -> None:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.name", "Control Tests")
+    _git(root, "config", "user.email", "control-tests@example.invalid")
+    (root / "control").mkdir(parents=True, exist_ok=True)
+
+
+def _git_blob_oid(root: Path, path: str) -> str:
+    oid = _git(root, "hash-object", path)
+    assert len(oid) == 40
+    return oid
+
+
+def _commit_fixture(root: Path, message: str = "fixture") -> dict[str, tuple[str, str, str]]:
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", message)
+    return validator.committed_tree(root)
+
+
+def _write_real_runner_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], str]:
+    _init_git_fixture(root)
+    prompt_path = root / validator.RUNNER_PROMPT_PATH
+    prompt_path.write_text(
+        "status=ACTIVE_BOUND\ncanonical reviewed prompt\n",
+        encoding="utf-8",
+    )
+    prompt_oid = _git_blob_oid(root, validator.RUNNER_PROMPT_PATH)
+
     config = {
         "protocol_id": "CONTROL_RUNNER_V4",
         "runner_id": "CONTROL_V4_RUNNER",
@@ -220,6 +257,10 @@ def _runner_validation_payloads(prompt_oid: str) -> tuple[bytes, bytes, str]:
         },
         "principal_manual_relay_count": 0,
     }
+    config_path = root / validator.RUNNER_CONFIG_PATH
+    config_path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
+    config_oid = _git_blob_oid(root, validator.RUNNER_CONFIG_PATH)
+
     runtime = {
         "protocol_id": "CONTROL_RUNTIME_AUTHORITY_V4",
         "control_runtime_enabled": True,
@@ -228,47 +269,39 @@ def _runner_validation_payloads(prompt_oid: str) -> tuple[bytes, bytes, str]:
         "runner_config_blob_sha": config_oid,
         "principal_manual_relay_count": 0,
     }
-    return (
-        json.dumps(runtime, separators=(",", ":")).encode(),
-        json.dumps(config, separators=(",", ":")).encode(),
-        config_oid,
+    runtime_path = root / validator.RUNTIME_PATH
+    runtime_path.write_text(json.dumps(runtime, separators=(",", ":")) + "\n", encoding="utf-8")
+
+    return _commit_fixture(root), prompt_oid
+
+
+def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted_from_real_git(
+    monkeypatch, tmp_path
+):
+    entries, prompt_oid = _write_real_runner_fixture(tmp_path)
+    prompt_raw, committed_prompt_oid = validator._blob(
+        tmp_path, entries, validator.RUNNER_PROMPT_PATH
     )
+    assert committed_prompt_oid == prompt_oid
+    assert prompt_raw == b"status=ACTIVE_BOUND\ncanonical reviewed prompt\n"
 
-
-def _install_runner_validation_fakes(monkeypatch, prompt_oid: str) -> None:
-    runtime_raw, config_raw, config_oid = _runner_validation_payloads(prompt_oid)
-
-    def fake_blob(root, entries, path):
-        if path == validator.RUNTIME_PATH:
-            return runtime_raw, "a" * 40
-        if path == validator.RUNNER_CONFIG_PATH:
-            return config_raw, config_oid
-        if path == validator.RUNNER_PROMPT_PATH:
-            return b"ignored because _text is patched", prompt_oid
-        raise AssertionError(f"unexpected blob path: {path}")
-
-    monkeypatch.setattr(validator, "_blob", fake_blob)
-    monkeypatch.setattr(
-        validator,
-        "_text",
-        lambda root, entries, path: "status=ACTIVE_BOUND\ncanonical reviewed prompt\n",
-    )
-
-
-def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted(monkeypatch, tmp_path):
-    _install_runner_validation_fakes(monkeypatch, validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA)
-    runtime = validator.validate_runtime_and_runner(tmp_path, {})
+    monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", prompt_oid)
+    runtime = validator.validate_runtime_and_runner(tmp_path, entries)
     assert runtime["control_runtime_enabled"] is True
     assert runtime["integration_enabled"] is False
 
 
-def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected(monkeypatch, tmp_path):
-    _install_runner_validation_fakes(monkeypatch, "d" * 40)
+def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(
+    monkeypatch, tmp_path
+):
+    entries, prompt_oid = _write_real_runner_fixture(tmp_path)
+    assert validator._regular_blob(entries, validator.RUNNER_PROMPT_PATH) == prompt_oid
+    monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", "d" * 40)
     with pytest.raises(
         validator.ValidationError,
         match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
     ):
-        validator.validate_runtime_and_runner(tmp_path, {})
+        validator.validate_runtime_and_runner(tmp_path, entries)
 
 
 def _valid_system_index() -> bytes:
@@ -286,23 +319,44 @@ def _valid_system_index() -> bytes:
     ).encode("utf-8")
 
 
-def test_exact_reviewed_system_index_blob_is_behaviorally_accepted():
+def _write_real_system_index_fixture(
+    root: Path,
+) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
+    _init_git_fixture(root)
+    index_path = root / validator.INDEX_PATH
+    index_path.write_bytes(_valid_system_index())
+    entries = _commit_fixture(root)
+    raw, oid = validator._blob(root, entries, validator.INDEX_PATH)
+    assert raw == _valid_system_index()
+    return entries, raw, oid
+
+
+def test_exact_reviewed_system_index_blob_is_behaviorally_accepted_from_real_git(
+    monkeypatch, tmp_path
+):
+    _entries, raw, oid = _write_real_system_index_fixture(tmp_path)
+    monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", oid)
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    validator.validate_system_index(
-        _valid_system_index(),
-        runtime,
-        index_oid=validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA,
+    validator.validate_system_index(raw, runtime, index_oid=oid)
+
+
+def test_changed_committed_system_index_blob_is_behaviorally_rejected_from_real_git(
+    monkeypatch, tmp_path
+):
+    _entries, approved_raw, approved_oid = _write_real_system_index_fixture(tmp_path)
+    monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", approved_oid)
+
+    index_path = tmp_path / validator.INDEX_PATH
+    index_path.write_bytes(approved_raw + b"\nchanged after review\n")
+    changed_entries = _commit_fixture(tmp_path, "changed index")
+    changed_raw, changed_oid = validator._blob(
+        tmp_path, changed_entries, validator.INDEX_PATH
     )
+    assert changed_oid != approved_oid
 
-
-def test_non_anchor_system_index_blob_is_behaviorally_rejected():
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
     with pytest.raises(
         validator.ValidationError,
         match="SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract",
     ):
-        validator.validate_system_index(
-            _valid_system_index(),
-            runtime,
-            index_oid="d" * 40,
-        )
+        validator.validate_system_index(changed_raw, runtime, index_oid=changed_oid)
