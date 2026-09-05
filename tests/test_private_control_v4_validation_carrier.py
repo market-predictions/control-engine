@@ -48,7 +48,7 @@ def test_v4_production_module_invocation_can_import_trusted_public_packages():
     assert "ModuleNotFoundError" not in result.stderr
 
 
-def test_v31_profile_is_preserved_for_truthful_pre_v4_80_rollback():
+def test_v31_profile_is_preserved_only_for_truthful_pre_v4_80_rollback_validation():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert 'prefix = "CONTROL_PRIVATE_V31_VALIDATE "' in workflow
     assert 'event.get("issue", {}).get("number") == 87' in workflow
@@ -65,6 +65,7 @@ def test_v4_validator_reads_committed_git_objects_only_and_reuses_public_contrac
     assert '"--no-replace-objects"' in text
     assert "CONTROL_PRIVATE_CANDIDATE_EXECUTION=false" in text
     assert "CONTROL_PRIVATE_RUNTIME_MUTATION=false" in text
+    assert "CONTROL_PRIVATE_V4_SINGLE_CURRENT_AUTHORITY=true" in text
     for forbidden in ("importlib", "runpy", "exec(", "eval(", "os.system", "shell=True"):
         assert forbidden not in text
 
@@ -102,22 +103,45 @@ def test_v4_frozen_authority_loader_uses_exact_v4_40_commit(monkeypatch, tmp_pat
     assert calls == [(tmp_path, validator.V4_40_FROZEN_AUTHORITY_COMMIT)]
 
 
-def test_v4_changed_surface_rejects_executable_or_unbounded_paths():
+def test_v4_changed_surface_allows_bounded_current_docs_and_predecessor_deletion_only():
     base = {
         validator.RUNTIME_PATH: ("100644", "blob", "a" * 40),
         validator.INDEX_PATH: ("100644", "blob", "b" * 40),
+        validator.V31_RUNTIME_PATH: ("100644", "blob", "c" * 40),
     }
     candidate = dict(base)
-    candidate[validator.RUNTIME_PATH] = ("100644", "blob", "c" * 40)
-    assert validator.validate_changed_surface(candidate, base) == {validator.RUNTIME_PATH}
+    candidate[validator.RUNTIME_PATH] = ("100644", "blob", "d" * 40)
+    del candidate[validator.V31_RUNTIME_PATH]
+    assert validator.validate_changed_surface(candidate, base) == {
+        validator.RUNTIME_PATH,
+        validator.V31_RUNTIME_PATH,
+    }
 
-    candidate["tools/private_runtime.py"] = ("100644", "blob", "d" * 40)
+    candidate["tools/private_runtime.py"] = ("100644", "blob", "e" * 40)
     with pytest.raises(validator.ValidationError, match="non-declarative authority surface"):
         validator.validate_changed_surface(candidate, base)
 
 
-def test_v4_system_index_must_match_runtime_switches_and_reject_stale_v31_authority():
-    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
+def test_current_private_surface_rejects_live_looking_v31_authority_and_private_workflows():
+    clean = {
+        validator.RUNTIME_PATH: ("100644", "blob", "a" * 40),
+        validator.INDEX_PATH: ("100644", "blob", "b" * 40),
+    }
+    validator.validate_current_private_surface(clean)
+
+    for stale_path in validator.REMOVABLE_PREDECESSOR_PATHS:
+        with pytest.raises(validator.ValidationError, match="V3.1 predecessor"):
+            validator.validate_current_private_surface(
+                {**clean, stale_path: ("100644", "blob", "c" * 40)}
+            )
+
+    with pytest.raises(validator.ValidationError, match="executable workflow"):
+        validator.validate_current_private_surface(
+            {**clean, ".github/workflows/legacy.yml": ("100644", "blob", "c" * 40)}
+        )
+
+
+def test_v4_system_index_is_live_first_and_contains_no_volatile_status_snapshot():
     valid = "\n".join(
         (
             "# Control — Canonical System Index V4",
@@ -126,19 +150,64 @@ def test_v4_system_index_must_match_runtime_switches_and_reject_stale_v31_author
             "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
             "runner_config=control/CONTROL_RUNNER_V4.json",
             "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
-            "v4_status=V4_CURRENT",
-            "control_runtime_enabled=true",
-            "integration_enabled=false",
+            "## Human-facing current-status read contract",
+            "status_is_ephemeral_projection=true",
+            "documentation_is_current_status_authority=false",
+            "component_local_artifact_is_global_status_authority=false",
+            "STATUS_OBSERVABILITY_INCOMPLETE",
+            "Every status includes observed_at",
+        )
+    ).encode("utf-8")
+    validator.validate_system_index(valid)
+
+    # The stale marker also duplicates a forbidden volatile status declaration;
+    # either reason is a correct structural rejection. Current implementation
+    # reports the stronger no-status-snapshot invariant first.
+    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
+        validator.validate_system_index(valid + b"\nv4_status=CANDIDATE_INERT_UNADOPTED\n")
+
+    for volatile in (
+        b"\ncontrol_runtime_enabled=true\n",
+        b"\nintegration_enabled=false\n",
+        b"\nprincipal_manual_relay_count=0\n",
+        b"\nv4_status=V4_CURRENT\n",
+    ):
+        with pytest.raises(validator.ValidationError, match="duplicates volatile"):
+            validator.validate_system_index(valid + volatile)
+
+
+def test_v4_runner_prompt_requires_fact_first_external_review_and_current_status():
+    valid = "\n".join(
+        (
+            "status=LIVE_CURRENT",
+            "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING",
+            "Before deciding that an EXTERNAL review is still pending",
+            "reconcile current exact-correlated GitHub review evidence",
+            "ACTIONABLE_FINDING -> REPAIR",
+            "EXPLICIT_CLEAN_PASS -> normal PASS path",
+            "UNAVAILABLE_OR_NO_VERDICT -> preserve PENDING",
+        )
+    ).encode("utf-8")
+    validator.validate_runner_prompt(valid)
+
+    with pytest.raises(validator.ValidationError, match="candidate/inert"):
+        validator.validate_runner_prompt(valid + b"\nstatus=CANDIDATE_INERT\n")
+
+    with pytest.raises(validator.ValidationError, match="fact-first external-review"):
+        validator.validate_runner_prompt(valid.replace(b"ACTIONABLE_FINDING -> REPAIR", b"wait forever"))
+
+
+def test_v4_mission_registry_readme_cannot_present_v31_as_current():
+    valid = "\n".join(
+        (
+            "# Mission Contract Registry — V4",
+            "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+            "review_policy=INTERNAL|EXTERNAL",
+            "integration_policy=AUTO_AFTER_PASS|HOLD_AFTER_PASS",
             "principal_manual_relay_count=0",
         )
     ).encode("utf-8")
-    validator.validate_system_index(valid, runtime)
+    validator.validate_mission_registry_readme(valid)
 
-    with pytest.raises(validator.ValidationError, match="stale V3.1"):
-        validator.validate_system_index(valid + b"\nv4_status=CANDIDATE_INERT_UNADOPTED\n", runtime)
-
-    with pytest.raises(validator.ValidationError, match="exactly one canonical control_runtime_enabled"):
-        validator.validate_system_index(valid + b"\ncontrol_runtime_enabled=false\n", runtime)
-
-    with pytest.raises(validator.ValidationError, match="exactly one canonical integration_enabled"):
-        validator.validate_system_index(valid + b"\nintegration_enabled=true\n", runtime)
+    with pytest.raises(validator.ValidationError, match="V3.1 current-authority"):
+        validator.validate_mission_registry_readme(valid + b"\nV3.1\n")

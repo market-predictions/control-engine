@@ -73,12 +73,15 @@ jobs:
           grep -q '"semantic_runtime_authority": false' ENGINE_MANIFEST.json
           ! grep -q '"control_runtime"' ENGINE_MANIFEST.json
           ! test -e .github/workflows/control-kernel-v3-1.yml
+          ! test -e docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md
           ! grep -q 'permission-contents: write' .github/workflows/private-control-v3-1-validation.yml
           grep -q 'CONTROL_PRIVATE_RUNTIME_MUTATION=false' .github/workflows/private-control-v3-1-validation.yml
+          ! grep -R --include='*.yml' -q 'python .*scripts/control_kernel_v31.py' .github/workflows
           forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' -o -iname '*assurance_capsule*' \) -print)"
           test -z "$forbidden"
           echo 'CONTROL_ENGINE_PASSIVE_V4_SURFACE=PASS'
           echo 'CONTROL_V4_AUTHORITY_CARRIER_PRESENT=true'
+          echo 'CONTROL_V31_BRIDGE_RUNTIME_REACHABLE=false'
           echo 'CONTROL_V4_RUNTIME_WRITER_PRESENT=false'
           echo 'CONTROL_PRIVATE_V4_VALIDATOR_PRESENT=true'
       - name: Synthetic engine smoke

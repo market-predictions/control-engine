@@ -5,6 +5,10 @@ from __future__ import annotations
 The private candidate is data only. This script reads exact committed Git objects,
 reuses trusted public V4 contracts, and has no network, queue, runtime, merge,
 scheduler, provider, or candidate-execution capability.
+
+V3.1 rollback provenance is read from exact frozen Git commits by the V4 rollback
+loader. Current private ``main`` must therefore expose one current runtime authority:
+V4. Historical predecessor authority is not kept live-looking beside it.
 """
 
 import json
@@ -22,9 +26,30 @@ RUNTIME_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
 INDEX_PATH = "control/SYSTEM_INDEX.md"
 RUNNER_CONFIG_PATH = "control/CONTROL_RUNNER_V4.json"
 RUNNER_PROMPT_PATH = "control/CONTROL_RUNNER_V4_PROMPT.md"
+MISSION_REGISTRY_README_PATH = "control/missions/README.md"
+V31_ARCHITECTURE_PATH = "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md"
+V31_RUNTIME_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"
+V31_MISSION_SCHEMA_PATH = "schemas/mission_contract_v31.schema.json"
+V31_REPOSITORY_SCHEMA_PATH = "schemas/repository_authority_v31.schema.json"
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
+
+CURRENT_V4_DOCUMENT_PATHS = {
+    "control/CHANGELOG.md",
+    "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+    "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
+    "control/CONTROL_V4_ROADMAP.md",
+    "control/CONTROL_V4_CONVERGENCE_AND_DEBT_RETIREMENT_PLAN.md",
+    "control/CONTROL_V4_SURFACE_INVENTORY.md",
+    MISSION_REGISTRY_README_PATH,
+}
+REMOVABLE_PREDECESSOR_PATHS = {
+    V31_ARCHITECTURE_PATH,
+    V31_RUNTIME_PATH,
+    V31_MISSION_SCHEMA_PATH,
+    V31_REPOSITORY_SCHEMA_PATH,
+}
 
 
 class ValidationError(ValueError):
@@ -130,6 +155,8 @@ def validate_changed_surface(
     def allowed(path: str) -> bool:
         if path in {RUNTIME_PATH, INDEX_PATH, RUNNER_CONFIG_PATH, RUNNER_PROMPT_PATH}:
             return True
+        if path in CURRENT_V4_DOCUMENT_PATHS or path in REMOVABLE_PREDECESSOR_PATHS:
+            return True
         if path.startswith("control/missions/") and path.endswith(".mission.json") and "/" not in path[len("control/missions/"):]:
             return True
         if path.startswith("control/repository-authority/") and path.endswith(".json") and "/" not in path[len("control/repository-authority/"):]:
@@ -140,6 +167,14 @@ def validate_changed_surface(
     if disallowed:
         raise ValidationError("private V4 candidate changes non-declarative authority surface")
     return changed
+
+
+def validate_current_private_surface(entries: Mapping[str, tuple[str, str, str]]) -> None:
+    if any(path.startswith(".github/workflows/") for path in entries):
+        raise ValidationError("private main must not contain an executable workflow surface")
+    stale = sorted(path for path in REMOVABLE_PREDECESSOR_PATHS if path in entries)
+    if stale:
+        raise ValidationError("current private main retains live-looking V3.1 predecessor authority/schema surface")
 
 
 def load_frozen_v4_40_authority(base_root: Path):
@@ -184,9 +219,10 @@ def validate_runtime_and_runner(root: Path, entries: Mapping[str, tuple[str, str
     if config.get("prompt_path") != RUNNER_PROMPT_PATH:
         raise ValidationError("Runner prompt path invalid")
 
-    _, prompt_oid = _blob(root, entries, RUNNER_PROMPT_PATH)
+    prompt_raw, prompt_oid = _blob(root, entries, RUNNER_PROMPT_PATH)
     if config.get("prompt_blob_sha") != prompt_oid:
         raise ValidationError("Runner config does not bind the exact committed prompt blob")
+    validate_runner_prompt(prompt_raw)
 
     schedule = config.get("schedule")
     if not isinstance(schedule, dict) or schedule != {
@@ -206,17 +242,38 @@ def validate_runtime_and_runner(root: Path, entries: Mapping[str, tuple[str, str
     if observation != {
         "scheduler_automation_admin": "PLATFORM_EXPOSED_ACCEPTED",
         "protection_rules_admin": "UNAVAILABLE_OBSERVED_V4_30",
-        "positive_git_cas_proof": "REQUIRED_SEPARATELY_V4_30",
+        "positive_git_cas_proof": "PROVEN_V4_30",
     }:
-        raise ValidationError("Runner scheduled capability observation differs from reviewed V4 binding")
+        raise ValidationError("Runner scheduled capability observation differs from current reviewed V4 binding")
     return runtime
 
 
-def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
+def _strict_text(raw: bytes, *, label: str) -> str:
     try:
-        text = raw.decode("utf-8", "strict")
+        return raw.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
-        raise ValidationError("SYSTEM_INDEX is not strict UTF-8") from exc
+        raise ValidationError(f"{label} is not strict UTF-8") from exc
+
+
+def validate_runner_prompt(raw: bytes) -> None:
+    text = _strict_text(raw, label="CONTROL_RUNNER_V4_PROMPT")
+    required = {
+        "status=LIVE_CURRENT",
+        "Before deciding that an EXTERNAL review is still pending",
+        "reconcile current exact-correlated GitHub review evidence",
+        "ACTIONABLE_FINDING -> REPAIR",
+        "EXPLICIT_CLEAN_PASS -> normal PASS path",
+        "UNAVAILABLE_OR_NO_VERDICT -> preserve PENDING",
+        "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING",
+    }
+    if any(marker not in text for marker in required):
+        raise ValidationError("Runner prompt lacks current fact-first external-review contract")
+    if "status=CANDIDATE_INERT" in text:
+        raise ValidationError("Runner prompt still presents live V4 Runner as candidate/inert")
+
+
+def validate_system_index(raw: bytes) -> None:
+    text = _strict_text(raw, label="SYSTEM_INDEX")
     required = {
         "# Control — Canonical System Index V4",
         "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
@@ -224,22 +281,20 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
         "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
         "runner_config=control/CONTROL_RUNNER_V4.json",
         "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
-        "v4_status=V4_CURRENT",
+        "## Human-facing current-status read contract",
+        "status_is_ephemeral_projection=true",
+        "documentation_is_current_status_authority=false",
+        "component_local_artifact_is_global_status_authority=false",
+        "STATUS_OBSERVABILITY_INCOMPLETE",
+        "observed_at",
     }
     if any(marker not in text for marker in required):
-        raise ValidationError("SYSTEM_INDEX lacks current V4 authority markers")
+        raise ValidationError("SYSTEM_INDEX lacks durable live-first V4 authority/status markers")
 
     lines = text.splitlines()
-    canonical_state = {
-        "control_runtime_enabled": "true" if runtime["control_runtime_enabled"] else "false",
-        "integration_enabled": "true" if runtime["integration_enabled"] else "false",
-        "principal_manual_relay_count": "0",
-    }
-    for key, expected_value in canonical_state.items():
-        expected = f"{key}={expected_value}"
-        declarations = [line for line in lines if line.startswith(f"{key}=")]
-        if declarations != [expected]:
-            raise ValidationError(f"SYSTEM_INDEX must contain exactly one canonical {key} declaration")
+    for volatile_key in ("control_runtime_enabled", "integration_enabled", "principal_manual_relay_count", "v4_status"):
+        if any(line.startswith(f"{volatile_key}=") for line in lines):
+            raise ValidationError("SYSTEM_INDEX duplicates volatile current runtime state")
 
     for stale in (
         "# Control — Canonical System Index V3.1",
@@ -251,18 +306,31 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
             raise ValidationError("SYSTEM_INDEX retains stale V3.1/current-unadopted routing authority")
 
 
+def validate_mission_registry_readme(raw: bytes) -> None:
+    text = _strict_text(raw, label="Mission registry README")
+    required = {
+        "# Mission Contract Registry — V4",
+        "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+        "review_policy=INTERNAL|EXTERNAL",
+        "integration_policy=AUTO_AFTER_PASS|HOLD_AFTER_PASS",
+        "principal_manual_relay_count",
+    }
+    if any(marker not in text for marker in required):
+        raise ValidationError("Mission registry README lacks current V4 contract markers")
+    if "V3.1" in text or "mission_contract_v31" in text:
+        raise ValidationError("Mission registry README retains V3.1 current-authority wording")
+
+
 def validate_candidate(candidate_root: Path, base_root: Path) -> None:
     candidate_root = Path(candidate_root)
     base_root = Path(base_root)
     candidate_entries = committed_tree(candidate_root)
     base_entries = committed_tree(base_root)
 
-    if any(path.startswith(".github/workflows/") for path in candidate_entries):
-        raise ValidationError("private main must not contain an executable workflow surface")
-
     changed = validate_changed_surface(candidate_entries, base_entries)
     if not changed:
         raise ValidationError("private V4 candidate contains no authority change")
+    validate_current_private_surface(candidate_entries)
 
     try:
         candidate_bundle = load_v4_authority_from_git(candidate_root)
@@ -276,15 +344,18 @@ def validate_candidate(candidate_root: Path, base_root: Path) -> None:
     if dict(candidate_bundle.authority_blob_shas) != dict(frozen_bundle.authority_blob_shas):
         raise ValidationError("V4-40 adopted repository-authority blob set drifted during frozen rollback window")
 
-    runtime = validate_runtime_and_runner(candidate_root, candidate_entries)
+    validate_runtime_and_runner(candidate_root, candidate_entries)
     index_raw, _ = _blob(candidate_root, candidate_entries, INDEX_PATH)
-    validate_system_index(index_raw, runtime)
+    validate_system_index(index_raw)
+    mission_readme_raw, _ = _blob(candidate_root, candidate_entries, MISSION_REGISTRY_README_PATH)
+    validate_mission_registry_readme(mission_readme_raw)
 
     print("CONTROL_PRIVATE_V4_VALIDATION=PASS")
     print("CONTROL_PRIVATE_CANDIDATE_EXECUTION=false")
     print("CONTROL_PRIVATE_RUNTIME_MUTATION=false")
     print("CONTROL_PRIVATE_V4_MISSION_SET_FROZEN=true")
     print("CONTROL_PRIVATE_V4_REPOSITORY_AUTHORITY_SET_FROZEN=true")
+    print("CONTROL_PRIVATE_V4_SINGLE_CURRENT_AUTHORITY=true")
     print("CONTROL_PRIVATE_V4_CHANGED_PATHS=" + ",".join(sorted(changed)))
 
 
