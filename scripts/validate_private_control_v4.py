@@ -44,32 +44,11 @@ BOUNDED_DOCTRINE_PATHS = {
     CHANGELOG_PATH,
     COHERENCE_REPAIR_PATH,
 }
-VOLATILE_INDEX_FIELDS = (
-    "v4_status",
-    "control_runtime_enabled",
-    "integration_enabled",
-    "runner_config_path",
-    "runner_config_blob_sha",
-    "principal_manual_relay_count",
-    "runner_id",
-    "execution_surface",
-    "prompt_path",
-    "prompt_blob_sha",
-    "timing_mode",
-    "timezone",
-    "rrule",
-    "automation_object_id",
-    "automation_object_binding_status",
-    "scheduled_credential_binding_status",
-    "effective_capability_binding_status",
-    "scheduler_automation_admin",
-    "protection_rules_admin",
-    "positive_git_cas_proof",
-)
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = "cfef93333aaf0a88ef72db3e3a4bd37c384217fc"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 
 
 class ValidationError(ValueError):
@@ -264,8 +243,15 @@ def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
     return runtime
 
 
-def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
+def validate_system_index(
+    raw: bytes,
+    runtime: Mapping[str, Any],
+    *,
+    index_oid: str,
+) -> None:
     del runtime
+    if index_oid != REVIEWED_SYSTEM_INDEX_BLOB_SHA:
+        raise ValidationError("SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract")
     try:
         text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
@@ -283,12 +269,6 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
     }
     if any(marker not in text for marker in required):
         raise ValidationError("SYSTEM_INDEX lacks current V4 live-first authority markers")
-
-    # The human index defines where to read current values, not the mutable or
-    # exact field names themselves. A literal-key ban is presentation-agnostic:
-    # Markdown, HTML, links and plain prose cannot smuggle a copied snapshot in.
-    if any(field in text for field in VOLATILE_INDEX_FIELDS):
-        raise ValidationError("SYSTEM_INDEX duplicates volatile current runtime state")
 
     for stale in ("# Control — Canonical System Index V3.1", "Control Autonomy V3.1 supersedes conflicting", "Until cutover, V3.1 above is current truth."):
         if stale in text:
@@ -319,8 +299,8 @@ def validate_candidate(candidate_root: Path, base_root: Path) -> None:
 
     validate_current_surface(candidate_root, candidate_entries)
     runtime = validate_runtime_and_runner(candidate_root, candidate_entries)
-    index_raw, _ = _blob(candidate_root, candidate_entries, INDEX_PATH)
-    validate_system_index(index_raw, runtime)
+    index_raw, index_oid = _blob(candidate_root, candidate_entries, INDEX_PATH)
+    validate_system_index(index_raw, runtime, index_oid=index_oid)
 
     print("CONTROL_PRIVATE_V4_VALIDATION=PASS")
     print("CONTROL_PRIVATE_CANDIDATE_EXECUTION=false")
