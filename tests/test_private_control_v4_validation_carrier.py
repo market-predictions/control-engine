@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -20,7 +22,8 @@ def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_work
     assert 'sha != base_ref' in workflow
     assert 'profile = "V4"' in workflow
     assert 'ref: ${{ steps.gate.outputs.base_ref }}' in workflow
-    assert "python scripts/validate_private_control_v4.py private-candidate private-base" in workflow
+    assert "python -m scripts.validate_private_control_v4 private-candidate private-base" in workflow
+    assert "python scripts/validate_private_control_v4.py private-candidate private-base" not in workflow
     assert "permission-contents: read" in workflow
     assert "permission-contents: write" not in workflow
     assert "permission-pull-requests: write" not in workflow
@@ -29,6 +32,20 @@ def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_work
     assert "CONTROL_PRIVATE_RUNTIME_MUTATION=false" in workflow
     assert "CONTROL_PRIVATE_VALIDATED_BASE=${{ steps.gate.outputs.base_ref }}" in workflow
     assert workflow.count("fetch-depth: 0") == 1
+
+
+def test_v4_production_module_invocation_can_import_trusted_public_packages():
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.validate_private_control_v4"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "usage: validate_private_control_v4.py" in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
 
 
 def test_v31_profile_is_preserved_for_truthful_pre_v4_80_rollback():
