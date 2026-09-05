@@ -11,8 +11,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "control-v4-authority-adoption.yml"
-BASE = "1" * 40
-CANDIDATE = "2" * 40
+BASE = "a" * 40
+CANDIDATE = "b" * 40
 CONFIRM = "ADOPT_REVIEWED_PRIVATE_MAIN"
 
 
