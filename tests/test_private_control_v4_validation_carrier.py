@@ -206,6 +206,8 @@ def test_every_required_current_doctrine_path_is_independently_inert_regular_blo
     (
         "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
         "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+        "schemas/mission_contract_v31.schema.json",
+        "schemas/repository_authority_v31.schema.json",
     ),
 )
 def test_each_legacy_current_authority_path_is_behaviorally_rejected(
