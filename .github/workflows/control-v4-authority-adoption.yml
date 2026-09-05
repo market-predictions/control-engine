@@ -21,16 +21,82 @@ on:
         required: false
         default: ''
         type: string
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
 
 jobs:
   authority-adoption:
-    if: ${{ github.repository == 'market-predictions/control-engine' && github.ref == 'refs/heads/main' && github.actor == 'market-predictions' }}
+    if: >-
+      ${{
+        github.repository == 'market-predictions/control-engine' &&
+        github.ref == 'refs/heads/main' &&
+        github.actor == 'market-predictions' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (
+            github.event_name == 'issue_comment' &&
+            github.event.action == 'created' &&
+            github.event.issue.number == 106 &&
+            github.event.issue.pull_request == null
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Resolve exact authority adoption request
+        id: request
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          DISPATCH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          DISPATCH_CONFIRM_ADOPT: ${{ inputs.confirm_adopt }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+
+          SHA_RE = re.compile(r'^[0-9a-f]{40}$')
+          CONFIRMATION = 'ADOPT_REVIEWED_PRIVATE_MAIN'
+          event_name = os.environ.get('EVENT_NAME', '')
+
+          if event_name == 'workflow_dispatch':
+              mode = os.environ.get('DISPATCH_MODE', '')
+              expected_base = os.environ.get('DISPATCH_EXPECTED_BASE_SHA', '')
+              candidate = os.environ.get('DISPATCH_CANDIDATE_SHA', '')
+              confirm = os.environ.get('DISPATCH_CONFIRM_ADOPT', '')
+          elif event_name == 'issue_comment':
+              parts = os.environ.get('COMMENT_BODY', '').split()
+              if len(parts) != 4 or parts[0] != 'CONTROL_PRIVATE_V4_ADOPT':
+                  raise SystemExit('invalid exact V4 authority-adoption comment command')
+              mode = 'ADOPT'
+              expected_base, candidate, confirm = parts[1:]
+          else:
+              raise SystemExit('unsupported authority-adoption event')
+
+          if mode not in {'PROBE', 'ADOPT'}:
+              raise SystemExit('unsupported authority-adoption mode')
+          if SHA_RE.fullmatch(expected_base) is None or SHA_RE.fullmatch(candidate) is None:
+              raise SystemExit('candidate/base must be exact lowercase 40-char SHAs')
+          if expected_base == candidate:
+              raise SystemExit('candidate must advance the reviewed base')
+          if mode == 'ADOPT' and confirm != CONFIRMATION:
+              raise SystemExit('ADOPT confirmation phrase is absent or incorrect')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'mode={mode}\n')
+              output.write(f'expected_base_sha={expected_base}\n')
+              output.write(f'candidate_sha={candidate}\n')
+              output.write(f'confirm_adopt={confirm}\n')
+          PY
+
       - name: Create exact private authority capability
         id: private-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
@@ -45,10 +111,10 @@ jobs:
         shell: bash
         env:
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
-          MODE: ${{ inputs.mode }}
-          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-          CONFIRM_ADOPT: ${{ inputs.confirm_adopt }}
+          MODE: ${{ steps.request.outputs.mode }}
+          EXPECTED_BASE_SHA: ${{ steps.request.outputs.expected_base_sha }}
+          CANDIDATE_SHA: ${{ steps.request.outputs.candidate_sha }}
+          CONFIRM_ADOPT: ${{ steps.request.outputs.confirm_adopt }}
           CONTROL_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
