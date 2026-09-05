@@ -44,7 +44,10 @@ BOUNDED_DOCTRINE_PATHS = {
 }
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 VOLATILE_INDEX_ASSIGNMENT_RE = re.compile(
-    r"\b(?:v4_status|control_runtime_enabled|integration_enabled|principal_manual_relay_count|runner_config_blob_sha|prompt_blob_sha)\s*="
+    r"\b(?:v4_status|control_runtime_enabled|integration_enabled|runner_config_path|runner_config_blob_sha|"
+    r"principal_manual_relay_count|runner_id|execution_surface|prompt_path|prompt_blob_sha|timing_mode|"
+    r"timezone|rrule|automation_object_id|automation_object_binding_status|scheduled_credential_binding_status|"
+    r"effective_capability_binding_status|scheduler_automation_admin|protection_rules_admin|positive_git_cas_proof)\s*="
 )
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
