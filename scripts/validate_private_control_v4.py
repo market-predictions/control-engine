@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-"""Trusted read-only validation of current private Control V4 declarative authority.
+"""Trusted read-only validation of current private Control V4 authority.
 
 The private candidate is data only. This script reads exact committed Git objects,
 reuses trusted public V4 contracts, and has no network, queue, runtime, merge,
 scheduler, provider, or candidate-execution capability.
+
+Current-surface rule: private ``main`` represents current V4 truth only. Frozen
+V3.1 rollback material is read from immutable historical commits by the V4
+rollback path; it must not survive on current paths as competing authority.
 """
 
 import json
@@ -17,14 +21,34 @@ from typing import Any, Mapping
 from control_engine.v4_authority_io import load_v4_authority_from_git
 from control_engine.v4_contracts import V4ValidationError
 
-
 RUNTIME_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
 INDEX_PATH = "control/SYSTEM_INDEX.md"
 RUNNER_CONFIG_PATH = "control/CONTROL_RUNNER_V4.json"
 RUNNER_PROMPT_PATH = "control/CONTROL_RUNNER_V4_PROMPT.md"
+MISSION_README_PATH = "control/missions/README.md"
+CHANGELOG_PATH = "control/CHANGELOG.md"
+COHERENCE_REPAIR_PATH = "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md"
+LEGACY_CURRENT_PATHS = {
+    "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
+    "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+    "schemas/mission_contract_v31.schema.json",
+    "schemas/repository_authority_v31.schema.json",
+}
+BOUNDED_DOCTRINE_PATHS = {
+    "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+    "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
+    "control/CONTROL_V4_ROADMAP.md",
+    "control/CONTROL_V4_CONVERGENCE_AND_DEBT_RETIREMENT_PLAN.md",
+    "control/CONTROL_V4_SURFACE_INVENTORY.md",
+    MISSION_README_PATH,
+    CHANGELOG_PATH,
+    COHERENCE_REPAIR_PATH,
+}
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
+REVIEWED_RUNNER_PROMPT_BLOB_SHA = "cfef93333aaf0a88ef72db3e3a4bd37c384217fc"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 
 
 class ValidationError(ValueError):
@@ -73,10 +97,7 @@ def _git(root: Path, *args: str) -> bytes:
     try:
         result = subprocess.run(
             ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", *args],
-            cwd=root,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ValidationError("trusted Git read failed") from exc
@@ -117,18 +138,21 @@ def _blob(root: Path, entries: Mapping[str, tuple[str, str, str]], path: str) ->
     return _git(root, "cat-file", "blob", oid), oid
 
 
-def validate_changed_surface(
-    candidate_entries: Mapping[str, tuple[str, str, str]],
-    base_entries: Mapping[str, tuple[str, str, str]],
-) -> set[str]:
-    changed = {
-        path
-        for path in set(candidate_entries) | set(base_entries)
-        if candidate_entries.get(path) != base_entries.get(path)
-    }
+def _text(root: Path, entries: Mapping[str, tuple[str, str, str]], path: str) -> str:
+    raw, _ = _blob(root, entries, path)
+    try:
+        return raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValidationError(f"{path} is not strict UTF-8") from exc
+
+
+def validate_changed_surface(candidate_entries, base_entries) -> set[str]:
+    changed = {path for path in set(candidate_entries) | set(base_entries) if candidate_entries.get(path) != base_entries.get(path)}
 
     def allowed(path: str) -> bool:
         if path in {RUNTIME_PATH, INDEX_PATH, RUNNER_CONFIG_PATH, RUNNER_PROMPT_PATH}:
+            return True
+        if path in LEGACY_CURRENT_PATHS or path in BOUNDED_DOCTRINE_PATHS:
             return True
         if path.startswith("control/missions/") and path.endswith(".mission.json") and "/" not in path[len("control/missions/"):]:
             return True
@@ -143,23 +167,33 @@ def validate_changed_surface(
 
 
 def load_frozen_v4_40_authority(base_root: Path):
-    return load_v4_authority_from_git(
-        Path(base_root),
-        commit_sha=V4_40_FROZEN_AUTHORITY_COMMIT,
-    )
+    return load_v4_authority_from_git(Path(base_root), commit_sha=V4_40_FROZEN_AUTHORITY_COMMIT)
 
 
-def validate_runtime_and_runner(root: Path, entries: Mapping[str, tuple[str, str, str]]) -> dict[str, Any]:
+def validate_current_surface(root: Path, entries) -> None:
+    stale = sorted(path for path in LEGACY_CURRENT_PATHS if path in entries)
+    if stale:
+        raise ValidationError("private main retains competing V3.1 current authority")
+
+    # Current doctrine paths are canonical read targets. Merely allowing them in
+    # the changed surface is insufficient: deletion, symlink or gitlink would
+    # leave SYSTEM_INDEX routing to a non-existent/non-inert authority surface.
+    for path in sorted(BOUNDED_DOCTRINE_PATHS):
+        _regular_blob(entries, path)
+
+    mission_readme = _text(root, entries, MISSION_README_PATH)
+    required = ("Mission Contract Registry — V4", "CONTROL_AUTONOMY_ARCHITECTURE_V4.md", "MISSION_CONTRACT_V4", "review_policy")
+    if any(marker not in mission_readme for marker in required):
+        raise ValidationError("Mission registry README is not current V4 doctrine")
+    for stale_marker in ("Mission Contract Registry — V3.1", "MISSION_CONTRACT_V3_1", "V3.1 FEED"):
+        if stale_marker in mission_readme:
+            raise ValidationError("Mission registry README retains V3.1 current semantics")
+
+
+def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
     runtime_raw, _ = _blob(root, entries, RUNTIME_PATH)
     runtime = _strict_json(runtime_raw, label="CONTROL_RUNTIME_AUTHORITY_V4")
-    expected_runtime_keys = {
-        "protocol_id",
-        "control_runtime_enabled",
-        "integration_enabled",
-        "runner_config_path",
-        "runner_config_blob_sha",
-        "principal_manual_relay_count",
-    }
+    expected_runtime_keys = {"protocol_id", "control_runtime_enabled", "integration_enabled", "runner_config_path", "runner_config_blob_sha", "principal_manual_relay_count"}
     if set(runtime) != expected_runtime_keys:
         raise ValidationError("CONTROL_RUNTIME_AUTHORITY_V4 key set is not exact")
     if runtime.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V4":
@@ -179,21 +213,19 @@ def validate_runtime_and_runner(root: Path, entries: Mapping[str, tuple[str, str
     require_zero_relay_count(config)
     if config.get("protocol_id") != "CONTROL_RUNNER_V4" or config.get("runner_id") != "CONTROL_V4_RUNNER":
         raise ValidationError("Runner config identity invalid")
-    if config.get("execution_surface") != "CHATGPT_SCHEDULED":
-        raise ValidationError("Runner execution surface invalid")
-    if config.get("prompt_path") != RUNNER_PROMPT_PATH:
-        raise ValidationError("Runner prompt path invalid")
+    if config.get("execution_surface") != "CHATGPT_SCHEDULED" or config.get("prompt_path") != RUNNER_PROMPT_PATH:
+        raise ValidationError("Runner execution/prompt identity invalid")
 
+    prompt_text = _text(root, entries, RUNNER_PROMPT_PATH)
     _, prompt_oid = _blob(root, entries, RUNNER_PROMPT_PATH)
+    if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
+        raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
     if config.get("prompt_blob_sha") != prompt_oid:
-        raise ValidationError("Runner config does not bind the exact committed prompt blob")
+        raise ValidationError("Runner config does not bind the exact trusted reviewed prompt blob")
+    if "status=CANDIDATE_INERT" in prompt_text or "status=CANDIDATE" in prompt_text:
+        raise ValidationError("active Runner prompt retains candidate/inert lifecycle metadata")
 
-    schedule = config.get("schedule")
-    if not isinstance(schedule, dict) or schedule != {
-        "timing_mode": "exact_schedule",
-        "timezone": "Europe/Amsterdam",
-        "rrule": "FREQ=HOURLY;BYMINUTE=30;BYSECOND=0",
-    }:
+    if config.get("schedule") != {"timing_mode": "exact_schedule", "timezone": "Europe/Amsterdam", "rrule": "FREQ=HOURLY;BYMINUTE=30;BYSECOND=0"}:
         raise ValidationError("Runner schedule differs from reviewed V4 binding")
     require_reviewed_automation_object_id(config.get("automation_object_id"))
     if config.get("automation_object_binding_status") != "BOUND":
@@ -202,21 +234,29 @@ def validate_runtime_and_runner(root: Path, entries: Mapping[str, tuple[str, str
         raise ValidationError("Runner scheduled credential binding status invalid")
     if config.get("effective_capability_binding_status") != "BOUND_TO_EXACT_SCHEDULED_OBJECT_TOOL_SURFACE":
         raise ValidationError("Runner effective capability binding invalid")
-    observation = config.get("scheduled_capability_observation")
-    if observation != {
+    if config.get("scheduled_capability_observation") != {
         "scheduler_automation_admin": "PLATFORM_EXPOSED_ACCEPTED",
         "protection_rules_admin": "UNAVAILABLE_OBSERVED_V4_30",
-        "positive_git_cas_proof": "REQUIRED_SEPARATELY_V4_30",
+        "positive_git_cas_proof": "PROVEN_V4_30",
     }:
-        raise ValidationError("Runner scheduled capability observation differs from reviewed V4 binding")
+        raise ValidationError("Runner scheduled capability observation differs from current reviewed V4 binding")
     return runtime
 
 
-def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
+def validate_system_index(
+    raw: bytes,
+    runtime: Mapping[str, Any],
+    *,
+    index_oid: str,
+) -> None:
+    del runtime
+    if index_oid != REVIEWED_SYSTEM_INDEX_BLOB_SHA:
+        raise ValidationError("SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract")
     try:
         text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
         raise ValidationError("SYSTEM_INDEX is not strict UTF-8") from exc
+
     required = {
         "# Control — Canonical System Index V4",
         "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
@@ -224,39 +264,20 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
         "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
         "runner_config=control/CONTROL_RUNNER_V4.json",
         "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
-        "v4_status=V4_CURRENT",
+        "fresh live projection",
+        "STATUS_OBSERVABILITY_INCOMPLETE",
     }
     if any(marker not in text for marker in required):
-        raise ValidationError("SYSTEM_INDEX lacks current V4 authority markers")
+        raise ValidationError("SYSTEM_INDEX lacks current V4 live-first authority markers")
 
-    lines = text.splitlines()
-    canonical_state = {
-        "control_runtime_enabled": "true" if runtime["control_runtime_enabled"] else "false",
-        "integration_enabled": "true" if runtime["integration_enabled"] else "false",
-        "principal_manual_relay_count": "0",
-    }
-    for key, expected_value in canonical_state.items():
-        expected = f"{key}={expected_value}"
-        declarations = [line for line in lines if line.startswith(f"{key}=")]
-        if declarations != [expected]:
-            raise ValidationError(f"SYSTEM_INDEX must contain exactly one canonical {key} declaration")
-
-    for stale in (
-        "# Control — Canonical System Index V3.1",
-        "Control Autonomy V3.1 supersedes conflicting",
-        "v4_status=CANDIDATE_INERT_UNADOPTED",
-        "Until cutover, V3.1 above is current truth.",
-    ):
+    for stale in ("# Control — Canonical System Index V3.1", "Control Autonomy V3.1 supersedes conflicting", "Until cutover, V3.1 above is current truth."):
         if stale in text:
             raise ValidationError("SYSTEM_INDEX retains stale V3.1/current-unadopted routing authority")
 
 
 def validate_candidate(candidate_root: Path, base_root: Path) -> None:
-    candidate_root = Path(candidate_root)
-    base_root = Path(base_root)
-    candidate_entries = committed_tree(candidate_root)
-    base_entries = committed_tree(base_root)
-
+    candidate_root, base_root = Path(candidate_root), Path(base_root)
+    candidate_entries, base_entries = committed_tree(candidate_root), committed_tree(base_root)
     if any(path.startswith(".github/workflows/") for path in candidate_entries):
         raise ValidationError("private main must not contain an executable workflow surface")
 
@@ -276,13 +297,15 @@ def validate_candidate(candidate_root: Path, base_root: Path) -> None:
     if dict(candidate_bundle.authority_blob_shas) != dict(frozen_bundle.authority_blob_shas):
         raise ValidationError("V4-40 adopted repository-authority blob set drifted during frozen rollback window")
 
+    validate_current_surface(candidate_root, candidate_entries)
     runtime = validate_runtime_and_runner(candidate_root, candidate_entries)
-    index_raw, _ = _blob(candidate_root, candidate_entries, INDEX_PATH)
-    validate_system_index(index_raw, runtime)
+    index_raw, index_oid = _blob(candidate_root, candidate_entries, INDEX_PATH)
+    validate_system_index(index_raw, runtime, index_oid=index_oid)
 
     print("CONTROL_PRIVATE_V4_VALIDATION=PASS")
     print("CONTROL_PRIVATE_CANDIDATE_EXECUTION=false")
     print("CONTROL_PRIVATE_RUNTIME_MUTATION=false")
+    print("CONTROL_PRIVATE_V4_CURRENT_SURFACE_CLEAN=true")
     print("CONTROL_PRIVATE_V4_MISSION_SET_FROZEN=true")
     print("CONTROL_PRIVATE_V4_REPOSITORY_AUTHORITY_SET_FROZEN=true")
     print("CONTROL_PRIVATE_V4_CHANGED_PATHS=" + ",".join(sorted(changed)))
