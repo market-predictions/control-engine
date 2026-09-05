@@ -44,7 +44,8 @@ jobs:
           assert manifest['repository'] == 'market-predictions/control-engine'
           assert manifest['consumer_binding'] == 'EXACT_40_CHAR_COMMIT_SHA_ONLY'
           assert manifest['private_data_policy'] == 'NO_PRIVATE_RUNTIME_STATE'
-          assert manifest['control_runtime'] == 'NONE_ACTIVE'
+          assert manifest['semantic_runtime_authority'] is False
+          assert 'control_runtime' not in manifest
           assert manifest['public_boundary'] == 'docs/PUBLIC_PRIVATE_BOUNDARY_V4.md'
           assert Path(manifest['public_boundary']).is_file()
           bundled = {entry['path'] for entry in bundle['files']}
@@ -69,7 +70,8 @@ jobs:
           test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort)" = $'ci.yml\ncontrol-v4-authority-adoption.yml\nprivate-control-v3-1-validation.yml'
           test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nbundle.py\nkernel_v31.py\nmigration_v31.py\ntimeline.py\nv4_authority_io.py\nv4_contracts.py\nv4_safety.py'
           test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py\nvalidate_private_control_v4.py'
-          grep -q 'control_runtime.*NONE_ACTIVE' ENGINE_MANIFEST.json
+          grep -q '"semantic_runtime_authority": false' ENGINE_MANIFEST.json
+          ! grep -q '"control_runtime"' ENGINE_MANIFEST.json
           ! test -e .github/workflows/control-kernel-v3-1.yml
           ! grep -q 'permission-contents: write' .github/workflows/private-control-v3-1-validation.yml
           grep -q 'CONTROL_PRIVATE_RUNTIME_MUTATION=false' .github/workflows/private-control-v3-1-validation.yml
