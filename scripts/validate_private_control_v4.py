@@ -45,14 +45,11 @@ BOUNDED_DOCTRINE_PATHS = {
     COHERENCE_REPAIR_PATH,
 }
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-INLINE_KEY_MARKUP = r"(?:\*{1,3}|_{1,3}|`{1,3}|~{1,2}|<[^>\r\n]+>|\[|\]\([^\)\r\n]*\))*"
-VOLATILE_INDEX_ASSIGNMENT_RE = re.compile(
-    r"(?<![A-Za-z0-9_])" + INLINE_KEY_MARKUP
-    + r"(?:v4_status|control_runtime_enabled|integration_enabled|runner_config_path|runner_config_blob_sha|"
+VOLATILE_INDEX_FIELD_RE = re.compile(
+    r"\b(?:v4_status|control_runtime_enabled|integration_enabled|runner_config_path|runner_config_blob_sha|"
     r"principal_manual_relay_count|runner_id|execution_surface|prompt_path|prompt_blob_sha|timing_mode|"
     r"timezone|rrule|automation_object_id|automation_object_binding_status|scheduled_credential_binding_status|"
-    r"effective_capability_binding_status|scheduler_automation_admin|protection_rules_admin|positive_git_cas_proof)"
-    + INLINE_KEY_MARKUP + r"\s*="
+    r"effective_capability_binding_status|scheduler_automation_admin|protection_rules_admin|positive_git_cas_proof)\b"
 )
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
@@ -271,10 +268,13 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any]) -> None:
     if any(marker not in text for marker in required):
         raise ValidationError("SYSTEM_INDEX lacks current V4 live-first authority markers")
 
-    if any(VOLATILE_INDEX_ASSIGNMENT_RE.search(line) for line in text.splitlines()):
+    # The human index defines where to read current values, not the values or
+    # their mutable/exact field names. Forbidding the bounded keys themselves
+    # makes this invariant independent of Markdown/HTML presentation syntax.
+    if VOLATILE_INDEX_FIELD_RE.search(text):
         raise ValidationError("SYSTEM_INDEX duplicates volatile current runtime state")
 
-    for stale in ("# Control — Canonical System Index V3.1", "Control Autonomy V3.1 supersedes conflicting", "v4_status=CANDIDATE_INERT_UNADOPTED", "Until cutover, V3.1 above is current truth."):
+    for stale in ("# Control — Canonical System Index V3.1", "Control Autonomy V3.1 supersedes conflicting", "Until cutover, V3.1 above is current truth."):
         if stale in text:
             raise ValidationError("SYSTEM_INDEX retains stale V3.1/current-unadopted routing authority")
 
