@@ -34,6 +34,7 @@ jobs:
         github.repository == 'market-predictions/control-engine' &&
         github.ref == 'refs/heads/main' &&
         github.actor == 'market-predictions' &&
+        github.triggering_actor == 'market-predictions' &&
         (
           github.event_name == 'workflow_dispatch' ||
           (
@@ -240,7 +241,6 @@ jobs:
               raise GateError('candidate is not a strict descendant of the exact reviewed base')
 
           if MODE == 'PROBE':
-              # Main must reject an intentionally impossible exact-old-SHA condition.
               update_refs(
                   name=MAIN_REF,
                   before_oid=ZERO_OID,
@@ -251,7 +251,6 @@ jobs:
               if (rest_get(f'repos/{REPOSITORY}/branches/main').get('commit') or {}).get('sha') != live_main:
                   raise GateError('private main changed during the negative probe')
 
-              # Positive disposable-ref proof uses the same updateRefs primitive, then fact-first exact-SHA cleanup.
               canary_branch = f'control-v4-authority-canary-{RUN_ID}'
               canary_ref = f'refs/heads/{canary_branch}'
               canary_path = f'repos/{REPOSITORY}/git/ref/heads/{urllib.parse.quote(canary_branch, safe="")}'
@@ -272,15 +271,11 @@ jobs:
                       raise GateError('disposable authority canary readback mismatch')
               finally:
                   if canary_create_attempted:
-                      # A failed/ambiguous create response does not prove the remote mutation failed.
-                      # Reconcile authoritative ref state before deciding whether cleanup is required.
                       canary = rest_get(canary_path, allow_404=True)
                       if canary is not None:
                           canary_sha = (canary.get('object') or {}).get('sha')
                           if canary_sha != live_main:
-                              raise GateError(
-                                  'disposable authority canary entered unexpected state; refusing cleanup'
-                              )
+                              raise GateError('disposable authority canary entered unexpected state; refusing cleanup')
 
                           delete_error = None
                           try:
@@ -291,20 +286,15 @@ jobs:
                                   client_id=f'control-v4-canary-delete-{RUN_ID}',
                               )
                           except Exception as exc:
-                              # The delete request may have committed remotely despite a lost response.
                               delete_error = exc
 
                           remaining = rest_get(canary_path, allow_404=True)
                           if remaining is not None:
                               remaining_sha = (remaining.get('object') or {}).get('sha')
                               if remaining_sha != live_main:
-                                  raise GateError(
-                                      'disposable authority canary changed during cleanup; refusing delete'
-                                  )
+                                  raise GateError('disposable authority canary changed during cleanup; refusing delete')
                               if delete_error is not None:
-                                  raise GateError(
-                                      'disposable authority canary delete outcome ambiguous and ref remains'
-                                  ) from delete_error
+                                  raise GateError('disposable authority canary delete outcome ambiguous and ref remains') from delete_error
                               raise GateError('disposable authority canary cleanup failed')
 
               if (rest_get(f'repos/{REPOSITORY}/branches/main').get('commit') or {}).get('sha') != live_main:
