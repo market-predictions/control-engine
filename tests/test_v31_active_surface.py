@@ -42,6 +42,7 @@ def test_v4_authority_carrier_is_manual_principal_main_only_and_least_privilege(
     assert "github.repository == 'market-predictions/control-engine'" in carrier
     assert "github.ref == 'refs/heads/main'" in carrier
     assert "github.actor == 'market-predictions'" in carrier
+    assert "github.triggering_actor == 'market-predictions'" in carrier
     assert "github.event_name == 'issue_comment'" in carrier
     assert "github.event.action == 'created'" in carrier
     assert 'github.event.issue.number == 106' in carrier
