@@ -6,7 +6,6 @@ import pytest
 
 from scripts import validate_private_control_v4 as validator
 
-
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "private-control-v3-1-validation.yml"
 VALIDATOR = ROOT / "scripts" / "validate_private_control_v4.py"
@@ -35,14 +34,7 @@ def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_work
 
 
 def test_v4_production_module_invocation_can_import_trusted_public_packages():
-    result = subprocess.run(
-        [sys.executable, "-m", "scripts.validate_private_control_v4"],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    result = subprocess.run([sys.executable, "-m", "scripts.validate_private_control_v4"], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     assert result.returncode == 2
     assert "usage: validate_private_control_v4.py" in result.stderr
     assert "ModuleNotFoundError" not in result.stderr
@@ -92,11 +84,9 @@ def test_v4_frozen_authority_loader_uses_exact_v4_40_commit(monkeypatch, tmp_pat
     assert validator.V4_40_FROZEN_AUTHORITY_COMMIT == "3c314362341570349c15de00156dd6f5ab037fbe"
     calls = []
     sentinel = object()
-
     def fake_loader(root, *, commit_sha=None):
         calls.append((Path(root), commit_sha))
         return sentinel
-
     monkeypatch.setattr(validator, "load_v4_authority_from_git", fake_loader)
     assert validator.load_frozen_v4_40_authority(tmp_path) is sentinel
     assert calls == [(tmp_path, validator.V4_40_FROZEN_AUTHORITY_COMMIT)]
@@ -111,11 +101,7 @@ def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_pat
     candidate = dict(base)
     candidate[validator.RUNTIME_PATH] = ("100644", "blob", "d" * 40)
     del candidate["control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"]
-    assert validator.validate_changed_surface(candidate, base) == {
-        validator.RUNTIME_PATH,
-        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
-    }
-
+    assert validator.validate_changed_surface(candidate, base) == {validator.RUNTIME_PATH, "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"}
     candidate["tools/private_runtime.py"] = ("100644", "blob", "e" * 40)
     with pytest.raises(validator.ValidationError, match="non-declarative authority surface"):
         validator.validate_changed_surface(candidate, base)
@@ -123,36 +109,26 @@ def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_pat
 
 def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots():
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    valid = "\n".join(
-        (
-            "# Control — Canonical System Index V4",
-            "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
-            "runtime=control-runtime-state:control/DISPATCH_QUEUE.json",
-            "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
-            "runner_config=control/CONTROL_RUNNER_V4.json",
-            "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
-            "Current human status is an ephemeral projection of live authority and state.",
-            "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
-        )
-    ).encode("utf-8")
+    valid = "\n".join((
+        "# Control — Canonical System Index V4",
+        "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+        "runtime=control-runtime-state:control/DISPATCH_QUEUE.json",
+        "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
+        "runner_config=control/CONTROL_RUNNER_V4.json",
+        "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
+        "Current status is a fresh live projection, not a documentation lookup.",
+        "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
+    )).encode("utf-8")
     validator.validate_system_index(valid, runtime)
-
     with pytest.raises(validator.ValidationError, match="stale V3.1"):
         validator.validate_system_index(valid + b"\nv4_status=CANDIDATE_INERT_UNADOPTED\n", runtime)
-
     with pytest.raises(validator.ValidationError, match="duplicates volatile"):
         validator.validate_system_index(valid + b"\ncontrol_runtime_enabled=true\n", runtime)
-
     with pytest.raises(validator.ValidationError, match="duplicates volatile"):
         validator.validate_system_index(valid + b"\nrunner_config_blob_sha=deadbeef\n", runtime)
 
 
-def test_v4_current_surface_requires_v3_authority_absent_and_v4_mission_registry(tmp_path):
-    entries = {
-        validator.MISSION_README_PATH: ("100644", "blob", "a" * 40),
-    }
-    # The Git-backed full check is exercised by the validation carrier. This unit
-    # assertion protects the explicit current-path prohibition itself.
+def test_v4_current_surface_requires_v3_authority_absent_and_v4_mission_registry():
     assert validator.LEGACY_CURRENT_PATHS == {
         "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
         "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
@@ -163,7 +139,7 @@ def test_v4_current_surface_requires_v3_authority_absent_and_v4_mission_registry
 def test_v4_runner_current_contract_rejects_activation_era_status_and_observation():
     text = VALIDATOR.read_text(encoding="utf-8")
     assert '"positive_git_cas_proof": "PROVEN_V4_30"' in text
-    assert "status=CANDIDATE_INERT" in text  # rejection marker
+    assert "status=CANDIDATE_INERT" in text
     assert "status=ACTIVE_BOUND" in text
     assert "reconcile correlated live GitHub external-review evidence" in text
     assert "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING" in text
