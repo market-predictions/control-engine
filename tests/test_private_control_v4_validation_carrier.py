@@ -102,21 +102,26 @@ def test_v4_frozen_authority_loader_uses_exact_v4_40_commit(monkeypatch, tmp_pat
     assert calls == [(tmp_path, validator.V4_40_FROZEN_AUTHORITY_COMMIT)]
 
 
-def test_v4_changed_surface_rejects_executable_or_unbounded_paths():
+def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_paths():
     base = {
         validator.RUNTIME_PATH: ("100644", "blob", "a" * 40),
         validator.INDEX_PATH: ("100644", "blob", "b" * 40),
+        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json": ("100644", "blob", "c" * 40),
     }
     candidate = dict(base)
-    candidate[validator.RUNTIME_PATH] = ("100644", "blob", "c" * 40)
-    assert validator.validate_changed_surface(candidate, base) == {validator.RUNTIME_PATH}
+    candidate[validator.RUNTIME_PATH] = ("100644", "blob", "d" * 40)
+    del candidate["control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"]
+    assert validator.validate_changed_surface(candidate, base) == {
+        validator.RUNTIME_PATH,
+        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+    }
 
-    candidate["tools/private_runtime.py"] = ("100644", "blob", "d" * 40)
+    candidate["tools/private_runtime.py"] = ("100644", "blob", "e" * 40)
     with pytest.raises(validator.ValidationError, match="non-declarative authority surface"):
         validator.validate_changed_surface(candidate, base)
 
 
-def test_v4_system_index_must_match_runtime_switches_and_reject_stale_v31_authority():
+def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots():
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
     valid = "\n".join(
         (
@@ -126,10 +131,8 @@ def test_v4_system_index_must_match_runtime_switches_and_reject_stale_v31_author
             "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
             "runner_config=control/CONTROL_RUNNER_V4.json",
             "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
-            "v4_status=V4_CURRENT",
-            "control_runtime_enabled=true",
-            "integration_enabled=false",
-            "principal_manual_relay_count=0",
+            "Current human status is an ephemeral projection of live authority and state.",
+            "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
         )
     ).encode("utf-8")
     validator.validate_system_index(valid, runtime)
@@ -137,8 +140,30 @@ def test_v4_system_index_must_match_runtime_switches_and_reject_stale_v31_author
     with pytest.raises(validator.ValidationError, match="stale V3.1"):
         validator.validate_system_index(valid + b"\nv4_status=CANDIDATE_INERT_UNADOPTED\n", runtime)
 
-    with pytest.raises(validator.ValidationError, match="exactly one canonical control_runtime_enabled"):
-        validator.validate_system_index(valid + b"\ncontrol_runtime_enabled=false\n", runtime)
+    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
+        validator.validate_system_index(valid + b"\ncontrol_runtime_enabled=true\n", runtime)
 
-    with pytest.raises(validator.ValidationError, match="exactly one canonical integration_enabled"):
-        validator.validate_system_index(valid + b"\nintegration_enabled=true\n", runtime)
+    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
+        validator.validate_system_index(valid + b"\nrunner_config_blob_sha=deadbeef\n", runtime)
+
+
+def test_v4_current_surface_requires_v3_authority_absent_and_v4_mission_registry(tmp_path):
+    entries = {
+        validator.MISSION_README_PATH: ("100644", "blob", "a" * 40),
+    }
+    # The Git-backed full check is exercised by the validation carrier. This unit
+    # assertion protects the explicit current-path prohibition itself.
+    assert validator.LEGACY_CURRENT_PATHS == {
+        "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
+        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+    }
+    assert validator.MISSION_README_PATH in validator.BOUNDED_DOCTRINE_PATHS
+
+
+def test_v4_runner_current_contract_rejects_activation_era_status_and_observation():
+    text = VALIDATOR.read_text(encoding="utf-8")
+    assert '"positive_git_cas_proof": "PROVEN_V4_30"' in text
+    assert "status=CANDIDATE_INERT" in text  # rejection marker
+    assert "status=ACTIVE_BOUND" in text
+    assert "reconcile correlated live GitHub external-review evidence" in text
+    assert "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING" in text
