@@ -62,12 +62,25 @@ def test_issue_comment_transport_is_owner_only_existing_issue_and_not_pr_comment
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "  issue_comment:\n    types: [created]" in text
     assert "github.actor == 'market-predictions'" in text
+    assert "github.triggering_actor == 'market-predictions'" in text
     assert "github.event_name == 'issue_comment'" in text
     assert "github.event.action == 'created'" in text
     assert "github.event.issue.number == 106" in text
     assert "github.event.issue.pull_request == null" in text
     assert "schedule:" not in text
     assert "pull_request:" not in text
+
+
+def test_rerun_principal_gate_requires_owner_as_original_and_triggering_actor_before_capability() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    gate = text.split("    runs-on: ubuntu-latest", 1)[0]
+    actor = "github.actor == 'market-predictions'"
+    triggering_actor = "github.triggering_actor == 'market-predictions'"
+    assert actor in gate
+    assert triggering_actor in gate
+    capability = text.index("      - name: Create exact private authority capability")
+    assert text.index(actor) < capability
+    assert text.index(triggering_actor) < capability
 
 
 def test_exact_issue_comment_adopt_command_normalizes_before_token_creation(tmp_path: Path) -> None:
