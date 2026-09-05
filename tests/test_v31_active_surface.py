@@ -36,12 +36,18 @@ def test_no_reachable_semantic_runtime_writer_remains_after_v31_writer_retiremen
 def test_v4_authority_carrier_is_manual_principal_main_only_and_least_privilege():
     carrier = workflows()['control-v4-authority-adoption.yml']
     assert 'workflow_dispatch:' in carrier
+    assert '\n  issue_comment:\n    types: [created]' in carrier
     assert '\n  schedule:' not in carrier
-    assert 'issue_comment:' not in carrier
     assert 'pull_request_target:' not in carrier
     assert "github.repository == 'market-predictions/control-engine'" in carrier
     assert "github.ref == 'refs/heads/main'" in carrier
     assert "github.actor == 'market-predictions'" in carrier
+    assert "github.triggering_actor == 'market-predictions'" in carrier
+    assert "github.event_name == 'issue_comment'" in carrier
+    assert "github.event.action == 'created'" in carrier
+    assert 'github.event.issue.number == 106' in carrier
+    assert 'github.event.issue.pull_request == null' in carrier
+    assert 'CONTROL_PRIVATE_V4_ADOPT' in carrier
     assert 'permissions:\n  contents: read' in carrier
 
     capability = carrier.split('Create exact private authority capability', 1)[1].split(
