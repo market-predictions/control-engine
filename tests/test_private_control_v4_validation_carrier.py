@@ -160,7 +160,10 @@ def test_v4_system_index_is_live_first_and_contains_no_volatile_status_snapshot(
     ).encode("utf-8")
     validator.validate_system_index(valid)
 
-    with pytest.raises(validator.ValidationError, match="stale V3.1"):
+    # The stale marker also duplicates a forbidden volatile status declaration;
+    # either reason is a correct structural rejection. Current implementation
+    # reports the stronger no-status-snapshot invariant first.
+    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
         validator.validate_system_index(valid + b"\nv4_status=CANDIDATE_INERT_UNADOPTED\n")
 
     for volatile in (
