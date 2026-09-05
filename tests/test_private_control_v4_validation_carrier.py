@@ -189,4 +189,4 @@ def test_v4_runner_current_contract_is_exact_prompt_blob_not_marker_presence():
     assert 'REVIEWED_RUNNER_PROMPT_BLOB_SHA = "cfef93333aaf0a88ef72db3e3a4bd37c384217fc"' in text
     assert "prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA" in text
     assert '"positive_git_cas_proof": "PROVEN_V4_30"' in text
-    assert "for marker in" not in text
+    assert "Runner prompt lacks current V4 review-reconciliation invariant" not in text
