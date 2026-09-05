@@ -24,32 +24,6 @@ REQUIRED_CURRENT_DOCTRINE_PATHS = (
     "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md",
 )
 
-# Independent from the production regex. These are the mutable/exact values
-# owned by runtime authority or Runner config that must never be mirrored into
-# the human-facing current-status index as assignments.
-VOLATILE_STATUS_ASSIGNMENTS = (
-    "v4_status=V4_CURRENT",
-    "control_runtime_enabled=true",
-    "integration_enabled=false",
-    "runner_config_path=control/CONTROL_RUNNER_V4.json",
-    "runner_config_blob_sha=deadbeef",
-    "principal_manual_relay_count=0",
-    "runner_id=CONTROL_V4_RUNNER",
-    "execution_surface=CHATGPT_SCHEDULED",
-    "prompt_path=control/CONTROL_RUNNER_V4_PROMPT.md",
-    "prompt_blob_sha=deadbeef",
-    "timing_mode=exact_schedule",
-    "timezone=Europe/Amsterdam",
-    "rrule=FREQ=HOURLY;BYMINUTE=30;BYSECOND=0",
-    "automation_object_id=6a9a7e0b18b08191876c134d83cfbba2",
-    "automation_object_binding_status=UNBOUND",
-    "scheduled_credential_binding_status=UNKNOWN",
-    "effective_capability_binding_status=UNKNOWN",
-    "scheduler_automation_admin=UNKNOWN",
-    "protection_rules_admin=UNKNOWN",
-    "positive_git_cas_proof=UNKNOWN",
-)
-
 VALID_MISSION_README = (
     "# Mission Contract Registry — V4\n"
     "CONTROL_AUTONOMY_ARCHITECTURE_V4.md\n"
@@ -133,9 +107,10 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
             validator.require_zero_relay_count({"principal_manual_relay_count": value})
 
 
-def test_v4_runner_object_and_prompt_are_public_trust_anchors():
+def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
     assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "cfef93333aaf0a88ef72db3e3a4bd37c384217fc"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):
@@ -311,39 +286,23 @@ def _valid_system_index() -> bytes:
     ).encode("utf-8")
 
 
-def test_v4_system_index_accepts_current_live_first_contract_without_snapshots():
+def test_exact_reviewed_system_index_blob_is_behaviorally_accepted():
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    validator.validate_system_index(_valid_system_index(), runtime)
+    validator.validate_system_index(
+        _valid_system_index(),
+        runtime,
+        index_oid=validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA,
+    )
 
 
-@pytest.mark.parametrize("assignment", VOLATILE_STATUS_ASSIGNMENTS)
-@pytest.mark.parametrize("prefix", ("", "- ", "> `", "  ", "status: `"))
-def test_v4_system_index_rejects_every_bounded_authority_or_runner_snapshot_anywhere(
-    assignment, prefix
-):
+def test_non_anchor_system_index_blob_is_behaviorally_rejected():
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    suffix = "`" if "`" in prefix else ""
-    injected = _valid_system_index() + f"\n{prefix}{assignment}{suffix}\n".encode()
-    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
-        validator.validate_system_index(injected, runtime)
-
-
-@pytest.mark.parametrize(
-    "rendered_occurrence",
-    (
-        "- **v4_status**=V4_CURRENT",
-        "- `automation_object_binding_status`=UNBOUND",
-        "- __integration_enabled__=false",
-        "- <code>prompt_blob_sha</code>=deadbeef",
-        "- [runner_config_blob_sha](https://example.invalid)=deadbeef",
-        "[state]: https://example.invalid\n- [v4_status][state]=V4_CURRENT",
-        "Never mirror `automation_object_id` into the human index.",
-    ),
-)
-def test_v4_system_index_rejects_volatile_keys_regardless_of_presentation(
-    rendered_occurrence,
-):
-    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    injected = _valid_system_index() + f"\n{rendered_occurrence}\n".encode()
-    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
-        validator.validate_system_index(injected, runtime)
+    with pytest.raises(
+        validator.ValidationError,
+        match="SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract",
+    ):
+        validator.validate_system_index(
+            _valid_system_index(),
+            runtime,
+            index_oid="d" * 40,
+        )
