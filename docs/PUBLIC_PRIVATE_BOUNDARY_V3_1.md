@@ -1,42 +1,19 @@
 # Public / Private Boundary — Control Autonomy V3.1
 
-## Authority
+Status: **historical / rollback-only support before V4-80**.
 
-The private repository `market-predictions/control-plane` is the sole Control planning/authority and runtime-state plane.
+This document no longer defines current Control runtime authority. Current authority is Control V4. It is retained only because the pre-V4-80 rollback path still validates frozen historical V3.1 commits with trusted public code.
 
-The public repository `market-predictions/control-engine` contains deterministic code and the single trusted runtime-mutating workflow. It must not persist private Control runtime state.
+## Historical V3.1 boundary
 
-## Runtime writer
+Under V3.1 the private repository `market-predictions/control-plane` was the Control planning/authority and runtime-state plane, while `market-predictions/control-engine` supplied the deterministic Control Kernel writer. The retired workflow was `/.github/workflows/control-kernel-v3-1.yml`; it is no longer present on current public `main` and is not a current execution route.
 
-Exactly one normal GitHub Actions workflow may mutate canonical Control runtime state:
+Canonical V3.1 runtime state consisted of `control/DISPATCH_QUEUE.json` plus immutable worker results. Semantic workers A1/B1 did not directly write canonical state, and integration was deterministic rather than semantic worker work.
 
-`/.github/workflows/control-kernel-v3-1.yml`
+## Current V4 boundary
 
-The workflow may transiently clone private Control state into an ephemeral runner and may persist only bounded V3.1 mutations to `control-runtime-state` using the trusted Control Kernel capability.
+Current Control uses the reviewed scheduled V4 Runner as the sole semantic runtime. Private `main` contains current V4 declarative authority; `control-runtime-state:control/DISPATCH_QUEUE.json` is the single mutable runtime document. Public Control Engine tooling is deterministic/passive and has `semantic_runtime_authority=false`.
 
-Semantic workers A1 and B1 never receive canonical runtime write credentials. They request `CLAIM`, `RECORD`, or `RELEASE`; the kernel authenticates caller capability, validates the current claim and live authority, and performs any canonical mutation itself.
+V3.1 schemas, validator and deterministic code retained in this repository may be used only to validate or derive bounded migration/rollback behavior against exact frozen historical commits. They do not authorize a V3.1 scheduler, writer, worker topology, queue, integration path or current-status interpretation.
 
-## Private state
-
-Canonical runtime state is limited to:
-
-- `control/DISPATCH_QUEUE.json`;
-- `control/worker-results/<task-id>--<run-id>.json`.
-
-Git history is the mutation audit trail.
-
-## Semantic boundary
-
-A1 owns only `IMPLEMENTATION` and `REPAIR` semantic execution. B1 owns only `ASSURANCE` semantic judgment. The kernel performs no semantic inference.
-
-B1 is candidate-read-only and has no merge or candidate mutation authority. The authenticated caller capability, not a supplied role string, determines whether a caller may operate as A1 or B1.
-
-## Deterministic integration
-
-`TICK` performs `RECONCILE -> INTEGRATE -> FEED`. Integration is deterministic GitHub mutation, not semantic worker work. It is permitted only when frozen candidate authority and current live restrictions both allow it and exact GitHub facts still match. A previously completed merge side effect may be reconciled only from frozen AUTO authority and exact merge-commit parent evidence; live authority cannot authorize a new merge retroactively.
-
-## Removed architecture
-
-V3.1 has no normal provider fallback, no A2 baseline, no semantic integration task, no project-intake routing database, no mandatory handover projection, no worker-direct result write, no secondary queue and no private runtime-mutating workflow.
-
-Historical implementations are provenance in Git history and are not part of the active source or authority surface.
+Historical implementations remain available from Git history. Do not reconstruct a current V3.1 runtime from retained rollback code.
