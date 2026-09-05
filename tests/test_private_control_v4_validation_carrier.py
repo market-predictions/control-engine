@@ -24,6 +24,32 @@ REQUIRED_CURRENT_DOCTRINE_PATHS = (
     "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md",
 )
 
+# Independent from the production regex. These are the mutable/exact values
+# owned by runtime authority or Runner config that must never be mirrored into
+# the human-facing current-status index as assignments.
+VOLATILE_STATUS_ASSIGNMENTS = (
+    "v4_status=V4_CURRENT",
+    "control_runtime_enabled=true",
+    "integration_enabled=false",
+    "runner_config_path=control/CONTROL_RUNNER_V4.json",
+    "runner_config_blob_sha=deadbeef",
+    "principal_manual_relay_count=0",
+    "runner_id=CONTROL_V4_RUNNER",
+    "execution_surface=CHATGPT_SCHEDULED",
+    "prompt_path=control/CONTROL_RUNNER_V4_PROMPT.md",
+    "prompt_blob_sha=deadbeef",
+    "timing_mode=exact_schedule",
+    "timezone=Europe/Amsterdam",
+    "rrule=FREQ=HOURLY;BYMINUTE=30;BYSECOND=0",
+    "automation_object_id=6a9a7e0b18b08191876c134d83cfbba2",
+    "automation_object_binding_status=UNBOUND",
+    "scheduled_credential_binding_status=UNKNOWN",
+    "effective_capability_binding_status=UNKNOWN",
+    "scheduler_automation_admin=UNKNOWN",
+    "protection_rules_admin=UNKNOWN",
+    "positive_git_cas_proof=UNKNOWN",
+)
+
 VALID_MISSION_README = (
     "# Mission Contract Registry — V4\n"
     "CONTROL_AUTONOMY_ARCHITECTURE_V4.md\n"
@@ -268,9 +294,8 @@ def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected(monkeypatch, tmp
         validator.validate_runtime_and_runner(tmp_path, {})
 
 
-def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots_anywhere():
-    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    valid = "\n".join(
+def _valid_system_index() -> bytes:
+    return "\n".join(
         (
             "# Control — Canonical System Index V4",
             "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
@@ -282,17 +307,20 @@ def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots_an
             "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
         )
     ).encode("utf-8")
-    validator.validate_system_index(valid, runtime)
 
-    for injected in (
-        b"\nv4_status=V4_CURRENT\n",
-        b"\n- v4_status=CANDIDATE_INERT_UNADOPTED\n",
-        b"\ncontrol_runtime_enabled=true\n",
-        b"\n- control_runtime_enabled=false\n",
-        b"\n> `integration_enabled=true`\n",
-        b"\n  runner_config_blob_sha=deadbeef\n",
-        b"\nstatus: `prompt_blob_sha=deadbeef`\n",
-        b"\n* principal_manual_relay_count=0\n",
-    ):
-        with pytest.raises(validator.ValidationError, match="duplicates volatile"):
-            validator.validate_system_index(valid + injected, runtime)
+
+def test_v4_system_index_accepts_current_live_first_contract_without_snapshots():
+    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
+    validator.validate_system_index(_valid_system_index(), runtime)
+
+
+@pytest.mark.parametrize("assignment", VOLATILE_STATUS_ASSIGNMENTS)
+@pytest.mark.parametrize("prefix", ("", "- ", "> `", "  ", "status: `"))
+def test_v4_system_index_rejects_every_bounded_authority_or_runner_snapshot_anywhere(
+    assignment, prefix
+):
+    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
+    suffix = "`" if "`" in prefix else ""
+    injected = _valid_system_index() + f"\n{prefix}{assignment}{suffix}\n".encode()
+    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
+        validator.validate_system_index(injected, runtime)
