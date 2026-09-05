@@ -326,3 +326,22 @@ def test_v4_system_index_rejects_every_bounded_authority_or_runner_snapshot_anyw
     injected = _valid_system_index() + f"\n{prefix}{assignment}{suffix}\n".encode()
     with pytest.raises(validator.ValidationError, match="duplicates volatile"):
         validator.validate_system_index(injected, runtime)
+
+
+@pytest.mark.parametrize(
+    "rendered_assignment",
+    (
+        "- **v4_status**=V4_CURRENT",
+        "- `automation_object_binding_status`=UNBOUND",
+        "- __integration_enabled__=false",
+        "- <code>prompt_blob_sha</code>=deadbeef",
+        "- [runner_config_blob_sha](https://example.invalid)=deadbeef",
+    ),
+)
+def test_v4_system_index_rejects_inline_markup_around_volatile_assignment_keys(
+    rendered_assignment,
+):
+    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
+    injected = _valid_system_index() + f"\n{rendered_assignment}\n".encode()
+    with pytest.raises(validator.ValidationError, match="duplicates volatile"):
+        validator.validate_system_index(injected, runtime)
