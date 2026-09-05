@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import sys
 
@@ -9,6 +10,33 @@ from scripts import validate_private_control_v4 as validator
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "private-control-v3-1-validation.yml"
 VALIDATOR = ROOT / "scripts" / "validate_private_control_v4.py"
+
+# Deliberately independent from validator.BOUNDED_DOCTRINE_PATHS so deleting a
+# required production path cannot silently shrink the regression matrix too.
+REQUIRED_CURRENT_DOCTRINE_PATHS = (
+    "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+    "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
+    "control/CONTROL_V4_ROADMAP.md",
+    "control/CONTROL_V4_CONVERGENCE_AND_DEBT_RETIREMENT_PLAN.md",
+    "control/CONTROL_V4_SURFACE_INVENTORY.md",
+    "control/missions/README.md",
+    "control/CHANGELOG.md",
+    "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md",
+)
+
+VALID_MISSION_README = (
+    "# Mission Contract Registry — V4\n"
+    "CONTROL_AUTONOMY_ARCHITECTURE_V4.md\n"
+    "MISSION_CONTRACT_V4\n"
+    "review_policy\n"
+)
+
+
+def _current_doctrine_entries() -> dict[str, tuple[str, str, str]]:
+    return {
+        path: ("100644", "blob", f"{index + 1:040x}")
+        for index, path in enumerate(REQUIRED_CURRENT_DOCTRINE_PATHS)
+    }
 
 
 def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_workflow():
@@ -120,29 +148,124 @@ def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_pat
         validator.validate_changed_surface(candidate, base)
 
 
-def test_current_doctrine_paths_must_all_be_inert_regular_blobs(monkeypatch, tmp_path):
-    seen = []
+@pytest.mark.parametrize("missing_path", REQUIRED_CURRENT_DOCTRINE_PATHS)
+def test_every_required_current_doctrine_path_is_independently_required(
+    monkeypatch, tmp_path, missing_path
+):
+    entries = _current_doctrine_entries()
+    del entries[missing_path]
+    monkeypatch.setattr(validator, "_text", lambda root, tree, path: VALID_MISSION_README)
 
-    def fake_regular_blob(entries, path):
-        seen.append(path)
-        if path == "control/CONTROL_V4_ROADMAP.md":
-            raise validator.ValidationError("private V4 path is not one inert regular Git blob")
-        return "a" * 40
+    with pytest.raises(validator.ValidationError, match=f"required private V4 file missing: {missing_path}"):
+        validator.validate_current_surface(tmp_path, entries)
 
-    monkeypatch.setattr(validator, "_regular_blob", fake_regular_blob)
+
+@pytest.mark.parametrize("non_regular_path", REQUIRED_CURRENT_DOCTRINE_PATHS)
+def test_every_required_current_doctrine_path_is_independently_inert_regular_blob(
+    monkeypatch, tmp_path, non_regular_path
+):
+    entries = _current_doctrine_entries()
+    entries[non_regular_path] = ("120000", "blob", "f" * 40)
+    monkeypatch.setattr(validator, "_text", lambda root, tree, path: VALID_MISSION_README)
+
+    with pytest.raises(
+        validator.ValidationError,
+        match=f"private V4 path is not one inert regular Git blob: {non_regular_path}",
+    ):
+        validator.validate_current_surface(tmp_path, entries)
+
+
+@pytest.mark.parametrize(
+    "legacy_path",
+    (
+        "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
+        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+    ),
+)
+def test_each_legacy_current_authority_path_is_behaviorally_rejected(
+    monkeypatch, tmp_path, legacy_path
+):
+    entries = _current_doctrine_entries()
+    entries[legacy_path] = ("100644", "blob", "e" * 40)
+    monkeypatch.setattr(validator, "_text", lambda root, tree, path: VALID_MISSION_README)
+
+    with pytest.raises(validator.ValidationError, match="competing V3.1 current authority"):
+        validator.validate_current_surface(tmp_path, entries)
+
+
+def _runner_validation_payloads(prompt_oid: str) -> tuple[bytes, bytes, str]:
+    config_oid = "b" * 40
+    config = {
+        "protocol_id": "CONTROL_RUNNER_V4",
+        "runner_id": "CONTROL_V4_RUNNER",
+        "execution_surface": "CHATGPT_SCHEDULED",
+        "prompt_path": validator.RUNNER_PROMPT_PATH,
+        "prompt_blob_sha": prompt_oid,
+        "schedule": {
+            "timing_mode": "exact_schedule",
+            "timezone": "Europe/Amsterdam",
+            "rrule": "FREQ=HOURLY;BYMINUTE=30;BYSECOND=0",
+        },
+        "automation_object_id": validator.REVIEWED_AUTOMATION_OBJECT_ID,
+        "automation_object_binding_status": "BOUND",
+        "scheduled_credential_binding_status": "PLATFORM_MANAGED_NO_STABLE_CREDENTIAL_ID_EXPOSED",
+        "effective_capability_binding_status": "BOUND_TO_EXACT_SCHEDULED_OBJECT_TOOL_SURFACE",
+        "scheduled_capability_observation": {
+            "scheduler_automation_admin": "PLATFORM_EXPOSED_ACCEPTED",
+            "protection_rules_admin": "UNAVAILABLE_OBSERVED_V4_30",
+            "positive_git_cas_proof": "PROVEN_V4_30",
+        },
+        "principal_manual_relay_count": 0,
+    }
+    runtime = {
+        "protocol_id": "CONTROL_RUNTIME_AUTHORITY_V4",
+        "control_runtime_enabled": True,
+        "integration_enabled": False,
+        "runner_config_path": validator.RUNNER_CONFIG_PATH,
+        "runner_config_blob_sha": config_oid,
+        "principal_manual_relay_count": 0,
+    }
+    return (
+        json.dumps(runtime, separators=(",", ":")).encode(),
+        json.dumps(config, separators=(",", ":")).encode(),
+        config_oid,
+    )
+
+
+def _install_runner_validation_fakes(monkeypatch, prompt_oid: str) -> None:
+    runtime_raw, config_raw, config_oid = _runner_validation_payloads(prompt_oid)
+
+    def fake_blob(root, entries, path):
+        if path == validator.RUNTIME_PATH:
+            return runtime_raw, "a" * 40
+        if path == validator.RUNNER_CONFIG_PATH:
+            return config_raw, config_oid
+        if path == validator.RUNNER_PROMPT_PATH:
+            return b"ignored because _text is patched", prompt_oid
+        raise AssertionError(f"unexpected blob path: {path}")
+
+    monkeypatch.setattr(validator, "_blob", fake_blob)
     monkeypatch.setattr(
         validator,
         "_text",
-        lambda root, entries, path: (
-            "# Mission Contract Registry — V4\n"
-            "CONTROL_AUTONOMY_ARCHITECTURE_V4.md\n"
-            "MISSION_CONTRACT_V4\nreview_policy\n"
-        ),
+        lambda root, entries, path: "status=ACTIVE_BOUND\ncanonical reviewed prompt\n",
     )
-    with pytest.raises(validator.ValidationError, match="inert regular Git blob"):
-        validator.validate_current_surface(tmp_path, {})
-    assert "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md" in seen
-    assert "control/CONTROL_V4_ROADMAP.md" in seen
+
+
+def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted(monkeypatch, tmp_path):
+    _install_runner_validation_fakes(monkeypatch, validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA)
+    runtime = validator.validate_runtime_and_runner(tmp_path, {})
+    assert runtime["control_runtime_enabled"] is True
+    assert runtime["integration_enabled"] is False
+
+
+def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected(monkeypatch, tmp_path):
+    _install_runner_validation_fakes(monkeypatch, "d" * 40)
+    with pytest.raises(
+        validator.ValidationError,
+        match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
+    ):
+        validator.validate_runtime_and_runner(tmp_path, {})
 
 
 def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots_anywhere():
@@ -174,19 +297,3 @@ def test_v4_system_index_is_live_first_and_forbids_volatile_runtime_snapshots_an
     ):
         with pytest.raises(validator.ValidationError, match="duplicates volatile"):
             validator.validate_system_index(valid + injected, runtime)
-
-
-def test_v4_current_surface_requires_v3_authority_absent_and_v4_mission_registry():
-    assert validator.LEGACY_CURRENT_PATHS == {
-        "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
-        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
-    }
-    assert validator.MISSION_README_PATH in validator.BOUNDED_DOCTRINE_PATHS
-
-
-def test_v4_runner_current_contract_is_exact_prompt_blob_not_marker_presence():
-    text = VALIDATOR.read_text(encoding="utf-8")
-    assert 'REVIEWED_RUNNER_PROMPT_BLOB_SHA = "cfef93333aaf0a88ef72db3e3a4bd37c384217fc"' in text
-    assert "prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA" in text
-    assert '"positive_git_cas_proof": "PROVEN_V4_30"' in text
-    assert "Runner prompt lacks current V4 review-reconciliation invariant" not in text
