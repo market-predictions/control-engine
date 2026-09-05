@@ -5,13 +5,18 @@ def workflows() -> dict[str, str]:
     return {p.name: p.read_text(encoding='utf-8') for p in Path('.github/workflows').glob('*.yml')}
 
 
-def test_current_surface_is_retired_v31_writer_plus_bounded_v4_authority_carrier():
+def test_current_surface_is_passive_v4_with_bounded_rollback_validation_support():
     names = sorted(workflows())
     assert names == [
         'ci.yml',
         'control-v4-authority-adoption.yml',
         'private-control-v3-1-validation.yml',
     ]
+    assert not Path('scripts/control_kernel_v31.py').exists()
+    assert not Path('docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md').exists()
+    assert Path('scripts/validate_private_control_v31.py').is_file()
+    assert Path('control_engine/kernel_v31.py').is_file()
+    assert Path('control_engine/migration_v31.py').is_file()
 
 
 def test_no_reachable_semantic_runtime_writer_remains_after_v31_writer_retirement():
