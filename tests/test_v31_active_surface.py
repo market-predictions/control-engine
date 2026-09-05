@@ -12,7 +12,9 @@ def test_current_surface_is_passive_v4_with_bounded_rollback_validation_support(
         'control-v4-authority-adoption.yml',
         'private-control-v3-1-validation.yml',
     ]
-    assert not Path('scripts/control_kernel_v31.py').exists()
+    # The V3.1 bridge source remains only because exact rollback/integration
+    # regressions import its deterministic helpers. No current workflow invokes it.
+    assert Path('scripts/control_kernel_v31.py').is_file()
     assert not Path('docs/PUBLIC_PRIVATE_BOUNDARY_V3_1.md').exists()
     assert Path('scripts/validate_private_control_v31.py').is_file()
     assert Path('control_engine/kernel_v31.py').is_file()
@@ -36,6 +38,12 @@ def test_no_reachable_semantic_runtime_writer_remains_after_v31_writer_retiremen
     assert 'CLAIM' not in carrier
     assert 'RECORD' not in carrier
     assert 'RELEASE' not in carrier
+
+    # Current workflow source may compile the retained bridge for regression
+    # safety, but it must never execute it as a runtime command.
+    for name, workflow in current.items():
+        assert 'python scripts/control_kernel_v31.py' not in workflow, name
+        assert 'python3 scripts/control_kernel_v31.py' not in workflow, name
 
 
 def test_v4_authority_carrier_is_manual_principal_main_only_and_least_privilege():
