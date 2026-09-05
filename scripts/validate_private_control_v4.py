@@ -31,6 +31,8 @@ COHERENCE_REPAIR_PATH = "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md"
 LEGACY_CURRENT_PATHS = {
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
     "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
+    "schemas/mission_contract_v31.schema.json",
+    "schemas/repository_authority_v31.schema.json",
 }
 BOUNDED_DOCTRINE_PATHS = {
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
