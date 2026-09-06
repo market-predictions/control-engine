@@ -61,7 +61,9 @@ def test_superseded_carrier_prompt_hashes_fail_closed(superseded_hash):
 
 def test_tick_age_repaired_prompt_hash_requires_every_fail_closed_marker():
     for marker in EXPECTED_CARRIER_PROMPT_MARKERS:
-        text = _carrier_prompt().replace(marker, "REMOVED_MARKER", 1)
+        # Remove every textual occurrence so substring overlap in another marker
+        # cannot make this negative test pass accidentally.
+        text = _carrier_prompt().replace(marker, "REMOVED_MARKER")
         with pytest.raises(
             validator.ValidationError,
             match="carrier-bound Runner prompt lacks required fail-closed transport markers",
