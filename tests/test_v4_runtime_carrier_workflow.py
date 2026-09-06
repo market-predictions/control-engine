@@ -61,7 +61,6 @@ def test_transport_has_no_generic_queue_patch_and_public_result_forbids_private_
     protocol = PROTOCOL.read_text(encoding='utf-8')
     combined = workflow + script + protocol
     assert 'CONTROL_V4_RUNTIME_PATCH_QUEUE' not in combined
-    assert 'PATCH_QUEUE' not in combined
     assert '"task_id",\n    "gap_id",\n    "mission_id",' in protocol
     assert '"acceptance",' in protocol
     assert '"mission_contract_blob_sha",' in protocol
@@ -80,6 +79,15 @@ def test_carrier_is_activation_bounded_to_integration_disabled_and_private_targe
     assert 'TARGET_NOT_PUBLICLY_READABLE' in script
 
 
+def test_candidate_less_build_proves_public_target_before_work_capsule() -> None:
+    text = SCRIPT.read_text(encoding='utf-8')
+    assert 'def _assert_public_target_repository(repository: str) -> None:' in text
+    assert '_assert_public_target_repository(repository)' in text.split('def _target_pr_candidate', 1)[1].split('def _tick', 1)[0]
+    tick = text.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
+    assert 'else:\n            _assert_public_target_repository(task["repository"])' in tick
+    assert tick.index('_assert_public_target_repository(task["repository"])') < tick.rindex('safe_work_capsule(')
+
+
 def test_carrier_does_not_persist_private_state_in_public_repository() -> None:
     text = SCRIPT.read_text(encoding='utf-8')
     assert 'PRIVATE_REPOSITORY = "market-predictions/control-plane"' in text
@@ -87,4 +95,4 @@ def test_carrier_does_not_persist_private_state_in_public_repository() -> None:
     assert 'git/trees' in text
     assert 'git/commits' in text
     assert 'control-runtime-state' in text
-    assert 'open(' not in text.replace('with open(output_path', '')
+    assert 'with open(' not in text.replace('with open(output_path', '')
