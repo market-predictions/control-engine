@@ -87,13 +87,15 @@ def test_malformed_or_incomplete_candidate_is_not_normalized() -> None:
     assert normalize_runner_command(command) == command
 
 
-def test_runtime_workflow_normalizes_before_existing_carrier_parser() -> None:
+def test_runtime_workflow_normalizes_before_unchanged_carrier_entrypoint() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    carrier_step = text.split("Execute bounded typed V4 runtime carrier", 1)[1].split(
-        "Publish public-safe carrier result", 1
-    )[0]
-    normalize = "CONTROL_V4_PUBLIC_COMMAND=\"$(python scripts/control_v4_runtime_command_compat.py)\""
-    carrier = "python scripts/control_v4_runtime_carrier.py"
-    assert normalize in carrier_step
-    assert carrier in carrier_step
-    assert carrier_step.index(normalize) < carrier_step.index(carrier)
+    normalize_name = "Normalize observed V4 Runner compatibility envelope"
+    carrier_name = "Execute bounded typed V4 runtime carrier"
+    assert normalize_name in text
+    assert carrier_name in text
+    assert text.index(normalize_name) < text.index(carrier_name)
+    normalize_step = text.split(normalize_name, 1)[1].split(carrier_name, 1)[0]
+    carrier_step = text.split(carrier_name, 1)[1].split("Publish public-safe carrier result", 1)[0]
+    assert "python scripts/control_v4_runtime_command_compat.py" in normalize_step
+    assert "GITHUB_ENV" in normalize_step
+    assert "run: python scripts/control_v4_runtime_carrier.py" in carrier_step
