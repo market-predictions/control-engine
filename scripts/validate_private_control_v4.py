@@ -48,7 +48,7 @@ SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = "7fe88ba0fdd96c7681346c926aa9671fabf3256c"
-REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "1ae9f3f982f2c42c2ff3354f4552e0650f321145"
+REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "249c278d6e0d0e03f651fc9d45ec948a55b2a531"
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 CARRIER_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
@@ -57,8 +57,13 @@ CARRIER_PROMPT_REQUIRED_MARKERS = (
     "issue **#106**",
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
-    "candidate-less `BUILD`",
-    "submit `YIELD`",
+    "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
+    "Fresh-holder fence for every public target write",
+    "no more than **60 seconds old**",
+    "bounded to **300 seconds or less**",
+    "it **must not** perform a target write",
+    "submit `YIELD` for the current exact holder",
+    "create a new unique `run_id` and submit a new TICK",
 )
 
 
