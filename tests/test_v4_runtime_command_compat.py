@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from scripts.control_v4_runtime_command_compat import EVENT_PREFIX, normalize_runner_command
 
@@ -14,6 +15,7 @@ CANDIDATE = {
     "expected_base_branch": "main",
     "expected_base_sha": "acdc5d5bae018b64aa082ad68c3e94de955e91a3",
 }
+WORKFLOW = Path(".github/workflows/control-v4-runtime-carrier.yml")
 
 
 def nested_review_unavailable(**extra: object) -> str:
@@ -83,3 +85,15 @@ def test_malformed_or_incomplete_candidate_is_not_normalized() -> None:
     }
     command = EVENT_PREFIX + json.dumps(payload, separators=(",", ":"))
     assert normalize_runner_command(command) == command
+
+
+def test_runtime_workflow_normalizes_before_existing_carrier_parser() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    carrier_step = text.split("Execute bounded typed V4 runtime carrier", 1)[1].split(
+        "Publish public-safe carrier result", 1
+    )[0]
+    normalize = "CONTROL_V4_PUBLIC_COMMAND=\"$(python scripts/control_v4_runtime_command_compat.py)\""
+    carrier = "python scripts/control_v4_runtime_carrier.py"
+    assert normalize in carrier_step
+    assert carrier in carrier_step
+    assert carrier_step.index(normalize) < carrier_step.index(carrier)
