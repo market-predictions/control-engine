@@ -11,8 +11,14 @@ EXPECTED_CARRIER_PROMPT_MARKERS = (
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
+    "use the connected GitHub app",
+    "public transport entrypoint is mandatory",
+    "must not silently exit",
     "at least **120 seconds old**",
+    "**MUST immediately post exactly one recovery replay**",
     "exact same TICK body and same `run_id`",
+    "**MUST post one fresh initial TICK**",
+    "performs exactly one public transport write",
     "earliest TICK for that `run_id` remains the sole initial acquisition TICK and lease-freshness anchor",
     "must be no more than **660 seconds old**",
     "recovery replays and later revalidation TICKs **must not reset or renew this 660-second clock**",
@@ -30,7 +36,7 @@ def _carrier_prompt() -> str:
 
 def test_current_and_recovery_prompt_hashes_are_the_only_transition_anchors():
     assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
-    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "6c7c3cc41a7c97cb551e4d55d3d309a4d913cfe3"
+    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "804c8570141934c5a0b5fa86583c867995ce51f4"
     assert validator.CARRIER_PROMPT_REQUIRED_MARKERS == EXPECTED_CARRIER_PROMPT_MARKERS
 
     validator._validate_prompt_trust(
@@ -50,6 +56,7 @@ def test_current_and_recovery_prompt_hashes_are_the_only_transition_anchors():
         "249c278d6e0d0e03f651fc9d45ec948a55b2a531",
         "3492644d3cbf37cb273ad262c4f2129cde9a20ef",
         "1ae9f3f982f2c42c2ff3354f4552e0650f321145",
+        "6c7c3cc41a7c97cb551e4d55d3d309a4d913cfe3",
     ],
 )
 def test_superseded_carrier_prompt_hashes_fail_closed(superseded_hash):

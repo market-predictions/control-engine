@@ -48,7 +48,7 @@ SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
-REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "6c7c3cc41a7c97cb551e4d55d3d309a4d913cfe3"
+REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "804c8570141934c5a0b5fa86583c867995ce51f4"
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 CARRIER_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
@@ -58,8 +58,14 @@ CARRIER_PROMPT_REQUIRED_MARKERS = (
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
+    "use the connected GitHub app",
+    "public transport entrypoint is mandatory",
+    "must not silently exit",
     "at least **120 seconds old**",
+    "**MUST immediately post exactly one recovery replay**",
     "exact same TICK body and same `run_id`",
+    "**MUST post one fresh initial TICK**",
+    "performs exactly one public transport write",
     "earliest TICK for that `run_id` remains the sole initial acquisition TICK and lease-freshness anchor",
     "must be no more than **660 seconds old**",
     "recovery replays and later revalidation TICKs **must not reset or renew this 660-second clock**",
