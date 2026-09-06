@@ -56,7 +56,10 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
-        run: python scripts/control_v4_runtime_carrier.py
+        run: |
+          CONTROL_V4_PUBLIC_COMMAND="$(python scripts/control_v4_runtime_command_compat.py)"
+          export CONTROL_V4_PUBLIC_COMMAND
+          python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
         if: ${{ always() && steps.carrier.outputs.result_json != '' }}
