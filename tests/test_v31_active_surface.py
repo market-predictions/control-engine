@@ -5,16 +5,17 @@ def workflows() -> dict[str, str]:
     return {p.name: p.read_text(encoding='utf-8') for p in Path('.github/workflows').glob('*.yml')}
 
 
-def test_current_surface_is_retired_v31_writer_plus_bounded_v4_authority_carrier():
+def test_current_surface_is_retired_v31_writer_plus_bounded_v4_carriers():
     names = sorted(workflows())
     assert names == [
         'ci.yml',
         'control-v4-authority-adoption.yml',
+        'control-v4-runtime-carrier.yml',
         'private-control-v3-1-validation.yml',
     ]
 
 
-def test_no_reachable_semantic_runtime_writer_remains_after_v31_writer_retirement():
+def test_no_competing_semantic_runtime_writer_remains_after_v31_writer_retirement():
     current = workflows()
     assert 'control-kernel-v3-1.yml' not in current
     assert 'control-runtime-state' not in current['ci.yml']
@@ -24,13 +25,21 @@ def test_no_reachable_semantic_runtime_writer_remains_after_v31_writer_retiremen
     assert 'permission-contents: write' not in validator
     assert 'CONTROL_PRIVATE_RUNTIME_MUTATION=false' in validator
 
-    carrier = current['control-v4-authority-adoption.yml']
-    assert 'control-runtime-state' not in carrier
-    assert 'DISPATCH_QUEUE.json' not in carrier
-    assert 'cron:' not in carrier
-    assert 'CLAIM' not in carrier
-    assert 'RECORD' not in carrier
-    assert 'RELEASE' not in carrier
+    authority_carrier = current['control-v4-authority-adoption.yml']
+    assert 'control-runtime-state' not in authority_carrier
+    assert 'DISPATCH_QUEUE.json' not in authority_carrier
+    assert 'cron:' not in authority_carrier
+    assert 'CLAIM' not in authority_carrier
+    assert 'RECORD' not in authority_carrier
+    assert 'RELEASE' not in authority_carrier
+
+    runtime_carrier = current['control-v4-runtime-carrier.yml']
+    assert '\n  schedule:' not in runtime_carrier
+    assert 'workflow_dispatch:' not in runtime_carrier
+    assert 'pull_request_target:' not in runtime_carrier
+    assert 'CONTROL_V4_RUNTIME_TICK' in runtime_carrier
+    assert 'CONTROL_V4_RUNTIME_EVENT' in runtime_carrier
+    assert 'PATCH_QUEUE' not in runtime_carrier
 
 
 def test_v4_authority_carrier_is_manual_principal_main_only_and_least_privilege():
@@ -52,6 +61,32 @@ def test_v4_authority_carrier_is_manual_principal_main_only_and_least_privilege(
 
     capability = carrier.split('Create exact private authority capability', 1)[1].split(
         'Prove or perform exact-old-SHA authority adoption', 1
+    )[0]
+    assert 'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1' in capability
+    assert 'owner: market-predictions' in capability
+    assert 'repositories: control-plane' in capability
+    assert 'permission-contents: write' in capability
+    assert 'permission-actions: write' not in capability
+    assert 'permission-administration: write' not in capability
+    assert 'permission-pull-requests: write' not in capability
+
+
+def test_v4_runtime_carrier_is_principal_main_only_and_private_capability_is_exactly_scoped():
+    carrier = workflows()['control-v4-runtime-carrier.yml']
+    assert '\n  issue_comment:\n    types: [created]' in carrier
+    assert '\n  schedule:' not in carrier
+    assert 'workflow_dispatch:' not in carrier
+    assert 'pull_request_target:' not in carrier
+    assert "github.repository == 'market-predictions/control-engine'" in carrier
+    assert "github.ref == 'refs/heads/main'" in carrier
+    assert "github.actor == 'market-predictions'" in carrier
+    assert "github.triggering_actor == 'market-predictions'" in carrier
+    assert 'github.event.issue.number == 106' in carrier
+    assert 'github.event.issue.pull_request == null' in carrier
+    assert 'permissions:\n  contents: read\n  issues: write' in carrier
+
+    capability = carrier.split('Create exact private runtime capability', 1)[1].split(
+        'Execute bounded typed V4 runtime carrier', 1
     )[0]
     assert 'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1' in capability
     assert 'owner: market-predictions' in capability
