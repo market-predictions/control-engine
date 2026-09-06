@@ -35,6 +35,15 @@ def test_runtime_carrier_exposes_repository_root_for_package_imports() -> None:
     assert 'run: python scripts/control_v4_runtime_carrier.py' in carrier_step
 
 
+def test_runtime_carrier_installs_same_pinned_schema_dependency_as_ci() -> None:
+    text = WORKFLOW.read_text(encoding='utf-8')
+    install = 'python -m pip install --disable-pip-version-check jsonschema==4.25.1'
+    assert '- name: Install runtime dependencies' in text
+    assert install in text
+    assert text.index('- name: Setup Python') < text.index(install)
+    assert text.index(install) < text.index('- name: Create exact private runtime capability')
+
+
 def test_public_workflow_token_cannot_write_repository_contents_and_private_token_is_exactly_scoped() -> None:
     text = WORKFLOW.read_text(encoding='utf-8')
     assert 'permissions:\n  contents: read\n  issues: write' in text
