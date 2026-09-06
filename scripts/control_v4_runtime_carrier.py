@@ -369,10 +369,14 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
     return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": readback}
 
 
-def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
+def _assert_public_target_repository(repository: str) -> None:
     repo = _public_get(f"repos/{repository}", allow_404=True)
     if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
         raise RuntimeProtocolError("target repository is not publicly readable by carrier V1")
+
+
+def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
+    _assert_public_target_repository(repository)
     pr = _public_get(f"repos/{repository}/pulls/{pr_number}", allow_404=True)
     if (
         not isinstance(pr, Mapping)
@@ -444,24 +448,26 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
     task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
     candidate = task.get("candidate")
     live_candidate = None
-    if isinstance(candidate, Mapping):
-        try:
+    try:
+        if isinstance(candidate, Mapping):
             live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
-        except RuntimeProtocolError:
-            blocked = block_holder_v4(
-                queue,
-                task_id=task_id,
-                run_id=command["run_id"],
-                blocker="TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1",
-                now=now,
-            )
-            state = _write_queue_exact(state, blocked, reason="unsupported-target-block")
-            return state, {
-                "protocol": RESULT_PROTOCOL_ID,
-                "result": "BLOCKED",
-                "code": "TARGET_NOT_PUBLICLY_READABLE",
-                "run_id": command["run_id"],
-            }
+        else:
+            _assert_public_target_repository(task["repository"])
+    except RuntimeProtocolError:
+        blocked = block_holder_v4(
+            queue,
+            task_id=task_id,
+            run_id=command["run_id"],
+            blocker="TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1",
+            now=now,
+        )
+        state = _write_queue_exact(state, blocked, reason="unsupported-target-block")
+        return state, {
+            "protocol": RESULT_PROTOCOL_ID,
+            "result": "BLOCKED",
+            "code": "TARGET_NOT_PUBLICLY_READABLE",
+            "run_id": command["run_id"],
+        }
 
     if task.get("phase") == "REVIEW" and isinstance(candidate, Mapping) and live_candidate is not None:
         reconciled, drifted = reconcile_review_candidate_drift_v4(
