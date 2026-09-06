@@ -24,6 +24,7 @@ from control_engine.v4_runtime_protocol import (
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
+    bind_public_event_to_holder,
     block_holder_v4,
     candidate_ready_v4,
     compact_public_result,
@@ -38,13 +39,13 @@ from control_engine.v4_runtime_protocol import (
     safe_work_capsule,
     select_task_id_v4,
     strict_json_object,
+    task_token,
     validate_runtime_binding,
     yield_holder_v4,
 )
 
 
 PRIVATE_REPOSITORY = "market-predictions/control-plane"
-PUBLIC_REPOSITORY = "market-predictions/control-engine"
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 AUTHORITY_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
@@ -111,12 +112,15 @@ def _private_post(path: str, payload: Mapping[str, Any]) -> Any:
 
 
 def _public_get(path: str, *, allow_404: bool = False) -> Any:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "control-v4-runtime-carrier-public-read",
-    }
-    return _request_json(f"{API}/{path}", headers=headers, allow_404=allow_404)
+    return _request_json(
+        f"{API}/{path}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "control-v4-runtime-carrier-public-read",
+        },
+        allow_404=allow_404,
+    )
 
 
 def _decode_content(document: Mapping[str, Any]) -> tuple[str, str]:
@@ -127,8 +131,7 @@ def _decode_content(document: Mapping[str, Any]) -> tuple[str, str]:
     if not isinstance(sha, str) or len(sha) != 40 or not isinstance(content, str):
         raise CarrierError("private content identity invalid")
     try:
-        raw = base64.b64decode(content, validate=False)
-        text = raw.decode("utf-8", "strict")
+        text = base64.b64decode(content, validate=False).decode("utf-8", "strict")
     except (ValueError, UnicodeDecodeError) as exc:
         raise CarrierError("private content encoding invalid") from exc
     return text, sha
@@ -173,11 +176,6 @@ def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
     if not isinstance(mission_entries, list) or not isinstance(authority_entries, list):
         raise CarrierError("private authority registry unavailable")
 
-    missions: list[dict[str, Any]] = []
-    authorities: list[dict[str, Any]] = []
-    mission_shas: dict[str, str] = {}
-    authority_shas: dict[str, str] = {}
-
     mission_paths = sorted(
         entry["path"]
         for entry in mission_entries
@@ -201,6 +199,10 @@ def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
     if not mission_paths or not authority_paths:
         raise CarrierError("private authority registry incomplete")
 
+    missions: list[dict[str, Any]] = []
+    authorities: list[dict[str, Any]] = []
+    mission_shas: dict[str, str] = {}
+    authority_shas: dict[str, str] = {}
     for path in mission_paths:
         mission, blob_sha = _json_file(path, main_sha)
         mission_id = mission.get("mission_id")
@@ -208,7 +210,6 @@ def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
             raise CarrierError("private Mission identity invalid")
         mission_shas[mission_id] = blob_sha
         missions.append(mission)
-
     for path in authority_paths:
         authority, blob_sha = _json_file(path, main_sha)
         repository = authority.get("repository")
@@ -219,7 +220,6 @@ def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
             raise CarrierError("private repository authority duplicated")
         authority_shas[key] = blob_sha
         authorities.append(authority)
-
     validate_authority_set(missions, authorities)
     return V4AuthorityBundle(
         missions=tuple(missions),
@@ -231,7 +231,14 @@ def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
 
 def _load_current() -> dict[str, Any]:
     repository = _private_get(f"repos/{PRIVATE_REPOSITORY}")
-    if not isinstance(repository, Mapping) or repository.get("full_name") != PRIVATE_REPOSITORY or repository.get("private") is not True:
+    node_id = repository.get("node_id") if isinstance(repository, Mapping) else None
+    if (
+        not isinstance(repository, Mapping)
+        or repository.get("full_name") != PRIVATE_REPOSITORY
+        or repository.get("private") is not True
+        or not isinstance(node_id, str)
+        or not node_id
+    ):
         raise CarrierError("private repository identity invalid")
 
     main_sha = _branch_head("main")
@@ -251,7 +258,7 @@ def _load_current() -> dict[str, Any]:
     validate_queue_v4(queue)
     assert_v4_queue_bound_to_authority(queue, bundle)
     return {
-        "repository_node_id": repository.get("node_id"),
+        "repository_node_id": node_id,
         "main_sha": main_sha,
         "runtime_sha": runtime_sha,
         "queue_blob": queue_blob,
@@ -267,28 +274,31 @@ def _update_ref_exact(*, repository_node_id: str, before_oid: str, after_oid: st
       updateRefs(input: $input) { clientMutationId }
     }
     """
-    payload = {
-        "query": mutation,
-        "variables": {
-            "input": {
-                "repositoryId": repository_node_id,
-                "clientMutationId": client_id,
-                "refUpdates": [{
-                    "name": f"refs/heads/{RUNTIME_BRANCH}",
-                    "beforeOid": before_oid,
-                    "afterOid": after_oid,
-                    "force": False,
-                }],
-            }
+    result = _request_json(
+        GRAPHQL,
+        headers=_private_headers(),
+        method="POST",
+        payload={
+            "query": mutation,
+            "variables": {
+                "input": {
+                    "repositoryId": repository_node_id,
+                    "clientMutationId": client_id,
+                    "refUpdates": [{
+                        "name": f"refs/heads/{RUNTIME_BRANCH}",
+                        "beforeOid": before_oid,
+                        "afterOid": after_oid,
+                        "force": False,
+                    }],
+                }
+            },
         },
-    }
-    result = _request_json(GRAPHQL, headers=_private_headers(), method="POST", payload=payload)
+    )
     if not isinstance(result, Mapping):
         raise CarrierError("private ref update response invalid")
     if result.get("errors"):
         raise StaleWriteError("exact private runtime ref update rejected")
-    update_result = ((result.get("data") or {}).get("updateRefs"))
-    if not isinstance(update_result, Mapping):
+    if not isinstance(((result.get("data") or {}).get("updateRefs")), Mapping):
         raise CarrierError("private ref update returned no success payload")
 
 
@@ -303,8 +313,7 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         raise StaleWriteError("private authority moved before runtime write")
     if _branch_head(RUNTIME_BRANCH) != state["runtime_sha"]:
         raise StaleWriteError("private runtime ref moved before runtime write")
-    current_queue_doc = _contents(QUEUE_PATH, state["runtime_sha"])
-    _current_text, current_blob = _decode_content(current_queue_doc)
+    _current_text, current_blob = _decode_content(_contents(QUEUE_PATH, state["runtime_sha"]))
     if current_blob != state["queue_blob"]:
         raise StaleWriteError("private queue blob moved before runtime write")
 
@@ -343,14 +352,12 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
     if not isinstance(new_commit, str) or len(new_commit) != 40:
         raise CarrierError("private runtime commit creation failed")
 
-    run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
     _update_ref_exact(
         repository_node_id=state["repository_node_id"],
         before_oid=state["runtime_sha"],
         after_oid=new_commit,
-        client_id=f"control-v4-runtime-{run_id}",
+        client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
     )
-
     if _branch_head(RUNTIME_BRANCH) != new_commit:
         raise CarrierError("mandatory private runtime ref readback failed")
     if _branch_head("main") != state["main_sha"]:
@@ -359,12 +366,7 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
     if readback_blob != new_blob or readback != queue:
         raise CarrierError("mandatory private queue readback failed")
     validate_queue_v4(readback)
-    return {
-        **state,
-        "runtime_sha": new_commit,
-        "queue_blob": new_blob,
-        "queue": readback,
-    }
+    return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": readback}
 
 
 def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
@@ -372,36 +374,25 @@ def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
     if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
         raise RuntimeProtocolError("target repository is not publicly readable by carrier V1")
     pr = _public_get(f"repos/{repository}/pulls/{pr_number}", allow_404=True)
-    if not isinstance(pr, Mapping) or pr.get("number") != pr_number:
-        raise RuntimeProtocolError("target pull request unavailable")
+    if (
+        not isinstance(pr, Mapping)
+        or pr.get("number") != pr_number
+        or pr.get("state") != "open"
+        or pr.get("merged_at") is not None
+    ):
+        raise RuntimeProtocolError("target pull request is not an open public candidate")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
-    candidate_sha = head.get("sha")
-    head_branch = head.get("ref")
-    base_branch = base.get("ref")
-    base_sha = (base.get("sha"))
-    if not all(isinstance(value, str) and value for value in (candidate_sha, head_branch, base_branch, base_sha)):
+    values = (head.get("sha"), head.get("ref"), base.get("ref"), base.get("sha"))
+    if not all(isinstance(value, str) and value for value in values):
         raise RuntimeProtocolError("target pull request identity incomplete")
     return {
-        "candidate_sha": candidate_sha,
+        "candidate_sha": values[0],
         "candidate_pr_number": pr_number,
-        "candidate_head_branch": head_branch,
-        "expected_base_branch": base_branch,
-        "expected_base_sha": base_sha,
+        "candidate_head_branch": values[1],
+        "expected_base_branch": values[2],
+        "expected_base_sha": values[3],
     }
-
-
-def _holder_command(queue: Mapping[str, Any], *, run_id: str, task_id: str) -> dict[str, Any]:
-    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
-    command: dict[str, Any] = {"run_id": run_id, "task_id": task_id, "event": "YIELD"}
-    candidate = task.get("candidate")
-    if isinstance(candidate, Mapping):
-        command.update({
-            "holder_candidate_sha": candidate["candidate_sha"],
-            "holder_expected_base_branch": candidate["expected_base_branch"],
-            "holder_expected_base_sha": candidate["expected_base_sha"],
-        })
-    return command
 
 
 def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -429,11 +420,12 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             return state, {"protocol": RESULT_PROTOCOL_ID, "result": "BUSY", "run_id": command["run_id"]}
         task_id = lock.get("task_id")
         if not isinstance(task_id, str):
-            raise CarrierError("current private lock task identity invalid")
+            raise CarrierError("current private lock task invalid")
     else:
         task_id = select_task_id_v4(
             queue,
-            yielded_task_ids=command.get("yielded_task_ids", []),
+            run_id=command["run_id"],
+            yielded_task_tokens=command.get("yielded_task_tokens", []),
             integration_enabled=False,
         )
         if task_id is None:
@@ -469,7 +461,6 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
                 "result": "BLOCKED",
                 "code": "TARGET_NOT_PUBLICLY_READABLE",
                 "run_id": command["run_id"],
-                "task_id": task_id,
             }
 
     if task.get("phase") == "REVIEW" and isinstance(candidate, Mapping) and live_candidate is not None:
@@ -502,20 +493,19 @@ def _validate_public_ref_for_task(task: Mapping[str, Any], value: str) -> None:
     if not isinstance(candidate, Mapping):
         raise RuntimeProtocolError("public evidence reference requires candidate")
     prefix = f"https://github.com/{task['repository']}/pull/{candidate['candidate_pr_number']}"
-    if not value.startswith(prefix):
+    if not (value.startswith(prefix + "#") or value.startswith(prefix + "/")):
         raise RuntimeProtocolError("public evidence reference is outside exact target PR")
 
 
 def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
     if state["runtime_enabled"] is not True:
-        raise StaleEventError("runtime event rejected while runtime disabled")
+        raise StaleEventError("runtime disabled")
     if state["integration_enabled"] is True:
-        raise RuntimeProtocolError("carrier V1 is activation-bounded to integration disabled")
+        raise RuntimeProtocolError("carrier V1 requires integration disabled")
     queue = state["queue"]
+    command = bind_public_event_to_holder(queue, command)
+    task = next(item for item in queue["tasks"] if item["task_id"] == command["task_id"])
     event = command["event"]
-    task = next((item for item in queue["tasks"] if item["task_id"] == command["task_id"]), None)
-    if not isinstance(task, Mapping):
-        raise StaleEventError("event task no longer exists")
 
     if event == "YIELD":
         next_queue = yield_holder_v4(queue, command, now=now)
@@ -524,21 +514,13 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
         next_queue = candidate_ready_v4(queue, command, verified_candidate=verified, now=now)
     elif event == "INTERNAL_PASS":
         next_queue = internal_review_v4(
-            queue,
-            command,
-            verdict="PASS",
-            now=now,
-            control_runtime_enabled=True,
-            integration_enabled=False,
+            queue, command, verdict="PASS", now=now,
+            control_runtime_enabled=True, integration_enabled=False,
         )
     elif event == "INTERNAL_REPAIR":
         next_queue = internal_review_v4(
-            queue,
-            command,
-            verdict="REPAIR_REQUIRED",
-            now=now,
-            control_runtime_enabled=True,
-            integration_enabled=False,
+            queue, command, verdict="REPAIR_REQUIRED", now=now,
+            control_runtime_enabled=True, integration_enabled=False,
         )
     elif event == "EXTERNAL_REQUESTED":
         _validate_public_ref_for_task(task, command["request_ref"])
@@ -549,23 +531,20 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
     elif event == "EXTERNAL_PASS":
         _validate_public_ref_for_task(task, command["evidence_ref"])
         next_queue = external_pass_v4(
-            queue,
-            command,
-            now=now,
-            control_runtime_enabled=True,
-            integration_enabled=False,
+            queue, command, now=now,
+            control_runtime_enabled=True, integration_enabled=False,
         )
     elif event == "REVIEW_UNAVAILABLE":
         next_queue = external_unavailable_v4(queue, command, now=now)
-    else:  # pragma: no cover - parser is the first fence
+    else:  # pragma: no cover
         raise RuntimeProtocolError("unsupported event")
 
     if next_queue != queue:
         state = _write_queue_exact(state, next_queue, reason=event.lower().replace("_", "-"))
 
+    current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
     lock = state["queue"].get("execution_lock")
     if isinstance(lock, Mapping) and lock.get("run_id") == command["run_id"] and lock.get("task_id") == command["task_id"]:
-        current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
         live_candidate = None
         if isinstance(current.get("candidate"), Mapping) and current.get("phase") == "REPAIR":
             live_candidate = _target_pr_candidate(current["repository"], current["candidate"]["candidate_pr_number"])
@@ -576,13 +555,11 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
             live_candidate=live_candidate,
         )
 
-    current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
-    result = "READY" if current.get("status") == "READY" else "YIELDED"
     return state, {
         "protocol": RESULT_PROTOCOL_ID,
-        "result": result,
+        "result": "READY" if current.get("status") == "READY" else "YIELDED",
         "run_id": command["run_id"],
-        "task_id": command["task_id"],
+        "task_token": task_token(current, command["run_id"]),
     }
 
 
@@ -613,39 +590,15 @@ def main() -> int:
         else:
             _state, result = _event(command, state, now=now)
         _set_outputs(result, ok=True)
-        return 0
     except StaleWriteError:
-        _set_outputs({
-            "protocol": RESULT_PROTOCOL_ID,
-            "result": "RETRY",
-            "code": "STALE_PRIVATE_STATE",
-            "run_id": command.get("run_id"),
-        }, ok=True)
-        return 0
+        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "RETRY", "code": "STALE_PRIVATE_STATE", "run_id": command.get("run_id")}, ok=True)
     except StaleEventError:
-        _set_outputs({
-            "protocol": RESULT_PROTOCOL_ID,
-            "result": "REJECTED",
-            "code": "STALE_EVENT",
-            "run_id": command.get("run_id"),
-        }, ok=True)
-        return 0
+        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "REJECTED", "code": "STALE_EVENT", "run_id": command.get("run_id")}, ok=True)
     except (RuntimeProtocolError, V4ValidationError, CarrierError):
-        _set_outputs({
-            "protocol": RESULT_PROTOCOL_ID,
-            "result": "ERROR",
-            "code": "FAIL_CLOSED",
-            "run_id": command.get("run_id"),
-        }, ok=False)
-        return 0
-    except Exception:  # never expose private data through workflow logs or public transport
-        _set_outputs({
-            "protocol": RESULT_PROTOCOL_ID,
-            "result": "ERROR",
-            "code": "UNEXPECTED_FAIL_CLOSED",
-            "run_id": command.get("run_id"),
-        }, ok=False)
-        return 0
+        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "FAIL_CLOSED", "run_id": command.get("run_id")}, ok=False)
+    except Exception:  # never expose private data through logs or public transport
+        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "UNEXPECTED_FAIL_CLOSED", "run_id": command.get("run_id")}, ok=False)
+    return 0
 
 
 if __name__ == "__main__":
