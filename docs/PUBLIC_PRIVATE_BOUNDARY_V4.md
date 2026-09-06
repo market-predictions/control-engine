@@ -28,13 +28,13 @@ Every private queue mutation requires the exact observed private `main`, exact o
 
 Public issue comments are transport/audit evidence only. They never become queue, Mission, status or authority state. The public response is deliberately reduced to publicly observable target/candidate facts plus an opaque task token. Raw private task identity, gap/Mission identity, acceptance text, authority blob identities, review records, blockers, lock state, queue state and Mission documents are not mirrored to the public transport.
 
-The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path.
+The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path. This public-read proof is required even when a BUILD task has no candidate yet: the repository name is not emitted until unauthenticated repository metadata proves the target is publicly readable.
 
 The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/record/release path is reintroduced.
 
 ## Status scope
 
-`ENGINE_MANIFEST.json` is a **component-local manifest** for `market-predictions/control-engine`.
+`ENGINE_MANIFEST.json` is a **component-local manifest** for `market-predictions/control-engine` and is never a source for current **global Control runtime status**.
 
 ```text
 semantic_runtime_authority=false
