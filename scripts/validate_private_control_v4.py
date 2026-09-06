@@ -49,6 +49,7 @@ V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
 REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "804c8570141934c5a0b5fa86583c867995ce51f4"
+REVIEWED_EXACT_COMMENT_TIME_RUNNER_PROMPT_BLOB_SHA = "fe269bf84744629eca133937854ee284239cbcc9"
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 CARRIER_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
@@ -74,6 +75,13 @@ CARRIER_PROMPT_REQUIRED_MARKERS = (
     "it **must not** perform a target write",
     "submit `YIELD` for the current exact holder",
     "create a new unique `run_id` and submit a new initial acquisition TICK",
+)
+EXACT_COMMENT_TIME_PROMPT_REQUIRED_MARKERS = (
+    "GitHub issue-comment list/history surfaces may omit `created_at`.",
+    "fetch that **exact issue-comment resource**",
+    "Use only that exact-resource `created_at` for the 120-second recovery clock and 660-second target-write clock.",
+    "Missing, ambiguous or body-mismatched exact-resource `created_at` fails closed.",
+    "Never infer TICK age from `run_id`, list order, scheduler time or a null list-field.",
 )
 
 
@@ -216,10 +224,17 @@ def validate_current_surface(root: Path, entries) -> None:
 def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
     if prompt_oid == REVIEWED_RUNNER_PROMPT_BLOB_SHA:
         return
-    if prompt_oid != REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA:
-        raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
-    if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
+    if prompt_oid == REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA:
+        if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
+        return
+    if prompt_oid == REVIEWED_EXACT_COMMENT_TIME_RUNNER_PROMPT_BLOB_SHA:
+        if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
+        if any(marker not in prompt_text for marker in EXACT_COMMENT_TIME_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("exact-comment-time Runner prompt lacks required fail-closed timestamp markers")
+        return
+    raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
 
 
 def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
