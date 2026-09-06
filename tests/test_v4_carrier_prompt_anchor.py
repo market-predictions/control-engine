@@ -11,12 +11,16 @@ EXPECTED_CARRIER_PROMPT_MARKERS = (
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
-    "Fresh-holder fence for every public target write",
-    "no more than **60 seconds old**",
+    "Fresh-holder and immediate pre-effect private-authority revalidation",
+    "The initial acquisition `WORK` is never sufficient by itself",
+    "submit a second same-`run_id` TICK",
+    "exact same current holder",
+    "no more than **15 seconds old**",
     "bounded to **300 seconds or less**",
     "it **must not** perform a target write",
     "submit `YIELD` for the current exact holder",
     "create a new unique `run_id` and submit a new TICK",
+    "start no target effect",
 )
 
 
@@ -24,9 +28,9 @@ def _carrier_prompt() -> str:
     return "\n".join(EXPECTED_CARRIER_PROMPT_MARKERS)
 
 
-def test_current_and_repaired_carrier_prompt_hashes_are_the_only_transition_anchors():
+def test_current_and_revalidated_carrier_prompt_hashes_are_the_only_transition_anchors():
     assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "7fe88ba0fdd96c7681346c926aa9671fabf3256c"
-    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "249c278d6e0d0e03f651fc9d45ec948a55b2a531"
+    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "51891935b53a44f195d8f3aac1a8cfe31170be04"
     assert validator.CARRIER_PROMPT_REQUIRED_MARKERS == EXPECTED_CARRIER_PROMPT_MARKERS
 
     validator._validate_prompt_trust(
@@ -39,18 +43,18 @@ def test_current_and_repaired_carrier_prompt_hashes_are_the_only_transition_anch
     )
 
 
-def test_superseded_carrier_prompt_hash_fails_closed():
+def test_superseded_fresh_holder_only_prompt_hash_fails_closed():
     with pytest.raises(
         validator.ValidationError,
         match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
     ):
         validator._validate_prompt_trust(
             _carrier_prompt(),
-            "1ae9f3f982f2c42c2ff3354f4552e0650f321145",
+            "249c278d6e0d0e03f651fc9d45ec948a55b2a531",
         )
 
 
-def test_repaired_carrier_prompt_hash_requires_every_fail_closed_marker():
+def test_pre_effect_revalidation_prompt_requires_every_fail_closed_marker():
     for marker in EXPECTED_CARRIER_PROMPT_MARKERS:
         text = _carrier_prompt().replace(marker, "REMOVED_MARKER", 1)
         with pytest.raises(
