@@ -48,7 +48,18 @@ SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = "7fe88ba0fdd96c7681346c926aa9671fabf3256c"
+REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "1ae9f3f982f2c42c2ff3354f4552e0650f321145"
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
+CARRIER_PROMPT_REQUIRED_MARKERS = (
+    "CONTROL_V4_RUNTIME_TICK",
+    "CONTROL_V4_RUNTIME_EVENT",
+    "market-predictions/control-engine",
+    "issue **#106**",
+    "MUST NOT depend on direct Scheduled access to private",
+    "integration_enabled=false",
+    "candidate-less `BUILD`",
+    "submit `YIELD`",
+)
 
 
 class ValidationError(ValueError):
@@ -175,9 +186,6 @@ def validate_current_surface(root: Path, entries) -> None:
     if stale:
         raise ValidationError("private main retains competing V3.1 current authority")
 
-    # Current doctrine paths are canonical read targets. Merely allowing them in
-    # the changed surface is insufficient: deletion, symlink or gitlink would
-    # leave SYSTEM_INDEX routing to a non-existent/non-inert authority surface.
     for path in sorted(BOUNDED_DOCTRINE_PATHS):
         _regular_blob(entries, path)
 
@@ -188,6 +196,15 @@ def validate_current_surface(root: Path, entries) -> None:
     for stale_marker in ("Mission Contract Registry — V3.1", "MISSION_CONTRACT_V3_1", "V3.1 FEED"):
         if stale_marker in mission_readme:
             raise ValidationError("Mission registry README retains V3.1 current semantics")
+
+
+def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
+    if prompt_oid == REVIEWED_RUNNER_PROMPT_BLOB_SHA:
+        return
+    if prompt_oid != REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA:
+        raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
+    if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
 
 
 def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
@@ -218,8 +235,7 @@ def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
 
     prompt_text = _text(root, entries, RUNNER_PROMPT_PATH)
     _, prompt_oid = _blob(root, entries, RUNNER_PROMPT_PATH)
-    if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
-        raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
+    _validate_prompt_trust(prompt_text, prompt_oid)
     if config.get("prompt_blob_sha") != prompt_oid:
         raise ValidationError("Runner config does not bind the exact trusted reviewed prompt blob")
     if "status=CANDIDATE_INERT" in prompt_text or "status=CANDIDATE" in prompt_text:
