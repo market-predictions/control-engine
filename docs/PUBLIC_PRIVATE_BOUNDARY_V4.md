@@ -40,7 +40,7 @@ The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/r
 semantic_runtime_authority=false
 ```
 
-means this public component does not own Control semantics. It does **not** mean V4 is inactive, and it does not deny that this component hosts the bounded deterministic private-state carrier described above.
+means this public component does not own Control semantics. It does **not** mean that the canonical Control V4 Runner is inactive, and it does not deny that this component hosts the bounded deterministic private-state carrier described above.
 
 Current global Control status must be reconstructed from current private V4 runtime authority and the canonical `control-runtime-state` queue, with bounded target evidence when activity details are required. Public carrier comments can corroborate transport outcomes but never override private authority/state.
 
