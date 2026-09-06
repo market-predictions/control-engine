@@ -50,6 +50,7 @@ jobs:
       - name: Execute bounded typed V4 runtime carrier
         id: carrier
         env:
+          PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
         run: python scripts/control_v4_runtime_carrier.py

@@ -26,6 +26,15 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" in text
 
 
+def test_runtime_carrier_exposes_repository_root_for_package_imports() -> None:
+    text = WORKFLOW.read_text(encoding='utf-8')
+    carrier_step = text.split('Execute bounded typed V4 runtime carrier', 1)[1].split(
+        'Publish public-safe carrier result', 1
+    )[0]
+    assert 'PYTHONPATH: ${{ github.workspace }}' in carrier_step
+    assert 'run: python scripts/control_v4_runtime_carrier.py' in carrier_step
+
+
 def test_public_workflow_token_cannot_write_repository_contents_and_private_token_is_exactly_scoped() -> None:
     text = WORKFLOW.read_text(encoding='utf-8')
     assert 'permissions:\n  contents: read\n  issues: write' in text
