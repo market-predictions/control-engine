@@ -268,7 +268,14 @@ def _load_current() -> dict[str, Any]:
     }
 
 
-def _update_ref_exact(*, repository_node_id: str, before_oid: str, after_oid: str, client_id: str) -> None:
+def _update_refs_exact(
+    *,
+    repository_node_id: str,
+    main_oid: str,
+    runtime_before_oid: str,
+    runtime_after_oid: str,
+    client_id: str,
+) -> None:
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
       updateRefs(input: $input) { clientMutationId }
@@ -284,12 +291,20 @@ def _update_ref_exact(*, repository_node_id: str, before_oid: str, after_oid: st
                 "input": {
                     "repositoryId": repository_node_id,
                     "clientMutationId": client_id,
-                    "refUpdates": [{
-                        "name": f"refs/heads/{RUNTIME_BRANCH}",
-                        "beforeOid": before_oid,
-                        "afterOid": after_oid,
-                        "force": False,
-                    }],
+                    "refUpdates": [
+                        {
+                            "name": "refs/heads/main",
+                            "beforeOid": main_oid,
+                            "afterOid": main_oid,
+                            "force": False,
+                        },
+                        {
+                            "name": f"refs/heads/{RUNTIME_BRANCH}",
+                            "beforeOid": runtime_before_oid,
+                            "afterOid": runtime_after_oid,
+                            "force": False,
+                        },
+                    ],
                 }
             },
         },
@@ -297,7 +312,7 @@ def _update_ref_exact(*, repository_node_id: str, before_oid: str, after_oid: st
     if not isinstance(result, Mapping):
         raise CarrierError("private ref update response invalid")
     if result.get("errors"):
-        raise StaleWriteError("exact private runtime ref update rejected")
+        raise StaleWriteError("exact private authority/runtime ref update rejected")
     if not isinstance(((result.get("data") or {}).get("updateRefs")), Mapping):
         raise CarrierError("private ref update returned no success payload")
 
@@ -352,10 +367,11 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
     if not isinstance(new_commit, str) or len(new_commit) != 40:
         raise CarrierError("private runtime commit creation failed")
 
-    _update_ref_exact(
+    _update_refs_exact(
         repository_node_id=state["repository_node_id"],
-        before_oid=state["runtime_sha"],
-        after_oid=new_commit,
+        main_oid=state["main_sha"],
+        runtime_before_oid=state["runtime_sha"],
+        runtime_after_oid=new_commit,
         client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
     )
     if _branch_head(RUNTIME_BRANCH) != new_commit:
@@ -512,6 +528,37 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
     command = bind_public_event_to_holder(queue, command)
     task = next(item for item in queue["tasks"] if item["task_id"] == command["task_id"])
     event = command["event"]
+
+    review_events_requiring_live_candidate = {
+        "INTERNAL_PASS",
+        "INTERNAL_REPAIR",
+        "EXTERNAL_REQUESTED",
+        "EXTERNAL_FINDING",
+        "EXTERNAL_PASS",
+        "REVIEW_UNAVAILABLE",
+    }
+    if (
+        event in review_events_requiring_live_candidate
+        and task.get("status") == "ACTIVE"
+        and task.get("phase") == "REVIEW"
+        and isinstance(task.get("candidate"), Mapping)
+    ):
+        live_candidate = _target_pr_candidate(task["repository"], task["candidate"]["candidate_pr_number"])
+        reconciled, drifted = reconcile_review_candidate_drift_v4(
+            queue,
+            task_id=command["task_id"],
+            run_id=command["run_id"],
+            live_candidate=live_candidate,
+            now=now,
+        )
+        if drifted:
+            state = _write_queue_exact(state, reconciled, reason="candidate-drift-to-repair")
+            return state, safe_work_capsule(
+                state["queue"],
+                task_id=command["task_id"],
+                run_id=command["run_id"],
+                live_candidate=live_candidate,
+            )
 
     if event == "YIELD":
         next_queue = yield_holder_v4(queue, command, now=now)

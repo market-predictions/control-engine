@@ -51,6 +51,7 @@ FORBIDDEN_PUBLIC_KEYS = {
     "blocker",
     "migration_facts",
     "execution_lock",
+    "lock_expires_at",
     "queue",
     "missions",
     "authorities",
@@ -696,7 +697,6 @@ def safe_work_capsule(
         "task_token": task_token(task, run_id),
         "action": action,
         "repository": task["repository"],
-        "lock_expires_at": lock["expires_at"],
     }
     candidate = task.get("candidate")
     if isinstance(candidate, Mapping):

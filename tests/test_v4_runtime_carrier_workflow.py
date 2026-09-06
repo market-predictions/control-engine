@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+
+import scripts.control_v4_runtime_carrier as carrier
+
 
 WORKFLOW = Path('.github/workflows/control-v4-runtime-carrier.yml')
 SCRIPT = Path('scripts/control_v4_runtime_carrier.py')
@@ -42,8 +46,11 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_mandatory_read
     assert 'QUEUE_PATH = "control/DISPATCH_QUEUE.json"' in text
     assert 'RUNTIME_BRANCH = "control-runtime-state"' in text
     assert 'mutation UpdateRefs($input: UpdateRefsInput!)' in text
-    assert '"beforeOid": before_oid' in text
-    assert '"afterOid": after_oid' in text
+    assert '"name": "refs/heads/main"' in text
+    assert '"beforeOid": main_oid' in text
+    assert '"afterOid": main_oid' in text
+    assert '"beforeOid": runtime_before_oid' in text
+    assert '"afterOid": runtime_after_oid' in text
     assert '"force": False' in text
     assert 'if _branch_head("main") != state["main_sha"]' in text
     assert 'if _branch_head(RUNTIME_BRANCH) != state["runtime_sha"]' in text
@@ -53,6 +60,46 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_mandatory_read
     assert '"parents": [state["runtime_sha"]]' in text
     assert 'mandatory private runtime ref readback failed' in text
     assert 'mandatory private queue readback failed' in text
+
+
+def test_atomic_main_and_runtime_ref_cas_rejects_authority_interleaving_without_runtime_move(monkeypatch) -> None:
+    main_a = "a" * 40
+    main_b = "b" * 40
+    runtime_a = "c" * 40
+    runtime_b = "d" * 40
+    runtime_ref = f"refs/heads/{carrier.RUNTIME_BRANCH}"
+    refs = {"refs/heads/main": main_b, runtime_ref: runtime_a}
+
+    def fake_request_json(url, *, headers=None, method="GET", payload=None, allow_404=False):
+        assert url == carrier.GRAPHQL
+        assert method == "POST"
+        updates = payload["variables"]["input"]["refUpdates"]
+        assert updates == [
+            {"name": "refs/heads/main", "beforeOid": main_a, "afterOid": main_a, "force": False},
+            {"name": runtime_ref, "beforeOid": runtime_a, "afterOid": runtime_b, "force": False},
+        ]
+        if any(refs[update["name"]] != update["beforeOid"] for update in updates):
+            return {"errors": [{"message": "stale ref"}]}
+        next_refs = dict(refs)
+        for update in updates:
+            next_refs[update["name"]] = update["afterOid"]
+        refs.update(next_refs)
+        return {"data": {"updateRefs": {"clientMutationId": "test"}}}
+
+    monkeypatch.setattr(carrier, "_private_headers", lambda: {})
+    monkeypatch.setattr(carrier, "_request_json", fake_request_json)
+
+    with pytest.raises(carrier.StaleWriteError):
+        carrier._update_refs_exact(
+            repository_node_id="repo-node",
+            main_oid=main_a,
+            runtime_before_oid=runtime_a,
+            runtime_after_oid=runtime_b,
+            client_id="test",
+        )
+
+    assert refs["refs/heads/main"] == main_b
+    assert refs[runtime_ref] == runtime_a
 
 
 def test_transport_has_no_generic_queue_patch_and_public_result_forbids_private_task_and_authority_fields() -> None:

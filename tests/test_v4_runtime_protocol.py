@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+import scripts.control_v4_runtime_carrier as carrier
 from control_engine.v4_runtime_protocol import (
     RuntimeProtocolError,
     StaleEventError,
@@ -187,8 +188,44 @@ def test_safe_capsule_leaks_no_private_queue_mission_or_acceptance_content() -> 
         "last_review",
         "external_review",
         "execution_lock",
+        "lock_expires_at",
     ):
         assert forbidden not in encoded
+    assert q["execution_lock"]["expires_at"] not in encoded
+
+
+def test_carrier_review_pass_events_recheck_live_candidate_before_applying_pass(monkeypatch) -> None:
+    for event, extra, seeded in (
+        ("INTERNAL_PASS", {}, queue(task(candidate_value=candidate(), last_review=None, external_review=None))),
+        (
+            "EXTERNAL_PASS",
+            {"evidence_ref": "https://github.com/example/repo/pull/120#issuecomment-2"},
+            active_external_queue(),
+        ),
+    ):
+        state = {"queue": seeded, "runtime_enabled": True, "integration_enabled": False}
+        parsed = parse_public_command(event_body(seeded, event, **extra))
+        writes = []
+
+        def fake_write(current_state, next_queue, *, reason):
+            writes.append((deepcopy(next_queue), reason))
+            return {**current_state, "queue": deepcopy(next_queue)}
+
+        monkeypatch.setattr(carrier, "_target_pr_candidate", lambda repository, pr_number: candidate(NEW_SHA))
+        monkeypatch.setattr(carrier, "_write_queue_exact", fake_write)
+
+        _, result = carrier._event(parsed, state, now=NOW)
+
+        assert writes == [(writes[0][0], "candidate-drift-to-repair")]
+        current = writes[0][0]["tasks"][0]
+        assert current["phase"] == "REPAIR"
+        assert current["candidate"]["candidate_sha"] == OLD_SHA
+        if event == "INTERNAL_PASS":
+            assert current["last_review"] is None
+        else:
+            assert current["external_review"]["status"] == "PENDING"
+        assert result["action"] == "REPAIR"
+        assert result["live_candidate"]["candidate_sha"] == NEW_SHA
 
 
 def test_weeu_shape_candidate_drift_requires_no_external_review_and_goes_to_same_task_repair() -> None:
