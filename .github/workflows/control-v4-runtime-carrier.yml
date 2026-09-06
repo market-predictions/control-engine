@@ -50,16 +50,24 @@ jobs:
           repositories: control-plane
           permission-contents: write
 
+      - name: Normalize observed V4 Runner compatibility envelope
+        env:
+          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          normalized="$(python scripts/control_v4_runtime_command_compat.py)"
+          {
+            echo 'CONTROL_V4_PUBLIC_COMMAND<<__CONTROL_V4_COMMAND__'
+            printf '%s\n' "$normalized"
+            echo '__CONTROL_V4_COMMAND__'
+          } >> "$GITHUB_ENV"
+
       - name: Execute bounded typed V4 runtime carrier
         id: carrier
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
-          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
-        run: |
-          CONTROL_V4_PUBLIC_COMMAND="$(python scripts/control_v4_runtime_command_compat.py)"
-          export CONTROL_V4_PUBLIC_COMMAND
-          python scripts/control_v4_runtime_carrier.py
+        run: python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
         if: ${{ always() && steps.carrier.outputs.result_json != '' }}
