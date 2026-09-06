@@ -11,12 +11,16 @@ EXPECTED_CARRIER_PROMPT_MARKERS = (
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
-    "Fresh-holder fence for every public target write",
-    "no more than **60 seconds old**",
+    "at least **120 seconds old**",
+    "exact same TICK body and same `run_id`",
+    "earliest TICK for that `run_id` remains the sole initial acquisition TICK and lease-freshness anchor",
+    "must be no more than **660 seconds old**",
+    "recovery replays and later revalidation TICKs **must not reset or renew this 660-second clock**",
+    "no more than **15 seconds old**",
     "bounded to **300 seconds or less**",
     "it **must not** perform a target write",
     "submit `YIELD` for the current exact holder",
-    "create a new unique `run_id` and submit a new TICK",
+    "create a new unique `run_id` and submit a new initial acquisition TICK",
 )
 
 
@@ -24,9 +28,9 @@ def _carrier_prompt() -> str:
     return "\n".join(EXPECTED_CARRIER_PROMPT_MARKERS)
 
 
-def test_current_and_repaired_carrier_prompt_hashes_are_the_only_transition_anchors():
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "7fe88ba0fdd96c7681346c926aa9671fabf3256c"
-    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "249c278d6e0d0e03f651fc9d45ec948a55b2a531"
+def test_current_and_recovery_prompt_hashes_are_the_only_transition_anchors():
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
+    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "6c7c3cc41a7c97cb551e4d55d3d309a4d913cfe3"
     assert validator.CARRIER_PROMPT_REQUIRED_MARKERS == EXPECTED_CARRIER_PROMPT_MARKERS
 
     validator._validate_prompt_trust(
@@ -39,20 +43,26 @@ def test_current_and_repaired_carrier_prompt_hashes_are_the_only_transition_anch
     )
 
 
-def test_superseded_carrier_prompt_hash_fails_closed():
+@pytest.mark.parametrize(
+    "superseded_hash",
+    [
+        "7fe88ba0fdd96c7681346c926aa9671fabf3256c",
+        "249c278d6e0d0e03f651fc9d45ec948a55b2a531",
+        "3492644d3cbf37cb273ad262c4f2129cde9a20ef",
+        "1ae9f3f982f2c42c2ff3354f4552e0650f321145",
+    ],
+)
+def test_superseded_carrier_prompt_hashes_fail_closed(superseded_hash):
     with pytest.raises(
         validator.ValidationError,
         match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
     ):
-        validator._validate_prompt_trust(
-            _carrier_prompt(),
-            "1ae9f3f982f2c42c2ff3354f4552e0650f321145",
-        )
+        validator._validate_prompt_trust(_carrier_prompt(), superseded_hash)
 
 
-def test_repaired_carrier_prompt_hash_requires_every_fail_closed_marker():
+def test_recovery_prompt_hash_requires_every_fail_closed_marker():
     for marker in EXPECTED_CARRIER_PROMPT_MARKERS:
-        text = _carrier_prompt().replace(marker, "REMOVED_MARKER", 1)
+        text = _carrier_prompt().replace(marker, "REMOVED_MARKER")
         with pytest.raises(
             validator.ValidationError,
             match="carrier-bound Runner prompt lacks required fail-closed transport markers",
