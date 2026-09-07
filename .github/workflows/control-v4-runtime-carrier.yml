@@ -63,6 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+          COMMAND_COMMENT_ID: ${{ github.event.comment.id }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -71,7 +72,16 @@ jobs:
           import os
           import urllib.request
 
-          body = f"CONTROL_V4_RUNTIME_RESULT {os.environ['RESULT_JSON']}"
+          payload = json.loads(os.environ['RESULT_JSON'])
+          command_comment_id = int(os.environ['COMMAND_COMMENT_ID'])
+          if command_comment_id < 1 or 'command_comment_id' in payload:
+              raise SystemExit('invalid runtime result correlation identity')
+          payload['command_comment_id'] = command_comment_id
+          body = 'CONTROL_V4_RUNTIME_RESULT ' + json.dumps(
+              payload,
+              sort_keys=True,
+              separators=(',', ':'),
+          )
           request = urllib.request.Request(
               f"https://api.github.com/repos/{os.environ['REPOSITORY']}/issues/106/comments",
               data=json.dumps({"body": body}, separators=(",", ":")).encode("utf-8"),
