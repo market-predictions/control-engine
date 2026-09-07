@@ -44,7 +44,10 @@ def test_all_predecessor_runner_prompt_hashes_are_rejected_after_wire_cutover(pr
 )
 def test_canonical_event_fairness_prompt_fails_closed_without_each_required_marker(markers, error) -> None:
     for marker in markers:
-        prompt = _trusted_prompt().replace(marker, "", 1)
+        # Remove every occurrence: some canonical marker phrases are intentionally
+        # repeated across marker families, and leaving another occurrence would
+        # not actually test absence of the required semantic marker.
+        prompt = _trusted_prompt().replace(marker, "")
         with pytest.raises(validator.ValidationError, match=error):
             validator._validate_prompt_trust(
                 prompt,
