@@ -24,9 +24,36 @@ control-plane@control-runtime-state:control/DISPATCH_QUEUE.json
 
 The runtime carrier is **not** a second semantic worker. It accepts no arbitrary queue document or patch. It fresh-reads current private V4 runtime authority, the bound Runner config/prompt, current V4 Mission/repository authority, and the one canonical queue; validates them with trusted public V4 contracts; applies only reviewed typed transitions; and writes only the canonical queue file.
 
-Every private queue mutation requires the exact observed private `main`, exact observed runtime branch head and exact observed queue blob to remain current. The carrier creates a descendant commit from that exact runtime head and submits one atomic non-force GraphQL `updateRefs` mutation containing both a no-op `main` authority fence (`beforeOid=<exact observed main>`, `afterOid=<same exact main>`) and the `control-runtime-state` advance (`beforeOid=<exact observed runtime head>`, `afterOid=<new descendant>`). If either ref precondition is stale, no ref update lands. Mandatory `main`, runtime-ref and queue readback follows every successful mutation. Stale writers fail closed/retry rather than overwriting newer ownership.
+Every private queue mutation requires the exact observed private `main`, exact observed runtime branch head and exact observed queue blob to remain current. The carrier creates a descendant commit from that exact runtime head and submits one atomic non-force GraphQL `updateRefs` mutation containing both a no-op `main` authority fence (`beforeOid=<exact observed main>`, `afterOid=<same exact main>`) and the `control-runtime-state` advance (`beforeOid=<exact observed runtime head>`, `afterOid=<new descendant>`). If either ref precondition is stale, no ref update lands. Mandatory `main`, runtime-ref and queue readback follows every successful mutation. Stale writers fail closed rather than overwriting newer ownership.
 
-Public issue comments are transport/audit evidence only. They never become queue, Mission, status or authority state. The public response is deliberately reduced to publicly observable target/candidate facts plus an opaque task token. Raw private task identity, gap/Mission identity, acceptance text, authority blob identities, review records, blockers, lock state, queue state and Mission documents are not mirrored to the public transport. In particular, execution-lock timestamps or other lock-derived values are never emitted in a public work capsule.
+## Stateless current-state handshake
+
+Public issue comments are **transport/audit evidence only**. They are not a recovery ledger. Normal Runner execution never reconstructs current holder, queue, retry, lease or next-action state from earlier issue comments.
+
+Every Scheduled invocation begins with one fresh `CONTROL_V4_RUNTIME_TICK`. The carrier reads the authoritative private state and deterministically reconciles it:
+
+```text
+fresh TICK
+   ↓
+read current private queue + authority
+   ├─ expired holder → recover expired lock
+   ├─ no live holder → select + acquire current eligible work
+   └─ live holder    → return that current holder
+   ↓
+WORK or NO_WORK
+```
+
+For TICK-produced `WORK`, `acquired_now=true` means that exact TICK created the current holder; `acquired_now=false` means a still-live holder already existed and is being resumed. `acquired_now` is a public-safe capability fact only; it is not persisted in the queue and grants no authority by itself.
+
+Every published carrier result is bound to the exact triggering GitHub command comment using `command_comment_id`. The Runner correlates only the command it just posted with the trusted result created for that command. It may inspect a bounded current-command result window, but it does not scan previous invocations to infer recovery state.
+
+If a command/result exchange is missing, ambiguous or fails closed, the current invocation stops safely. It does **not** replay the TICK or EVENT and does not derive completion from transport age. The next normal Scheduled wake issues a new fresh TICK, and the carrier again reads current private truth. The private fixed non-renewable lock lease remains the sole time-based holder recovery mechanism.
+
+A resumed holder (`acquired_now=false`) may perform read-only reasoning and holder-fenced carrier EVENTs but may not initiate a target effect. If target mutation is required, the Runner first YIELDs the resumed holder, then reacquires through a fresh TICK and proceeds only from `acquired_now=true` under the existing consequential-effect fence.
+
+This stateless handshake deliberately retires the former public-history recovery machinery: unresolved-TICK replay, unresolved-EVENT retirement, public command-age recovery clocks, earliest-TICK reconstruction across invocations, spent-transport identities and BUSY/resume roundtrips are not current runtime semantics.
+
+The public response is deliberately reduced to publicly observable target/candidate facts plus opaque transport identity. Raw private task identity, gap/Mission identity, acceptance text, authority blob identities, review records, blockers, lock state, queue state and Mission documents are not mirrored to the public transport. In particular, execution-lock timestamps or other lock-derived values are never emitted in a public work capsule.
 
 ### Canonical EVENT wire contract
 
@@ -41,13 +68,19 @@ Every EVENT echoes the correlated trusted `WORK` capsule identity exactly:
 - `candidate` exactly when the `WORK` capsule contains one;
 - `event` plus only that event type's explicitly allowed fields.
 
-The protocol parser rejects unknown fields and malformed identities. Holder binding then requires `repository`, `action`, and the complete candidate object to match the current task resolved by the opaque token before translating that public identity into the existing private holder checks. The Runner does not construct or transmit private task IDs, Mission data, queue fields, lock state, or an alternative `holder_*` public envelope.
+The protocol parser rejects unknown fields and malformed identities. Holder binding then requires `repository`, `action`, and the complete candidate object to match the current task resolved by the opaque token before translating that public identity into the existing private holder checks. `acquired_now` and `command_comment_id` are result-only fields and never enter an EVENT. The Runner does not construct or transmit private task IDs, Mission data, queue fields, lock state, or an alternative `holder_*` public envelope.
 
 This single-owner rule deliberately replaces the former workflow-level compatibility normalization. Protocol adaptation is not split between YAML and Python.
 
 The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path. This public-read proof is required even when a BUILD task has no candidate yet: the repository name is not emitted until unauthenticated repository metadata proves the target is publicly readable.
 
 The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/record/release path is reintroduced.
+
+## Consequential target effects
+
+Target mutation remains more strictly fenced than carrier-side state transitions. A target effect requires a fresh current-invocation acquisition (`acquired_now=true`), the preserved initial acquisition command identity/time, a same-holder immediate pre-effect TICK, exact holder/task/repository/action/candidate match, acquisition age no greater than 660 seconds, pre-effect result age no greater than 15 seconds, and effect plus mandatory exact readback bounded to 300 seconds. Revalidation TICKs do not renew the fixed 5400-second private lease.
+
+This safety fence is intentionally retained because it protects consequential external effects; it is separate from the retired public-history recovery machinery.
 
 ## Status scope
 
@@ -79,7 +112,7 @@ Canonical mutable state remains exactly one private queue file:
 
 `market-predictions/control-plane@control-runtime-state:control/DISPATCH_QUEUE.json`
 
-Git history remains the mutation audit trail. No queue, cache, database or public mirror is added.
+Git history remains the mutation audit trail. No queue, cache, database, cursor or public mirror is added.
 
 ## Semantic boundary
 
