@@ -9,6 +9,7 @@ def _trusted_prompt() -> str:
     return "\n".join(
         (
             *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
+            *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS,
             *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
         )
@@ -16,7 +17,7 @@ def _trusted_prompt() -> str:
 
 
 def test_stateless_runner_prompt_has_exact_public_trust_anchor() -> None:
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "f354539a6493bce9269d77fe085300ac4a0c9fa6"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "74e265ad8d2e84a11e6097feb2e2e27ff5d1b64c"
     validator._validate_prompt_trust(
         _trusted_prompt(),
         validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
@@ -36,6 +37,7 @@ def test_all_predecessor_runner_prompt_hashes_are_rejected(prompt_oid: str) -> N
     "markers,error",
     [
         (validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required state-first transport markers"),
+        (validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required post-yield continuation markers"),
         (validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks target-effect freshness markers"),
         (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks canonical EVENT/fairness markers"),
     ],
