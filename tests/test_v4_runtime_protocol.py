@@ -230,6 +230,28 @@ def test_canonical_event_echoes_work_identity_and_binds_to_internal_holder() -> 
     assert bound["holder_expected_base_sha"] == BASE_SHA
 
 
+def test_candidate_less_work_yield_uses_same_canonical_event_without_candidate() -> None:
+    q = queue(
+        task(
+            status="ACTIVE",
+            phase="BUILD",
+            review_policy="INTERNAL",
+            candidate_value=None,
+            last_review=None,
+            external_review=None,
+        )
+    )
+    body = event_body(q, "YIELD")
+    payload = json.loads(body.split(" ", 1)[1])
+    assert payload["action"] == "BUILD"
+    assert "candidate" not in payload
+    parsed = parse_public_command(body)
+    bound = bind_public_event_to_holder(q, parsed)
+    assert "holder_candidate_sha" not in bound
+    updated = yield_holder_v4(q, bound, now=NOW)
+    assert updated["execution_lock"] is None
+
+
 def test_canonical_event_fails_closed_on_work_identity_mismatch_or_extra_field() -> None:
     q = active_external_queue()
     for mutation in (
