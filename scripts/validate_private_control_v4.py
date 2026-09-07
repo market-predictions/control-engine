@@ -20,6 +20,7 @@ from typing import Any, Mapping
 
 from control_engine.v4_authority_io import load_v4_authority_from_git
 from control_engine.v4_contracts import V4ValidationError
+from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 
 RUNTIME_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
 INDEX_PATH = "control/SYSTEM_INDEX.md"
@@ -48,7 +49,7 @@ CURRENT_SURFACE_PATHS = NORMATIVE_DOCTRINE_PATHS | HISTORICAL_AUDIT_PATHS
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
-REVIEWED_RUNNER_PROMPT_BLOB_SHA = "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+REVIEWED_RUNNER_PROMPT_BLOB_SHA = CANONICAL_RUNNER_PROMPT_BLOB_SHA
 OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
     {
         "4bc8ce5a73e1238427b1ce999be5cd5a6378988c",
