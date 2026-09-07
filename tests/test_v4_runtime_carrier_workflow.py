@@ -26,13 +26,16 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" in text
 
 
-def test_runtime_carrier_exposes_repository_root_for_package_imports() -> None:
+def test_runtime_carrier_exposes_repository_root_and_raw_comment_to_single_protocol_parser() -> None:
     text = WORKFLOW.read_text(encoding='utf-8')
     carrier_step = text.split('Execute bounded typed V4 runtime carrier', 1)[1].split(
         'Publish public-safe carrier result', 1
     )[0]
     assert 'PYTHONPATH: ${{ github.workspace }}' in carrier_step
+    assert 'CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}' in carrier_step
     assert 'run: python scripts/control_v4_runtime_carrier.py' in carrier_step
+    assert 'Normalize observed V4 Runner compatibility envelope' not in text
+    assert 'object_pairs_hook=unique_object' not in text
 
 
 def test_runtime_carrier_installs_same_pinned_schema_dependency_as_ci() -> None:
