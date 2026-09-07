@@ -2,93 +2,153 @@
 
 ## Authority
 
-The private repository `market-predictions/control-plane` remains the sole Control Mission/authority and mutable runtime-state plane.
+Private `market-predictions/control-plane` remains the sole Control Mission/authority and mutable runtime-state plane.
 
-The public `market-predictions/control-engine` repository owns deterministic contracts, validation and bounded transport/carrier code. It owns **no semantic runtime authority** and persists no private Control runtime state.
+Public `market-predictions/control-engine` owns deterministic contracts, validation and the bounded runtime carrier. It owns **no semantic runtime authority** and persists no private Control runtime state.
 
-## Runtime writer
+The canonical mutable runtime truth is exactly:
 
-The one recurring ChatGPT Control Runner remains the semantic V4 Runner. Scheduled ChatGPT may read and mutate public GitHub surfaces, but current execution evidence shows direct private-repository mutation is not a reliable Scheduled capability. V4 therefore does not depend on Scheduled direct private writes.
+`market-predictions/control-plane@control-runtime-state:control/DISPATCH_QUEUE.json`
 
-Normal runtime mutation uses this bounded path:
+including the one global execution lock. Git history is the mutation audit trail.
+
+## Runtime path
+
+The one recurring ChatGPT Control Runner remains the semantic V4 Runner. A Scheduled wake is only a wake-up; it is never ownership or runtime state.
+
+Normal runtime mutation uses:
 
 ```text
-ChatGPT Scheduled semantic Runner
-        ↓ owner-bound typed public command/event
-control-engine issue #106 transport
-        ↓ trusted deterministic carrier
+ChatGPT Scheduled Runner
+        ↓ fresh typed TICK / exact typed EVENT
+control-engine issue #106
+        ↓ deterministic public carrier
 scoped GitHub App capability: control-plane contents:write only
-        ↓ exact old-ref CAS + readback
+        ↓ exact current private authority + queue + lock
+non-force exact-old-ref CAS + mandatory readback
+        ↓
 control-plane@control-runtime-state:control/DISPATCH_QUEUE.json
 ```
 
-The runtime carrier is **not** a second semantic worker. It accepts no arbitrary queue document or patch. It fresh-reads current private V4 runtime authority, the bound Runner config/prompt, current V4 Mission/repository authority, and the one canonical queue; validates them with trusted public V4 contracts; applies only reviewed typed transitions; and writes only the canonical queue file.
+The carrier is not a second semantic worker. It accepts no arbitrary queue payload or patch. It fresh-reads current private runtime authority, exact Runner config/prompt, current Mission/repository authority and the one canonical queue; validates them with trusted public V4 contracts; applies only reviewed typed transitions; and writes only the canonical queue file.
 
-Every private queue mutation requires the exact observed private `main`, exact observed runtime branch head and exact observed queue blob to remain current. The carrier creates a descendant commit from that exact runtime head and submits one atomic non-force GraphQL `updateRefs` mutation containing both a no-op `main` authority fence (`beforeOid=<exact observed main>`, `afterOid=<same exact main>`) and the `control-runtime-state` advance (`beforeOid=<exact observed runtime head>`, `afterOid=<new descendant>`). If either ref precondition is stale, no ref update lands. Mandatory `main`, runtime-ref and queue readback follows every successful mutation. Stale writers fail closed/retry rather than overwriting newer ownership.
+Every private queue mutation is fenced by exact observed private `main`, runtime branch head and queue blob. A successful mutation creates a descendant runtime commit and atomically advances the runtime ref while no-op fencing the exact observed private `main`. Mandatory authority/runtime/queue readback follows. Stale writers fail closed rather than overwrite newer state.
 
-Public issue comments are transport/audit evidence only. They never become queue, Mission, status or authority state. The public response is deliberately reduced to publicly observable target/candidate facts plus an opaque task token. Raw private task identity, gap/Mission identity, acceptance text, authority blob identities, review records, blockers, lock state, queue state and Mission documents are not mirrored to the public transport. In particular, execution-lock timestamps or other lock-derived values are never emitted in a public work capsule.
+## Stateless current-state handshake
 
-### Canonical EVENT wire contract
+Public issue #106 is **transport/audit evidence only**. It is not a queue, holder ledger, retry store, recovery state machine, cursor or liveness database.
 
-`control_engine/v4_runtime_protocol.py` is the **single protocol owner** for `CONTROL_V4_RUNTIME_EVENT`. The workflow transports the raw issue-comment body unchanged; it contains no compatibility parser or alternate EVENT normalizer.
+Every Scheduled invocation starts by posting one fresh unique TICK. The carrier decides from current private truth:
 
-Every EVENT echoes the correlated trusted `WORK` capsule identity exactly:
+```text
+no current lock
+  -> select eligible work
+  -> acquire using fresh TICK run_id
+  -> WORK + acquired_now=true
+
+objectively expired lock
+  -> recover expired private lock
+  -> select/acquire eligible work
+  -> WORK + acquired_now=true
+
+current live lock
+  -> create no competing holder
+  -> return current holder WORK directly
+  -> WORK + acquired_now=false
+
+no eligible work
+  -> NO_WORK
+```
+
+The Runner does not scan historical issue comments to reconstruct unresolved TICKs, EVENTS, retries, holder age or recovery state before entering the carrier.
+
+The private non-renewable **5400-second execution lease remains** the durable crash/holder timeout primitive. Public 120-second TICK replay, public 5400-second unresolved-EVENT retirement, spent transport identities, earliest-TICK reconstruction and BUSY/resume roundtrips are obsolete and are not current runtime semantics.
+
+If a command result is missing or ambiguous, the Runner stops the current invocation without replaying the old command. The next Scheduled invocation sends a fresh TICK; the carrier then reconciles actual current private state.
+
+## Exact command/result correlation
+
+The workflow passes the raw command body and the immutable triggering GitHub issue-comment id to the canonical carrier.
+
+Every public result includes:
+
+```text
+command_comment_id=<exact triggering issue-comment id>
+```
+
+The Runner retains the id/body/created_at returned when it posts its command, reads only comments created at or after that timestamp, and accepts exactly one trusted `github-actions[bot]` result with the matching `command_comment_id`.
+
+This is invocation-local transport correlation only. `command_comment_id` is not persisted in the private queue and does not become runtime state.
+
+## Public-safe WORK metadata
+
+A WORK capsule exposes only public-safe execution identity:
+
+```text
+run_id
+task_token
+repository
+action
+candidate       # only when present
+live_candidate  # only where already required for public target drift
+acquired_now
+```
+
+`acquired_now=true` means the exact TICK that produced the result created the current private holder. `acquired_now=false` means a live holder already existed and was returned directly.
+
+No private task id, Mission/gap/acceptance payload, authority blob identity, review record, blocker, queue, lock timestamp or other private state is mirrored publicly.
+
+A resumed holder (`acquired_now=false`) may perform read-only reasoning and holder-fenced carrier EVENTs but may not initiate a target-repository or external-review write. If it needs such an effect it must YIELD the existing holder and later obtain a fresh acquisition.
+
+## Canonical EVENT wire contract
+
+`control_engine/v4_runtime_protocol.py` is the single protocol owner for public TICK/EVENT wire semantics. The workflow transports raw command bodies unchanged and contains no compatibility parser or alternate EVENT normalizer.
+
+Every EVENT echoes one correlated trusted WORK identity exactly:
 
 - `run_id`;
 - `task_token`;
 - `repository`;
 - `action`;
-- `candidate` exactly when the `WORK` capsule contains one;
+- `candidate` iff WORK contained candidate;
 - `event` plus only that event type's explicitly allowed fields.
 
-The protocol parser rejects unknown fields and malformed identities. Holder binding then requires `repository`, `action`, and the complete candidate object to match the current task resolved by the opaque token before translating that public identity into the existing private holder checks. The Runner does not construct or transmit private task IDs, Mission data, queue fields, lock state, or an alternative `holder_*` public envelope.
+`acquired_now`, `command_comment_id`, `protocol`, `result`, `live_candidate` and private `holder_*` fields are result/internal metadata and must never be copied into an EVENT.
 
-This single-owner rule deliberately replaces the former workflow-level compatibility normalization. Protocol adaptation is not split between YAML and Python.
+The parser rejects unknown/malformed fields. Holder binding then requires repository, action and complete candidate identity to match the current task resolved by the opaque token; current lock ownership, lease and authority are revalidated immediately before private mutation. Drift fails closed.
 
-The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path. This public-read proof is required even when a BUILD task has no candidate yet: the repository name is not emitted until unauthenticated repository metadata proves the target is publicly readable.
+## Consequential target effects
 
-The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/record/release path is reintroduced.
+A non-transport write to a target repository or external-review surface requires a fresh holder acquired in the current invocation (`acquired_now=true`). A resumed holder cannot write externally.
 
-## Status scope
+Before each target effect the Runner must additionally preserve the initial acquisition command identity, remain within the 660-second acquisition freshness window, obtain an immediate same-holder revalidation TICK, start the effect within 15 seconds of that trusted revalidation result, re-read minimum current target identity, and bound effect plus mandatory readback to 300 seconds. Revalidation never renews the private lease or acquisition freshness.
 
-`ENGINE_MANIFEST.json` is a **component-local manifest** for `market-predictions/control-engine` and is never a source for current **global Control runtime status**.
+Lost/ambiguous target effects are reconciled fact-first and never blindly retried.
 
-```text
-semantic_runtime_authority=false
-```
+## Carrier scope
 
-means this public component does not own Control semantics. It does **not** mean that the canonical Control V4 Runner is inactive, and it does not deny that this component hosts the bounded deterministic private-state carrier described above.
+Carrier V1 remains deliberately bounded to `integration_enabled=false` and publicly readable target repositories. It restores BUILD/REVIEW/REPAIR/wait liveness but has no merge/deploy/converge authority. Any integration-capable extension requires separate concrete need, implementation and review.
 
-Current global Control status must be reconstructed from current private V4 runtime authority and the canonical `control-runtime-state` queue, with bounded target evidence when activity details are required. Public carrier comments can corroborate transport outcomes but never override private authority/state.
+The retired V3.1 GitHub Actions semantic writer is not reintroduced.
 
-A consumer must never promote a component-local manifest or public carrier result into global Control state. If authoritative private current-state sources cannot be read, the result is incomplete observability.
+## Review/fairness semantics
 
-## Retained V3.1 code
+Current target GitHub evidence is review fact source. Same-Runner review is not independent assurance.
 
-V3.1 kernel/migration/validation code may remain while it has concrete rollback, migration, carry-forward-validation or historical validation value. Retained code is passive library material once writer reachability is retired; executable source presence alone grants no runtime authority.
+External provider/quota/transport unavailability records retryable `INDETERMINATE` and releases ownership; it can never manufacture PASS. Across later acquisitions such work is considered only after ordinary productive ACTIVE and eligible QUEUED work and remains selectable when nothing higher-value exists. No cooldown database, retry queue, retry counter or second state plane exists.
 
-Runtime-only V3.1 paths converge after the maintained rollback window. Shared helpers required by canonical V4 migration/validation semantics remain only while that dependency exists.
+Candidate/head/base drift is deterministic target evidence. The carrier re-reads live public candidate identity before review-state EVENTs; exact drift wins and returns the same stable task to REPAIR.
 
-## Read-only validation
+## Status and observability
 
-Ordinary repository CI and read-only private validation remain separate from runtime mutation. They do not grant runtime authority.
+`ENGINE_MANIFEST.json` is component-local. `semantic_runtime_authority=false` means the public engine does not own Control semantics; it does not imply the V4 Runner is inactive.
 
-## Private state
+Current global Control status is reconstructed from private V4 authority and canonical runtime queue, with bounded current target evidence as required. Public issue comments and Actions runs corroborate transport but never override private truth.
 
-Canonical mutable state remains exactly one private queue file:
+## Retained V3.1 support
 
-`market-predictions/control-plane@control-runtime-state:control/DISPATCH_QUEUE.json`
+V3.1 kernel/migration/validation code may remain only while it has a concrete pre-V4-80 rollback/migration validation dependency. It is passive rollback-only support, not current runtime authority. When that dependency closes, V3.1-only code/docs/tests are deleted rather than carried indefinitely.
 
-Git history remains the mutation audit trail. No queue, cache, database or public mirror is added.
+## Absolute boundary
 
-## Semantic boundary
-
-Normal V4 engineering uses one ChatGPT Runner with BUILD, REVIEW and REPAIR phases. Same-Runner review is intentionally called review, not independent assurance.
-
-External review is candidate evidence only when Mission policy requires it. Provider/quota/transport unavailability is retryable review unavailability: the carrier records `INDETERMINATE` and releases/yields the lock, but it can never manufacture an external PASS. Across later acquisition cycles, such a retryable `ACTIVE/REVIEW/EXTERNAL` item is deliberately considered only **after** ordinary productive ACTIVE work, integration-authorized READY work when integration is enabled, and eligible QUEUED work. It remains selectable when no higher-value work is available. No cooldown database, retry queue, retry counter, or second state plane is introduced.
-
-Candidate/head/base drift is deterministic GitHub evidence and does not require Codex. When a held REVIEW candidate no longer matches the live public PR identity, the carrier returns the same stable private task to REPAIR without issuing a duplicate external review request. The carrier re-reads the live public PR identity immediately before applying any REVIEW event that can alter review state (`INTERNAL_PASS`, `INTERNAL_REPAIR`, `EXTERNAL_REQUESTED`, `EXTERNAL_FINDING`, `EXTERNAL_PASS`, or `REVIEW_UNAVAILABLE`); drift wins over the incoming event and deterministically returns the task to REPAIR.
-
-## Consequential authority
-
-Repository integration never implies production deployment, delivery, client-data admission, broker/portfolio mutation, paid-provider use, destructive production migration or final legal/compliance/certification authority. Those remain separately governed in private Mission/repository/project authority.
+Repository integration never implies production deployment, delivery, real-client-data admission, broker/portfolio mutation, payment, paid-provider use, destructive production migration or final legal/compliance/certification authority. Those remain separately governed.
