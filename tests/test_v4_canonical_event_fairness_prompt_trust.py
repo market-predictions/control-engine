@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+import pytest
+
+from scripts import validate_private_control_v4 as validator
+
+
+def _trusted_prompt() -> str:
+    return "\n".join(
+        (
+            *validator.CARRIER_PROMPT_REQUIRED_MARKERS,
+            *validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS,
+            *validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS,
+            *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
+        )
+    )
+
+
+def test_canonical_event_fairness_prompt_has_exact_public_trust_anchor() -> None:
+    assert validator.REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+    validator._validate_prompt_trust(
+        _trusted_prompt(),
+        validator.REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA,
+    )
+
+
+@pytest.mark.parametrize(
+    "markers,error",
+    [
+        (validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks exact-comment timestamp markers"),
+        (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks exact wire/fairness markers"),
+    ],
+)
+def test_canonical_event_fairness_prompt_fails_closed_without_each_required_marker(markers, error) -> None:
+    for marker in markers:
+        prompt = _trusted_prompt().replace(marker, "", 1)
+        with pytest.raises(validator.ValidationError, match=error):
+            validator._validate_prompt_trust(
+                prompt,
+                validator.REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA,
+            )
