@@ -89,7 +89,7 @@ Lost/ambiguous side effects are reconciled fact-first and never blindly retried.
 
 ## Status scope
 
-`ENGINE_MANIFEST.json` is a **component-local manifest**. `semantic_runtime_authority=false` means this public component does not own Control semantics; it does not mean the private V4 runtime is inactive.
+`ENGINE_MANIFEST.json` is a **component-local manifest** and is never a source for current **global Control runtime status**. `semantic_runtime_authority=false` means this public component does not own Control semantics; it does not mean the private V4 runtime is inactive.
 
 Current global status is reconstructed from current private authority + canonical runtime queue + only required live target facts. Public comments/actions may corroborate transport but never override private state.
 
