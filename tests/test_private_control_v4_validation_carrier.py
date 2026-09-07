@@ -11,8 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "private-control-v3-1-validation.yml"
 VALIDATOR = ROOT / "scripts" / "validate_private_control_v4.py"
 
-# Deliberately independent from validator constants so deleting a required
-# production surface cannot silently shrink the regression matrix too.
 REQUIRED_NORMATIVE_DOCTRINE_PATHS = (
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
     "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
@@ -128,7 +126,7 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "f415d7c7c0c52ea7d8f338bb361bbbb8b15095d6"
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
@@ -196,29 +194,20 @@ def test_current_surface_rejects_current_looking_coherence_record(monkeypatch, t
 
 
 @pytest.mark.parametrize("missing_path", REQUIRED_CURRENT_SURFACE_PATHS)
-def test_every_required_current_surface_path_is_independently_required(
-    monkeypatch, tmp_path, missing_path
-):
+def test_every_required_current_surface_path_is_independently_required(monkeypatch, tmp_path, missing_path):
     entries = _current_surface_entries()
     del entries[missing_path]
     monkeypatch.setattr(validator, "_text", _surface_text)
-
     with pytest.raises(validator.ValidationError, match=f"required private V4 file missing: {missing_path}"):
         validator.validate_current_surface(tmp_path, entries)
 
 
 @pytest.mark.parametrize("non_regular_path", REQUIRED_CURRENT_SURFACE_PATHS)
-def test_every_required_current_surface_path_is_independently_inert_regular_blob(
-    monkeypatch, tmp_path, non_regular_path
-):
+def test_every_required_current_surface_path_is_independently_inert_regular_blob(monkeypatch, tmp_path, non_regular_path):
     entries = _current_surface_entries()
     entries[non_regular_path] = ("120000", "blob", "f" * 40)
     monkeypatch.setattr(validator, "_text", _surface_text)
-
-    with pytest.raises(
-        validator.ValidationError,
-        match=f"private V4 path is not one inert regular Git blob: {non_regular_path}",
-    ):
+    with pytest.raises(validator.ValidationError, match=f"private V4 path is not one inert regular Git blob: {non_regular_path}"):
         validator.validate_current_surface(tmp_path, entries)
 
 
@@ -231,13 +220,10 @@ def test_every_required_current_surface_path_is_independently_inert_regular_blob
         "schemas/repository_authority_v31.schema.json",
     ),
 )
-def test_each_legacy_current_authority_path_is_behaviorally_rejected(
-    monkeypatch, tmp_path, legacy_path
-):
+def test_each_legacy_current_authority_path_is_behaviorally_rejected(monkeypatch, tmp_path, legacy_path):
     entries = _current_surface_entries()
     entries[legacy_path] = ("100644", "blob", "e" * 40)
     monkeypatch.setattr(validator, "_text", _surface_text)
-
     with pytest.raises(validator.ValidationError, match="competing V3.1 current authority"):
         validator.validate_current_surface(tmp_path, entries)
 
@@ -277,8 +263,8 @@ def _canonical_prompt_fixture_text() -> str:
         (
             "status=ACTIVE_BOUND",
             *validator.CARRIER_PROMPT_REQUIRED_MARKERS,
-            *validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS,
-            *validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS,
+            *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
+            *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
             "",
         )
@@ -327,36 +313,25 @@ def _write_real_runner_fixture(root: Path) -> tuple[dict[str, tuple[str, str, st
     }
     runtime_path = root / validator.RUNTIME_PATH
     runtime_path.write_text(json.dumps(runtime, separators=(",", ":")) + "\n", encoding="utf-8")
-
     return _commit_fixture(root), prompt_oid
 
 
-def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted_from_real_git(
-    monkeypatch, tmp_path
-):
+def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted_from_real_git(monkeypatch, tmp_path):
     entries, prompt_oid = _write_real_runner_fixture(tmp_path)
-    prompt_raw, committed_prompt_oid = validator._blob(
-        tmp_path, entries, validator.RUNNER_PROMPT_PATH
-    )
+    prompt_raw, committed_prompt_oid = validator._blob(tmp_path, entries, validator.RUNNER_PROMPT_PATH)
     assert committed_prompt_oid == prompt_oid
     assert prompt_raw == _canonical_prompt_fixture_text().encode("utf-8")
-
     monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", prompt_oid)
     runtime = validator.validate_runtime_and_runner(tmp_path, entries)
     assert runtime["control_runtime_enabled"] is True
     assert runtime["integration_enabled"] is False
 
 
-def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(
-    monkeypatch, tmp_path
-):
+def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(monkeypatch, tmp_path):
     entries, prompt_oid = _write_real_runner_fixture(tmp_path)
     assert validator._regular_blob(entries, validator.RUNNER_PROMPT_PATH) == prompt_oid
     monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", "d" * 40)
-    with pytest.raises(
-        validator.ValidationError,
-        match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
-    ):
+    with pytest.raises(validator.ValidationError, match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract"):
         validator.validate_runtime_and_runner(tmp_path, entries)
 
 
@@ -375,9 +350,7 @@ def _valid_system_index() -> bytes:
     ).encode("utf-8")
 
 
-def _write_real_system_index_fixture(
-    root: Path,
-) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
+def _write_real_system_index_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
     _init_git_fixture(root)
     index_path = root / validator.INDEX_PATH
     index_path.write_bytes(_valid_system_index())
@@ -387,32 +360,21 @@ def _write_real_system_index_fixture(
     return entries, raw, oid
 
 
-def test_exact_reviewed_system_index_blob_is_behaviorally_accepted_from_real_git(
-    monkeypatch, tmp_path
-):
+def test_exact_reviewed_system_index_blob_is_behaviorally_accepted_from_real_git(monkeypatch, tmp_path):
     _entries, raw, oid = _write_real_system_index_fixture(tmp_path)
     monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", oid)
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
     validator.validate_system_index(raw, runtime, index_oid=oid)
 
 
-def test_changed_committed_system_index_blob_is_behaviorally_rejected_from_real_git(
-    monkeypatch, tmp_path
-):
+def test_changed_committed_system_index_blob_is_behaviorally_rejected_from_real_git(monkeypatch, tmp_path):
     _entries, approved_raw, approved_oid = _write_real_system_index_fixture(tmp_path)
     monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", approved_oid)
-
     index_path = tmp_path / validator.INDEX_PATH
     index_path.write_bytes(approved_raw + b"\nchanged after review\n")
     changed_entries = _commit_fixture(tmp_path, "changed index")
-    changed_raw, changed_oid = validator._blob(
-        tmp_path, changed_entries, validator.INDEX_PATH
-    )
+    changed_raw, changed_oid = validator._blob(tmp_path, changed_entries, validator.INDEX_PATH)
     assert changed_oid != approved_oid
-
     runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    with pytest.raises(
-        validator.ValidationError,
-        match="SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract",
-    ):
+    with pytest.raises(validator.ValidationError, match="SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract"):
         validator.validate_system_index(changed_raw, runtime, index_oid=changed_oid)
