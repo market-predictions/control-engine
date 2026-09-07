@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Trusted GitHub I/O carrier for Control V4 Scheduled runtime commands.
 
-The public issue comment is transport only. Private control-plane remains the sole
-Mission/authority/runtime-state plane. This executable accepts only the bounded
-protocol implemented by ``control_engine.v4_runtime_protocol`` and mutates only
-``control-runtime-state:control/DISPATCH_QUEUE.json`` by exact old-ref CAS.
+The public issue comment is stateless transport/audit only. Private control-plane
+remains the sole Mission/authority/runtime-state plane. Every TICK reconciles the
+current private queue and lock; public comment history is never runtime state.
 """
 
 import base64
@@ -63,6 +62,13 @@ class CarrierError(RuntimeError):
 
 class StaleWriteError(CarrierError):
     pass
+
+
+def _command_comment_id() -> int:
+    raw = os.environ.get("CONTROL_V4_COMMAND_COMMENT_ID", "")
+    if not raw.isdigit() or int(raw) < 1:
+        raise CarrierError("triggering command comment identity unavailable")
+    return int(raw)
 
 
 def _private_headers() -> dict[str, str]:
@@ -292,12 +298,7 @@ def _update_refs_exact(
                     "repositoryId": repository_node_id,
                     "clientMutationId": client_id,
                     "refUpdates": [
-                        {
-                            "name": "refs/heads/main",
-                            "beforeOid": main_oid,
-                            "afterOid": main_oid,
-                            "force": False,
-                        },
+                        {"name": "refs/heads/main", "beforeOid": main_oid, "afterOid": main_oid, "force": False},
                         {
                             "name": f"refs/heads/{RUNTIME_BRANCH}",
                             "beforeOid": runtime_before_oid,
@@ -357,11 +358,7 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         raise CarrierError("private runtime tree creation failed")
     commit = _private_post(
         f"repos/{PRIVATE_REPOSITORY}/git/commits",
-        {
-            "message": f"runtime: V4 carrier {reason}",
-            "tree": new_tree,
-            "parents": [state["runtime_sha"]],
-        },
+        {"message": f"runtime: V4 carrier {reason}", "tree": new_tree, "parents": [state["runtime_sha"]]},
     )
     new_commit = commit.get("sha") if isinstance(commit, Mapping) else None
     if not isinstance(new_commit, str) or len(new_commit) != 40:
@@ -394,12 +391,7 @@ def _assert_public_target_repository(repository: str) -> None:
 def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
     _assert_public_target_repository(repository)
     pr = _public_get(f"repos/{repository}/pulls/{pr_number}", allow_404=True)
-    if (
-        not isinstance(pr, Mapping)
-        or pr.get("number") != pr_number
-        or pr.get("state") != "open"
-        or pr.get("merged_at") is not None
-    ):
+    if not isinstance(pr, Mapping) or pr.get("number") != pr_number or pr.get("state") != "open" or pr.get("merged_at") is not None:
         raise RuntimeProtocolError("target pull request is not an open public candidate")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
@@ -413,6 +405,24 @@ def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
         "expected_base_branch": values[2],
         "expected_base_sha": values[3],
     }
+
+
+def _work_result(
+    queue: Mapping[str, Any],
+    *,
+    task_id: str,
+    holder_run_id: str,
+    acquired_now: bool,
+    live_candidate: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = safe_work_capsule(
+        queue,
+        task_id=task_id,
+        run_id=holder_run_id,
+        live_candidate=live_candidate,
+    )
+    result["acquired_now"] = acquired_now
+    return result
 
 
 def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -435,16 +445,17 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             queue = state["queue"]
             lock = None
 
+    acquired_now = False
     if isinstance(lock, Mapping):
-        if lock.get("run_id") != command["run_id"]:
-            return state, {"protocol": RESULT_PROTOCOL_ID, "result": "BUSY", "run_id": command["run_id"]}
+        holder_run_id = lock.get("run_id")
         task_id = lock.get("task_id")
-        if not isinstance(task_id, str):
-            raise CarrierError("current private lock task invalid")
+        if not isinstance(holder_run_id, str) or not isinstance(task_id, str):
+            raise CarrierError("current private lock identity invalid")
     else:
+        holder_run_id = command["run_id"]
         task_id = select_task_id_v4(
             queue,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             yielded_task_tokens=command.get("yielded_task_tokens", []),
             integration_enabled=False,
         )
@@ -453,13 +464,14 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         acquired = acquire_task_v4(
             queue,
             task_id=task_id,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             now=now,
             control_runtime_enabled=True,
             integration_enabled=False,
         )
         state = _write_queue_exact(state, acquired, reason="acquire")
         queue = state["queue"]
+        acquired_now = True
 
     task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
     candidate = task.get("candidate")
@@ -473,7 +485,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         blocked = block_holder_v4(
             queue,
             task_id=task_id,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             blocker="TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1",
             now=now,
         )
@@ -482,30 +494,32 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             "protocol": RESULT_PROTOCOL_ID,
             "result": "BLOCKED",
             "code": "TARGET_NOT_PUBLICLY_READABLE",
-            "run_id": command["run_id"],
+            "run_id": holder_run_id,
         }
 
     if task.get("phase") == "REVIEW" and isinstance(candidate, Mapping) and live_candidate is not None:
         reconciled, drifted = reconcile_review_candidate_drift_v4(
             queue,
             task_id=task_id,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             live_candidate=live_candidate,
             now=now,
         )
         if drifted:
             state = _write_queue_exact(state, reconciled, reason="candidate-drift-to-repair")
-            return state, safe_work_capsule(
+            return state, _work_result(
                 state["queue"],
                 task_id=task_id,
-                run_id=command["run_id"],
+                holder_run_id=holder_run_id,
+                acquired_now=acquired_now,
                 live_candidate=live_candidate,
             )
 
-    return state, safe_work_capsule(
+    return state, _work_result(
         state["queue"],
         task_id=task_id,
-        run_id=command["run_id"],
+        holder_run_id=holder_run_id,
+        acquired_now=acquired_now,
         live_candidate=live_candidate if task.get("phase") == "REPAIR" else None,
     )
 
@@ -616,8 +630,9 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
     }
 
 
-def _set_outputs(result: Mapping[str, Any], *, ok: bool) -> None:
-    text = compact_public_result(result)
+def _set_outputs(result: Mapping[str, Any], *, ok: bool, command_comment_id: int) -> None:
+    correlated = {**result, "command_comment_id": command_comment_id}
+    text = compact_public_result(correlated)
     output_path = os.environ.get("GITHUB_OUTPUT")
     if not output_path:
         print(text)
@@ -631,9 +646,18 @@ def main() -> int:
     comment = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
     now = datetime.now(timezone.utc)
     try:
+        comment_id = _command_comment_id()
+    except CarrierError:
+        return 1
+
+    try:
         command = parse_public_command(comment)
     except RuntimeProtocolError:
-        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "REJECTED", "code": "INVALID_COMMAND"}, ok=True)
+        _set_outputs(
+            {"protocol": RESULT_PROTOCOL_ID, "result": "REJECTED", "code": "INVALID_COMMAND"},
+            ok=True,
+            command_comment_id=comment_id,
+        )
         return 0
 
     try:
@@ -642,15 +666,31 @@ def main() -> int:
             _state, result = _tick(command, state, now=now)
         else:
             _state, result = _event(command, state, now=now)
-        _set_outputs(result, ok=True)
+        _set_outputs(result, ok=True, command_comment_id=comment_id)
     except StaleWriteError:
-        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "RETRY", "code": "STALE_PRIVATE_STATE", "run_id": command.get("run_id")}, ok=True)
+        _set_outputs(
+            {"protocol": RESULT_PROTOCOL_ID, "result": "RETRY", "code": "STALE_PRIVATE_STATE", "run_id": command.get("run_id")},
+            ok=True,
+            command_comment_id=comment_id,
+        )
     except StaleEventError:
-        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "REJECTED", "code": "STALE_EVENT", "run_id": command.get("run_id")}, ok=True)
+        _set_outputs(
+            {"protocol": RESULT_PROTOCOL_ID, "result": "REJECTED", "code": "STALE_EVENT", "run_id": command.get("run_id")},
+            ok=True,
+            command_comment_id=comment_id,
+        )
     except (RuntimeProtocolError, V4ValidationError, CarrierError):
-        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "FAIL_CLOSED", "run_id": command.get("run_id")}, ok=False)
+        _set_outputs(
+            {"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "FAIL_CLOSED", "run_id": command.get("run_id")},
+            ok=False,
+            command_comment_id=comment_id,
+        )
     except Exception:  # never expose private data through logs or public transport
-        _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "UNEXPECTED_FAIL_CLOSED", "run_id": command.get("run_id")}, ok=False)
+        _set_outputs(
+            {"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "UNEXPECTED_FAIL_CLOSED", "run_id": command.get("run_id")},
+            ok=False,
+            command_comment_id=comment_id,
+        )
     return 0
 
 

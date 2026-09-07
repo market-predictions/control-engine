@@ -56,6 +56,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_COMMAND_COMMENT_ID: ${{ github.event.comment.id }}
         run: python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
