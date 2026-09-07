@@ -36,6 +36,8 @@ def test_all_predecessor_runner_prompt_hashes_are_rejected_after_wire_cutover(pr
 @pytest.mark.parametrize(
     "markers,error",
     [
+        (validator.CARRIER_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks required carrier transport markers"),
+        (validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks post-lease recovery markers"),
         (validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks exact-comment timestamp markers"),
         (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks exact wire/fairness markers"),
     ],
