@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 
 import pytest
@@ -64,6 +64,12 @@ def external_pending(sha: str = OLD_SHA) -> dict:
     }
 
 
+def external_indeterminate(sha: str = OLD_SHA) -> dict:
+    value = external_pending(sha)
+    value["status"] = "INDETERMINATE"
+    return value
+
+
 def task(
     task_id: str = "MISSION--M--2026-09-06-r1--G1",
     *,
@@ -98,6 +104,15 @@ def task(
     }
 
 
+def distinct_task(value: dict, *, mission: str, revision: str, blob: str, gap: str) -> dict:
+    result = deepcopy(value)
+    result["mission_id"] = mission
+    result["mission_revision"] = revision
+    result["mission_contract_blob_sha"] = blob
+    result["gap_id"] = gap
+    return result
+
+
 def queue(one_task: dict, *, run_id: str = "run-1", locked: bool = True) -> dict:
     lock = None
     if locked:
@@ -128,34 +143,38 @@ def active_external_queue() -> dict:
 
 def event_body(q: dict, event: str, **extra: object) -> str:
     current = q["tasks"][0]
+    capsule = safe_work_capsule(q, task_id=current["task_id"], run_id="run-1")
     payload = {
         "run_id": "run-1",
-        "task_token": task_token(current, "run-1"),
+        "task_token": capsule["task_token"],
         "event": event,
-        "holder_candidate_sha": current["candidate"]["candidate_sha"],
-        "holder_expected_base_branch": current["candidate"]["expected_base_branch"],
-        "holder_expected_base_sha": current["candidate"]["expected_base_sha"],
+        "repository": capsule["repository"],
+        "action": capsule["action"],
+        **({"candidate": capsule["candidate"]} if "candidate" in capsule else {}),
         **extra,
     }
     return "CONTROL_V4_RUNTIME_EVENT " + json.dumps(payload, separators=(",", ":"))
 
 
-def test_public_protocol_rejects_generic_queue_patch_raw_task_id_and_duplicate_json_keys() -> None:
+def test_public_protocol_rejects_generic_queue_patch_raw_task_id_duplicate_keys_and_legacy_flat_event() -> None:
     with pytest.raises(RuntimeProtocolError):
         parse_public_command('CONTROL_V4_RUNTIME_PATCH_QUEUE {"queue":{}}')
     with pytest.raises(RuntimeProtocolError):
         parse_public_command('CONTROL_V4_RUNTIME_EVENT {"run_id":"r","task_id":"PRIVATE","task_token":"' + "a" * 64 + '","event":"YIELD"}')
     with pytest.raises(RuntimeProtocolError):
         parse_public_command('CONTROL_V4_RUNTIME_TICK {"run_id":"a","run_id":"b"}')
+    with pytest.raises(RuntimeProtocolError):
+        parse_public_command(
+            'CONTROL_V4_RUNTIME_EVENT {"run_id":"r","task_token":"' + "a" * 64 +
+            '","event":"YIELD","holder_candidate_sha":"' + OLD_SHA +
+            '","holder_expected_base_branch":"main","holder_expected_base_sha":"' + BASE_SHA + '"}'
+        )
 
 
 def test_tick_uses_only_opaque_yield_tokens() -> None:
     first = task("MISSION--M--2026-09-06-r1--G1", candidate_value=candidate(), last_review=review_pass(), external_review=external_pending())
     second = task("MISSION--M--2026-09-06-r1--G2", candidate_value=candidate(), last_review=review_pass(), external_review=external_pending())
-    second["gap_id"] = "G2"
-    second["mission_id"] = "M2"
-    second["mission_revision"] = "2026-09-06-r2"
-    second["mission_contract_blob_sha"] = "f" * 40
+    second = distinct_task(second, mission="M2", revision="2026-09-06-r2", blob="f" * 40, gap="G2")
     q = {
         "version": "4.0",
         "principal_manual_relay_count": 0,
@@ -192,6 +211,42 @@ def test_safe_capsule_leaks_no_private_queue_mission_or_acceptance_content() -> 
     ):
         assert forbidden not in encoded
     assert q["execution_lock"]["expires_at"] not in encoded
+
+
+def test_canonical_event_echoes_work_identity_and_binds_to_internal_holder() -> None:
+    q = active_external_queue()
+    parsed = parse_public_command(event_body(q, "REVIEW_UNAVAILABLE"))
+    assert parsed["repository"] == "example/repo"
+    assert parsed["action"] == "RECONCILE_EXTERNAL_REVIEW"
+    assert parsed["candidate"] == candidate()
+
+    bound = bind_public_event_to_holder(q, parsed)
+    assert "repository" not in bound
+    assert "action" not in bound
+    assert "candidate" not in bound
+    assert bound["task_id"] == q["tasks"][0]["task_id"]
+    assert bound["holder_candidate_sha"] == OLD_SHA
+    assert bound["holder_expected_base_branch"] == "main"
+    assert bound["holder_expected_base_sha"] == BASE_SHA
+
+
+def test_canonical_event_fails_closed_on_work_identity_mismatch_or_extra_field() -> None:
+    q = active_external_queue()
+    for mutation in (
+        {"repository": "example/other"},
+        {"action": "REQUEST_EXTERNAL_REVIEW"},
+        {"candidate": candidate(NEW_SHA)},
+    ):
+        parsed = parse_public_command(event_body(q, "REVIEW_UNAVAILABLE"))
+        parsed.update(mutation)
+        with pytest.raises(StaleEventError):
+            bind_public_event_to_holder(q, parsed)
+
+    body = event_body(q, "REVIEW_UNAVAILABLE")
+    payload = json.loads(body.split(" ", 1)[1])
+    payload["unexpected"] = "value"
+    with pytest.raises(RuntimeProtocolError):
+        parse_public_command("CONTROL_V4_RUNTIME_EVENT " + json.dumps(payload, separators=(",", ":")))
 
 
 def test_carrier_review_pass_events_recheck_live_candidate_before_applying_pass(monkeypatch) -> None:
@@ -271,6 +326,56 @@ def test_review_unavailable_is_retryable_releases_lock_and_replay_fails_closed()
         yield_holder_v4(updated, rebound, now=NOW)
 
 
+def test_indeterminate_external_wait_is_demoted_below_productive_active_and_queued_work() -> None:
+    waiting = task(
+        "MISSION--M--2026-09-06-r1--WAIT",
+        candidate_value=candidate(),
+        last_review=review_pass(),
+        external_review=external_indeterminate(),
+    )
+    productive = distinct_task(
+        task(
+            "MISSION--M2--2026-09-06-r2--REVIEW",
+            review_policy="INTERNAL",
+            candidate_value=candidate(),
+            last_review=None,
+            external_review=None,
+        ),
+        mission="M2",
+        revision="2026-09-06-r2",
+        blob="f" * 40,
+        gap="REVIEW",
+    )
+    queued = distinct_task(
+        task(
+            "MISSION--M3--2026-09-06-r3--BUILD",
+            status="QUEUED",
+            phase="BUILD",
+            review_policy="INTERNAL",
+            candidate_value=None,
+            last_review=None,
+            external_review=None,
+        ),
+        mission="M3",
+        revision="2026-09-06-r3",
+        blob="1" * 40,
+        gap="BUILD",
+    )
+
+    def unlocked(tasks: list[dict]) -> dict:
+        return {
+            "version": "4.0",
+            "principal_manual_relay_count": 0,
+            "execution_lock": None,
+            "migration_facts": [],
+            "tasks": tasks,
+        }
+
+    assert select_task_id_v4(unlocked([waiting, productive, queued]), run_id="fair-1", integration_enabled=False) == productive["task_id"]
+    assert select_task_id_v4(unlocked([waiting, queued]), run_id="fair-2", integration_enabled=False) == queued["task_id"]
+    assert select_task_id_v4(unlocked([waiting]), run_id="fair-3", integration_enabled=False) == waiting["task_id"]
+
+
 def test_actionable_external_finding_returns_same_stable_task_to_repair_with_lock() -> None:
     q = active_external_queue()
     parsed = parse_public_command(
@@ -325,32 +430,36 @@ def test_integration_disabled_skips_active_integrate_and_ready_auto() -> None:
         external_review=None,
         integration_policy="AUTO_AFTER_PASS",
     )
-    ready = task(
-        "MISSION--M2--2026-09-06-r2--G2",
-        status="READY",
-        phase=None,
-        review_policy="INTERNAL",
-        candidate_value=candidate(),
-        last_review=review_pass(),
-        external_review=None,
-        integration_policy="AUTO_AFTER_PASS",
+    ready = distinct_task(
+        task(
+            "MISSION--M2--2026-09-06-r2--G2",
+            status="READY",
+            phase=None,
+            review_policy="INTERNAL",
+            candidate_value=candidate(),
+            last_review=review_pass(),
+            external_review=None,
+            integration_policy="AUTO_AFTER_PASS",
+        ),
+        mission="M2",
+        revision="2026-09-06-r2",
+        blob="f" * 40,
+        gap="G2",
     )
-    ready["mission_id"] = "M2"
-    ready["mission_revision"] = "2026-09-06-r2"
-    ready["mission_contract_blob_sha"] = "f" * 40
-    ready["gap_id"] = "G2"
-    queued = task(
-        "MISSION--M3--2026-09-06-r3--G3",
-        status="QUEUED",
-        phase="BUILD",
-        review_policy="INTERNAL",
-        candidate_value=None,
-        last_review=None,
-        external_review=None,
+    queued = distinct_task(
+        task(
+            "MISSION--M3--2026-09-06-r3--G3",
+            status="QUEUED",
+            phase="BUILD",
+            review_policy="INTERNAL",
+            candidate_value=None,
+            last_review=None,
+            external_review=None,
+        ),
+        mission="M3",
+        revision="2026-09-06-r3",
+        blob="1" * 40,
+        gap="G3",
     )
-    queued["mission_id"] = "M3"
-    queued["mission_revision"] = "2026-09-06-r3"
-    queued["mission_contract_blob_sha"] = "1" * 40
-    queued["gap_id"] = "G3"
     q = {"version": "4.0", "principal_manual_relay_count": 0, "execution_lock": None, "migration_facts": [], "tasks": [integrate, ready, queued]}
     assert select_task_id_v4(q, run_id="r", integration_enabled=False) == queued["task_id"]
