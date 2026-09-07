@@ -28,6 +28,8 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+ACTION_RE = re.compile(r"^[A-Z0-9_]{1,96}$")
 EVENTS = {
     "YIELD",
     "CANDIDATE_READY",
@@ -119,6 +121,40 @@ def _branch(value: object) -> str:
     return value
 
 
+def _repository(value: object) -> str:
+    if not isinstance(value, str) or REPOSITORY_RE.fullmatch(value) is None:
+        raise RuntimeProtocolError("repository identity invalid")
+    return value
+
+
+def _action(value: object) -> str:
+    if not isinstance(value, str) or ACTION_RE.fullmatch(value) is None:
+        raise RuntimeProtocolError("action identity invalid")
+    return value
+
+
+def _candidate(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeProtocolError("candidate identity invalid")
+    candidate = dict(value)
+    required = {
+        "candidate_sha",
+        "candidate_pr_number",
+        "candidate_head_branch",
+        "expected_base_branch",
+        "expected_base_sha",
+    }
+    _exact_keys(candidate, required, required)
+    candidate["candidate_sha"] = _sha(candidate["candidate_sha"])
+    number = candidate["candidate_pr_number"]
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise RuntimeProtocolError("candidate PR number invalid")
+    candidate["candidate_head_branch"] = _branch(candidate["candidate_head_branch"])
+    candidate["expected_base_branch"] = _branch(candidate["expected_base_branch"])
+    candidate["expected_base_sha"] = _sha(candidate["expected_base_sha"])
+    return candidate
+
+
 def _public_ref(value: object) -> str:
     if not isinstance(value, str) or not value.startswith("https://github.com/") or len(value) > 500:
         raise RuntimeProtocolError("public evidence reference invalid")
@@ -147,14 +183,7 @@ def parse_public_command(comment_body: str) -> dict[str, Any]:
 
     if comment_body.startswith(EVENT_PREFIX):
         payload = strict_json_object(comment_body[len(EVENT_PREFIX):])
-        common = {
-            "run_id",
-            "task_token",
-            "event",
-            "holder_candidate_sha",
-            "holder_expected_base_branch",
-            "holder_expected_base_sha",
-        }
+        common = {"run_id", "task_token", "event", "repository", "action", "candidate"}
         event = payload.get("event")
         if event not in EVENTS:
             raise RuntimeProtocolError("event invalid")
@@ -174,24 +203,15 @@ def parse_public_command(comment_body: str) -> dict[str, Any]:
             "EXTERNAL_FINDING": {"evidence_ref"},
             "EXTERNAL_PASS": {"evidence_ref"},
         }
-        required = {"run_id", "task_token", "event"} | event_fields[event]
+        required = {"run_id", "task_token", "event", "repository", "action"} | event_fields[event]
         allowed = common | event_fields[event]
         _exact_keys(payload, allowed, required)
         payload["run_id"] = _run_id(payload["run_id"])
         payload["task_token"] = _token(payload["task_token"])
-
-        holder_fields = (
-            "holder_candidate_sha",
-            "holder_expected_base_branch",
-            "holder_expected_base_sha",
-        )
-        present = [name in payload for name in holder_fields]
-        if any(present) and not all(present):
-            raise RuntimeProtocolError("holder candidate identity must be complete")
-        if all(present):
-            payload["holder_candidate_sha"] = _sha(payload["holder_candidate_sha"])
-            payload["holder_expected_base_branch"] = _branch(payload["holder_expected_base_branch"])
-            payload["holder_expected_base_sha"] = _sha(payload["holder_expected_base_sha"])
+        payload["repository"] = _repository(payload["repository"])
+        payload["action"] = _action(payload["action"])
+        if "candidate" in payload:
+            payload["candidate"] = _candidate(payload["candidate"])
 
         if event == "CANDIDATE_READY":
             payload["new_candidate_sha"] = _sha(payload["new_candidate_sha"])
@@ -293,13 +313,49 @@ def task_token(task: Mapping[str, Any], run_id: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+def _work_action(task: Mapping[str, Any]) -> str:
+    phase = task.get("phase")
+    action = phase
+    if phase == "REVIEW":
+        if task.get("review_policy") == "INTERNAL" or not _review_passed(task):
+            action = "REVIEW_INTERNAL"
+        else:
+            external = task.get("external_review")
+            action = "REQUEST_EXTERNAL_REVIEW" if not isinstance(external, Mapping) or external.get("request_ref") is None else "RECONCILE_EXTERNAL_REVIEW"
+    elif phase == "INTEGRATE":
+        action = "INTEGRATION_UNSUPPORTED_BY_CARRIER_V1"
+    elif phase == "CONVERGE":
+        action = "CONVERGENCE_UNSUPPORTED_BY_CARRIER_V1"
+    if not isinstance(action, str):
+        raise RuntimeProtocolError("task action invalid")
+    return action
+
+
 def bind_public_event_to_holder(queue: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
     validate_queue_v4(queue)
     matches = [task for task in queue["tasks"] if task_token(task, command["run_id"]) == command["task_token"]]
     if len(matches) != 1:
         raise StaleEventError("task token is stale or ambiguous")
-    bound = dict(command)
-    bound["task_id"] = matches[0]["task_id"]
+    task = matches[0]
+    if command.get("repository") != task.get("repository") or command.get("action") != _work_action(task):
+        raise StaleEventError("event WORK identity is stale")
+    candidate = task.get("candidate")
+    expected_candidate = _candidate_identity(candidate) if isinstance(candidate, Mapping) else None
+    observed_candidate = command.get("candidate")
+    if expected_candidate is None:
+        if observed_candidate is not None:
+            raise StaleEventError("candidate-less WORK received candidate identity")
+    elif observed_candidate != expected_candidate:
+        raise StaleEventError("event candidate/base identity is stale")
+
+    bound = {key: value for key, value in command.items() if key not in {"repository", "action", "candidate"}}
+    bound["task_id"] = task["task_id"]
+    if expected_candidate is not None:
+        bound.update({
+            "holder_candidate_sha": expected_candidate["candidate_sha"],
+            "holder_expected_base_branch": expected_candidate["expected_base_branch"],
+            "holder_expected_base_sha": expected_candidate["expected_base_sha"],
+        })
     return bound
 
 
@@ -345,6 +401,17 @@ def recover_expired_lock_v4(queue: Mapping[str, Any], *, now: datetime) -> tuple
     return q, True
 
 
+def _retryable_external_wait(task: Mapping[str, Any]) -> bool:
+    external = task.get("external_review")
+    return bool(
+        task.get("status") == "ACTIVE"
+        and task.get("phase") == "REVIEW"
+        and task.get("review_policy") == "EXTERNAL"
+        and isinstance(external, Mapping)
+        and external.get("status") == "INDETERMINATE"
+    )
+
+
 def select_task_id_v4(
     queue: Mapping[str, Any],
     *,
@@ -361,7 +428,7 @@ def select_task_id_v4(
         return task_token(task, run_id) not in yielded
 
     for task in queue["tasks"]:
-        if available(task) and task["status"] == "ACTIVE":
+        if available(task) and task["status"] == "ACTIVE" and not _retryable_external_wait(task):
             if task.get("phase") == "INTEGRATE" and integration_enabled is not True:
                 continue
             return task["task_id"]
@@ -371,6 +438,9 @@ def select_task_id_v4(
                 return task["task_id"]
     for task in queue["tasks"]:
         if available(task) and task["status"] == "QUEUED":
+            return task["task_id"]
+    for task in queue["tasks"]:
+        if available(task) and _retryable_external_wait(task):
             return task["task_id"]
     return None
 
@@ -678,24 +748,12 @@ def safe_work_capsule(
     lock = queue.get("execution_lock")
     if not isinstance(lock, Mapping) or lock.get("task_id") != task_id or lock.get("run_id") != run_id:
         raise RuntimeProtocolError("safe capsule requires current holder")
-    phase = task.get("phase")
-    action = phase
-    if phase == "REVIEW":
-        if task.get("review_policy") == "INTERNAL" or not _review_passed(task):
-            action = "REVIEW_INTERNAL"
-        else:
-            external = task.get("external_review")
-            action = "REQUEST_EXTERNAL_REVIEW" if not isinstance(external, Mapping) or external.get("request_ref") is None else "RECONCILE_EXTERNAL_REVIEW"
-    elif phase == "INTEGRATE":
-        action = "INTEGRATION_UNSUPPORTED_BY_CARRIER_V1"
-    elif phase == "CONVERGE":
-        action = "CONVERGENCE_UNSUPPORTED_BY_CARRIER_V1"
     capsule: dict[str, Any] = {
         "protocol": RESULT_PROTOCOL_ID,
         "result": "WORK",
         "run_id": run_id,
         "task_token": task_token(task, run_id),
-        "action": action,
+        "action": _work_action(task),
         "repository": task["repository"],
     }
     candidate = task.get("candidate")
