@@ -14,6 +14,7 @@ PREDECESSOR_PROMPT_BLOB_SHAS = (
     "804c8570141934c5a0b5fa86583c867995ce51f4",
     "fe269bf84744629eca133937854ee284239cbcc9",
     "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
+    "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1",
 )
 PROMPT_TEXT = "\n".join(
     (
@@ -53,12 +54,12 @@ def _binding(prompt_blob_sha: str):
     )
 
 
-def test_runtime_binding_accepts_only_current_canonical_prompt_wire_contract() -> None:
-    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+def test_runtime_binding_accepts_only_current_stateless_runner_prompt() -> None:
+    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "f354539a6493bce9269d77fe085300ac4a0c9fa6"
     assert _binding(CANONICAL_RUNNER_PROMPT_BLOB_SHA) == (True, False)
 
 
 @pytest.mark.parametrize("prompt_blob_sha", PREDECESSOR_PROMPT_BLOB_SHAS)
-def test_runtime_binding_rejects_every_predecessor_prompt_after_wire_cutover(prompt_blob_sha: str) -> None:
+def test_runtime_binding_rejects_every_predecessor_prompt(prompt_blob_sha: str) -> None:
     with pytest.raises(RuntimeProtocolError, match="runner prompt wire contract is not current"):
         _binding(prompt_blob_sha)
