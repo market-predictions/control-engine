@@ -50,91 +50,12 @@ jobs:
           repositories: control-plane
           permission-contents: write
 
-      - name: Normalize observed V4 Runner compatibility envelope
-        env:
-          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import re
-
-          prefix = "CONTROL_V4_RUNTIME_EVENT "
-          command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
-          normalized = command
-
-          class DuplicateKeyError(ValueError):
-              pass
-
-          def unique_object(pairs):
-              value = {}
-              for key, item in pairs:
-                  if key in value:
-                      raise DuplicateKeyError(key)
-                  value[key] = item
-              return value
-
-          if command.startswith(prefix):
-              try:
-                  payload = json.loads(command[len(prefix):], object_pairs_hook=unique_object)
-              except (json.JSONDecodeError, DuplicateKeyError, TypeError, ValueError):
-                  payload = None
-              nested_keys = {"run_id", "task_token", "event", "repository", "candidate"}
-              candidate_keys = {
-                  "candidate_sha",
-                  "candidate_pr_number",
-                  "candidate_head_branch",
-                  "expected_base_branch",
-                  "expected_base_sha",
-              }
-              if isinstance(payload, dict) and payload.get("event") == "REVIEW_UNAVAILABLE" and set(payload) == nested_keys:
-                  candidate = payload.get("candidate")
-                  repository = payload.get("repository")
-                  if isinstance(candidate, dict) and set(candidate) == candidate_keys and isinstance(repository, str):
-                      candidate_sha = candidate.get("candidate_sha")
-                      expected_base_sha = candidate.get("expected_base_sha")
-                      expected_base_branch = candidate.get("expected_base_branch")
-                      candidate_head_branch = candidate.get("candidate_head_branch")
-                      candidate_pr_number = candidate.get("candidate_pr_number")
-                      repo_ok = re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is not None
-                      sha_ok = (
-                          isinstance(candidate_sha, str)
-                          and re.fullmatch(r"[0-9a-f]{40}", candidate_sha) is not None
-                          and isinstance(expected_base_sha, str)
-                          and re.fullmatch(r"[0-9a-f]{40}", expected_base_sha) is not None
-                      )
-                      branch_ok = (
-                          isinstance(expected_base_branch, str)
-                          and re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", expected_base_branch) is not None
-                          and ".." not in expected_base_branch
-                          and isinstance(candidate_head_branch, str)
-                          and re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", candidate_head_branch) is not None
-                          and ".." not in candidate_head_branch
-                      )
-                      pr_ok = isinstance(candidate_pr_number, int) and not isinstance(candidate_pr_number, bool) and candidate_pr_number > 0
-                      if repo_ok and sha_ok and branch_ok and pr_ok:
-                          flat = {
-                              "run_id": payload.get("run_id"),
-                              "task_token": payload.get("task_token"),
-                              "event": "REVIEW_UNAVAILABLE",
-                              "holder_candidate_sha": candidate_sha,
-                              "holder_expected_base_branch": expected_base_branch,
-                              "holder_expected_base_sha": expected_base_sha,
-                          }
-                          normalized = prefix + json.dumps(flat, separators=(",", ":"), sort_keys=True)
-
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write("CONTROL_V4_PUBLIC_COMMAND<<__CONTROL_V4_COMMAND__\n")
-              output.write(normalized + "\n")
-              output.write("__CONTROL_V4_COMMAND__\n")
-          PY
-
       - name: Execute bounded typed V4 runtime carrier
         id: carrier
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
         run: python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
