@@ -17,11 +17,20 @@ def _trusted_prompt() -> str:
 
 
 def test_canonical_event_fairness_prompt_has_exact_public_trust_anchor() -> None:
-    assert validator.REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
     validator._validate_prompt_trust(
         _trusted_prompt(),
-        validator.REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA,
+        validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
     )
+
+
+@pytest.mark.parametrize("prompt_oid", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))
+def test_all_predecessor_runner_prompt_hashes_are_rejected_after_wire_cutover(prompt_oid: str) -> None:
+    with pytest.raises(
+        validator.ValidationError,
+        match="obsolete Runner prompt is not trusted by the current canonical EVENT wire contract",
+    ):
+        validator._validate_prompt_trust("", prompt_oid)
 
 
 @pytest.mark.parametrize(
@@ -37,5 +46,5 @@ def test_canonical_event_fairness_prompt_fails_closed_without_each_required_mark
         with pytest.raises(validator.ValidationError, match=error):
             validator._validate_prompt_trust(
                 prompt,
-                validator.REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA,
+                validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
             )
