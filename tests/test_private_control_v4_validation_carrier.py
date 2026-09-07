@@ -128,7 +128,7 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "f354539a6493bce9269d77fe085300ac4a0c9fa6"
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
@@ -276,9 +276,8 @@ def _canonical_prompt_fixture_text() -> str:
     return "\n".join(
         (
             "status=ACTIVE_BOUND",
-            *validator.CARRIER_PROMPT_REQUIRED_MARKERS,
-            *validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS,
-            *validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS,
+            *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
+            *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
             "",
         )
