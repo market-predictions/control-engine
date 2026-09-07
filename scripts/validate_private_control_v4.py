@@ -51,6 +51,7 @@ REVIEWED_RUNNER_PROMPT_BLOB_SHA = "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
 REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "804c8570141934c5a0b5fa86583c867995ce51f4"
 REVIEWED_EXACT_COMMENT_TIME_RUNNER_PROMPT_BLOB_SHA = "fe269bf84744629eca133937854ee284239cbcc9"
 REVIEWED_POST_LEASE_EVENT_RECOVERY_RUNNER_PROMPT_BLOB_SHA = "f9d3b1f1158aa0c84b486120f22b5173417f54e7"
+REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA = "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 CARRIER_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
@@ -93,6 +94,24 @@ POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS = (
     "new unique run may safely re-enter through TICK and let the carrier reconcile private expiry normally",
     "do not replay an unresolved EVENT",
     "only the exact-resource 5400-second retirement rule above permits forward scheduling",
+)
+CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS = (
+    "GitHub issue-comment list/history surfaces may omit `created_at`.",
+    "fetch that **exact issue-comment resource**",
+    "Use only that exact-resource `created_at` for the 120-second TICK recovery clock, the 660-second target-write clock, and the 5400-second unresolved-EVENT retirement clock.",
+    "Missing, ambiguous or body-mismatched exact-resource `created_at` fails closed.",
+    "Never infer command age from `run_id`, list order, scheduler time or a null list-field.",
+)
+CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
+    "### Canonical EVENT wire contract",
+    "For every semantic EVENT, copy the correlated trusted `WORK` identity; do not transform it.",
+    "`run_id`, `task_token`, `event`, `repository`, `action`",
+    "plus `candidate` **iff the correlated WORK contained `candidate`**",
+    "copied verbatim from that exact trusted WORK",
+    "Never emit public `holder_*` fields.",
+    "Never copy `protocol`, `result`, `live_candidate`",
+    "Any EVENT that cannot be formed exactly from one correlated trusted WORK fails closed and is not sent.",
+    "A prior `REVIEW_UNAVAILABLE`/`INDETERMINATE` external review remains retryable but must not monopolize later selection",
 )
 
 
@@ -250,6 +269,16 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
             raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
         if any(marker not in prompt_text for marker in POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS):
             raise ValidationError("post-lease EVENT recovery Runner prompt lacks required fail-closed liveness markers")
+        return
+    if prompt_oid == REVIEWED_CANONICAL_EVENT_FAIRNESS_RUNNER_PROMPT_BLOB_SHA:
+        if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("canonical EVENT Runner prompt lacks required carrier transport markers")
+        if any(marker not in prompt_text for marker in POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("canonical EVENT Runner prompt lacks post-lease recovery markers")
+        if any(marker not in prompt_text for marker in CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("canonical EVENT Runner prompt lacks exact-comment timestamp markers")
+        if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
+            raise ValidationError("canonical EVENT Runner prompt lacks exact wire/fairness markers")
         return
     raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
 
