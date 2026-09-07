@@ -255,7 +255,9 @@ def validate_current_surface(root: Path, entries) -> None:
 
     coherence = _text(root, entries, COHERENCE_REPAIR_PATH)
     if any(marker not in coherence for marker in HISTORICAL_COHERENCE_REQUIRED_MARKERS):
-        raise ValidationError("coherence repair record is not explicitly historical audit evidence")
+        raise ValidationError(
+            "coherence repair record is not explicitly historical audit evidence; current-looking runtime semantics are forbidden"
+        )
     for stale_marker in (
         "status=IMPLEMENTATION_CANDIDATE",
         "The current queue remains",
