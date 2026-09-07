@@ -33,7 +33,9 @@ def test_post_lease_predecessor_prompt_is_historical_and_not_current_trust() -> 
 
 def test_current_canonical_prompt_requires_every_post_lease_liveness_marker() -> None:
     for marker in validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS:
-        prompt = _trusted_current_prompt().replace(marker, "", 1)
+        # Marker phrases may also occur in another canonical marker family.
+        # Remove all occurrences so this regression proves true absence.
+        prompt = _trusted_current_prompt().replace(marker, "")
         with pytest.raises(
             validator.ValidationError,
             match="canonical EVENT Runner prompt lacks post-lease recovery markers",
