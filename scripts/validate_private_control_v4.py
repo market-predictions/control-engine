@@ -56,10 +56,11 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "804c8570141934c5a0b5fa86583c867995ce51f4",
         "fe269bf84744629eca133937854ee284239cbcc9",
         "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
+        "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
-CARRIER_PROMPT_REQUIRED_MARKERS = (
+STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
     "market-predictions/control-engine",
@@ -67,39 +68,24 @@ CARRIER_PROMPT_REQUIRED_MARKERS = (
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
-    "use the connected GitHub app",
-    "public transport entrypoint is mandatory",
-    "must not silently exit",
-    "at least **120 seconds old**",
-    "**MUST immediately post exactly one recovery replay**",
-    "exact same TICK body and same `run_id`",
-    "**MUST post one fresh initial TICK**",
-    "performs exactly one public transport write",
-    "earliest TICK for that `run_id` remains the sole initial acquisition TICK and lease-freshness anchor",
+    "The schedule is a wake-up mechanism, not runtime state.",
+    "never reconstruct Control liveness, holder state or recovery state from public comment history",
+    "Create one new unique `run_id` for this invocation.",
+    "Immediately post exactly one fresh `CONTROL_V4_RUNTIME_TICK`",
+    "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
+    "`NO_WORK` or `BUSY` ends this invocation without mutation.",
+    "carrier expired-lock recovery are the only cross-invocation holder-recovery mechanism",
+    "Do not replay the command and do not derive recovery state from issue history.",
+    "The next normal Scheduled invocation starts with a fresh TICK",
+)
+TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
+    "Fresh acquisition occurred in this Scheduled invocation under its new unique `run_id`",
+    "post a **second same-`run_id` TICK**",
     "must be no more than **660 seconds old**",
-    "recovery replays and later revalidation TICKs **must not reset or renew this 660-second clock**",
+    "Later revalidation TICKs do not reset or renew this clock.",
     "no more than **15 seconds old**",
     "bounded to **300 seconds or less**",
-    "it **must not** perform a target write",
-    "submit `YIELD` for the current exact holder",
-    "create a new unique `run_id` and submit a new initial acquisition TICK",
-)
-POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS = (
-    "Whenever TICK or unresolved EVENT age matters",
-    "5400-second unresolved-EVENT retirement clock",
-    "If the EVENT is at least **5400 seconds old**",
-    "treat only that public transport identity as **spent for forward scheduling**",
-    "do not infer semantic completion, queue state, holder release, PASS/FAIL or any private fact from age alone",
-    "new unique run may safely re-enter through TICK and let the carrier reconcile private expiry normally",
-    "do not replay an unresolved EVENT",
-    "only the exact-resource 5400-second retirement rule above permits forward scheduling",
-)
-CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS = (
-    "GitHub issue-comment list/history surfaces may omit `created_at`.",
-    "fetch that **exact issue-comment resource**",
-    "Use only that exact-resource `created_at` for the 120-second TICK recovery clock, the 660-second target-write clock, and the 5400-second unresolved-EVENT retirement clock.",
-    "Missing, ambiguous or body-mismatched exact-resource `created_at` fails closed.",
-    "Never infer command age from `run_id`, list order, scheduler time or a null list-field.",
+    "The second same-`run_id` TICK is revalidation only",
 )
 CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
     "### Canonical EVENT wire contract",
@@ -111,6 +97,16 @@ CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
     "Never copy `protocol`, `result`, `live_candidate`",
     "Any EVENT that cannot be formed exactly from one correlated trusted WORK fails closed and is not sent.",
     "A prior `REVIEW_UNAVAILABLE`/`INDETERMINATE` external review remains retryable but must not monopolize later selection",
+)
+OBSOLETE_TRANSPORT_RECOVERY_MARKERS = (
+    "read only the bounded issue-#106 history",
+    "at least **120 seconds old**",
+    "recovery replay",
+    "exact same TICK body and same `run_id`",
+    "unresolved EVENT",
+    "spent for forward scheduling",
+    "5400-second unresolved-EVENT retirement clock",
+    "earliest TICK for that `run_id` remains the sole initial acquisition TICK",
 )
 HISTORICAL_COHERENCE_REQUIRED_MARKERS = (
     "status=HISTORICAL_AUDIT_EVIDENCE",
@@ -270,17 +266,17 @@ def validate_current_surface(root: Path, entries) -> None:
 
 def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
     if prompt_oid in OBSOLETE_RUNNER_PROMPT_BLOB_SHAS:
-        raise ValidationError("obsolete Runner prompt is not trusted by the current canonical EVENT wire contract")
+        raise ValidationError("obsolete Runner prompt is not trusted by the current stateless transport contract")
     if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
         raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
-    if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks required carrier transport markers")
-    if any(marker not in prompt_text for marker in POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks post-lease recovery markers")
-    if any(marker not in prompt_text for marker in CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks exact-comment timestamp markers")
+    if any(marker not in prompt_text for marker in STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks required state-first transport markers")
+    if any(marker not in prompt_text for marker in TARGET_EFFECT_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks target-effect freshness markers")
     if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks exact wire/fairness markers")
+        raise ValidationError("current Runner prompt lacks canonical EVENT/fairness markers")
+    if any(marker in prompt_text for marker in OBSOLETE_TRANSPORT_RECOVERY_MARKERS):
+        raise ValidationError("current Runner prompt retains obsolete public-history recovery semantics")
 
 
 def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
@@ -335,12 +331,7 @@ def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
     return runtime
 
 
-def validate_system_index(
-    raw: bytes,
-    runtime: Mapping[str, Any],
-    *,
-    index_oid: str,
-) -> None:
+def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: str) -> None:
     del runtime
     if index_oid != REVIEWED_SYSTEM_INDEX_BLOB_SHA:
         raise ValidationError("SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract")
