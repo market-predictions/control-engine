@@ -24,6 +24,7 @@ RESULT_PROTOCOL_ID = "CONTROL_V4_RUNTIME_RESULT_V1"
 TICK_PREFIX = "CONTROL_V4_RUNTIME_TICK "
 EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
 PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
+CANONICAL_RUNNER_PROMPT_BLOB_SHA = "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -260,8 +261,11 @@ def validate_runtime_binding(
         raise RuntimeProtocolError("runner relay invalid")
     if runner_config.get("prompt_path") != "control/CONTROL_RUNNER_V4_PROMPT.md":
         raise RuntimeProtocolError("runner prompt path invalid")
-    if runner_config.get("prompt_blob_sha") != _sha(prompt_blob_sha):
+    bound_prompt_blob_sha = _sha(prompt_blob_sha)
+    if runner_config.get("prompt_blob_sha") != bound_prompt_blob_sha:
         raise RuntimeProtocolError("runner prompt blob binding invalid")
+    if bound_prompt_blob_sha != CANONICAL_RUNNER_PROMPT_BLOB_SHA:
+        raise RuntimeProtocolError("runner prompt wire contract is not current")
     required_markers = (
         "document_id=CONTROL_RUNNER_V4_PROMPT",
         "status=ACTIVE_BOUND",
