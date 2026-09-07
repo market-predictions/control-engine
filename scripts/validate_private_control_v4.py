@@ -56,10 +56,11 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "804c8570141934c5a0b5fa86583c867995ce51f4",
         "fe269bf84744629eca133937854ee284239cbcc9",
         "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
+        "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
-CARRIER_PROMPT_REQUIRED_MARKERS = (
+STATELESS_HANDSHAKE_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
     "market-predictions/control-engine",
@@ -67,49 +68,30 @@ CARRIER_PROMPT_REQUIRED_MARKERS = (
     "MUST NOT depend on direct Scheduled access to private",
     "integration_enabled=false",
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
-    "use the connected GitHub app",
-    "public transport entrypoint is mandatory",
-    "must not silently exit",
-    "at least **120 seconds old**",
-    "**MUST immediately post exactly one recovery replay**",
-    "exact same TICK body and same `run_id`",
-    "**MUST post one fresh initial TICK**",
-    "performs exactly one public transport write",
-    "earliest TICK for that `run_id` remains the sole initial acquisition TICK and lease-freshness anchor",
+    "**Transport history is evidence, never recovery state.**",
+    "Every Scheduled invocation starts from current authoritative state, not previous transport history",
+    "Post exactly one fresh `CONTROL_V4_RUNTIME_TICK`",
+    "`command_comment_id` exactly equals that command-comment id",
+    "do not scan prior invocations to reconstruct transport state",
+    "`WORK` with `acquired_now=true`",
+    "`WORK` with `acquired_now=false`",
+    "Do not replay the command and do not reconstruct prior transport",
+    "The next normal Scheduled invocation starts again with one fresh TICK",
     "must be no more than **660 seconds old**",
-    "recovery replays and later revalidation TICKs **must not reset or renew this 660-second clock**",
     "no more than **15 seconds old**",
-    "bounded to **300 seconds or less**",
-    "it **must not** perform a target write",
-    "submit `YIELD` for the current exact holder",
-    "create a new unique `run_id` and submit a new initial acquisition TICK",
-)
-POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS = (
-    "Whenever TICK or unresolved EVENT age matters",
-    "5400-second unresolved-EVENT retirement clock",
-    "If the EVENT is at least **5400 seconds old**",
-    "treat only that public transport identity as **spent for forward scheduling**",
-    "do not infer semantic completion, queue state, holder release, PASS/FAIL or any private fact from age alone",
-    "new unique run may safely re-enter through TICK and let the carrier reconcile private expiry normally",
-    "do not replay an unresolved EVENT",
-    "only the exact-resource 5400-second retirement rule above permits forward scheduling",
-)
-CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS = (
-    "GitHub issue-comment list/history surfaces may omit `created_at`.",
-    "fetch that **exact issue-comment resource**",
-    "Use only that exact-resource `created_at` for the 120-second TICK recovery clock, the 660-second target-write clock, and the 5400-second unresolved-EVENT retirement clock.",
-    "Missing, ambiguous or body-mismatched exact-resource `created_at` fails closed.",
-    "Never infer command age from `run_id`, list order, scheduler time or a null list-field.",
+    "within **300 seconds**",
+    "The private 5400-second lock lease is fixed and non-renewable",
+    "If resumed work (`acquired_now=false`) needs a target effect",
 )
 CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
-    "### Canonical EVENT wire contract",
+    "## Canonical EVENT wire contract",
     "For every semantic EVENT, copy the correlated trusted `WORK` identity; do not transform it.",
     "`run_id`, `task_token`, `event`, `repository`, `action`",
     "plus `candidate` **iff the correlated WORK contained `candidate`**",
-    "copied verbatim from that exact trusted WORK",
+    "copied verbatim from that exact WORK",
     "Never emit public `holder_*` fields.",
-    "Never copy `protocol`, `result`, `live_candidate`",
-    "Any EVENT that cannot be formed exactly from one correlated trusted WORK fails closed and is not sent.",
+    "Never copy `protocol`, `result`, `live_candidate`, `acquired_now`, `command_comment_id`",
+    "fail closed for this invocation and do not replay the EVENT",
     "A prior `REVIEW_UNAVAILABLE`/`INDETERMINATE` external review remains retryable but must not monopolize later selection",
 )
 HISTORICAL_COHERENCE_REQUIRED_MARKERS = (
@@ -270,17 +252,13 @@ def validate_current_surface(root: Path, entries) -> None:
 
 def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
     if prompt_oid in OBSOLETE_RUNNER_PROMPT_BLOB_SHAS:
-        raise ValidationError("obsolete Runner prompt is not trusted by the current canonical EVENT wire contract")
+        raise ValidationError("obsolete Runner prompt is not trusted by the current stateless V4 transport contract")
     if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
         raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
-    if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks required carrier transport markers")
-    if any(marker not in prompt_text for marker in POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks post-lease recovery markers")
-    if any(marker not in prompt_text for marker in CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks exact-comment timestamp markers")
+    if any(marker not in prompt_text for marker in STATELESS_HANDSHAKE_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("Runner prompt lacks required stateless current-state handshake markers")
     if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("canonical EVENT Runner prompt lacks exact wire/fairness markers")
+        raise ValidationError("Runner prompt lacks exact EVENT wire/fairness markers")
 
 
 def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
