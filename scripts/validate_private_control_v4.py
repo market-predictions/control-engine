@@ -20,6 +20,7 @@ from typing import Any, Mapping
 
 from control_engine.v4_authority_io import load_v4_authority_from_git
 from control_engine.v4_contracts import V4ValidationError
+from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 
 RUNTIME_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
 INDEX_PATH = "control/SYSTEM_INDEX.md"
@@ -34,7 +35,7 @@ LEGACY_CURRENT_PATHS = {
     "schemas/mission_contract_v31.schema.json",
     "schemas/repository_authority_v31.schema.json",
 }
-BOUNDED_DOCTRINE_PATHS = {
+NORMATIVE_DOCTRINE_PATHS = {
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
     "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
     "control/CONTROL_V4_ROADMAP.md",
@@ -42,15 +43,21 @@ BOUNDED_DOCTRINE_PATHS = {
     "control/CONTROL_V4_SURFACE_INVENTORY.md",
     MISSION_README_PATH,
     CHANGELOG_PATH,
-    COHERENCE_REPAIR_PATH,
 }
+HISTORICAL_AUDIT_PATHS = {COHERENCE_REPAIR_PATH}
+CURRENT_SURFACE_PATHS = NORMATIVE_DOCTRINE_PATHS | HISTORICAL_AUDIT_PATHS
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
-REVIEWED_RUNNER_PROMPT_BLOB_SHA = "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
-REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA = "804c8570141934c5a0b5fa86583c867995ce51f4"
-REVIEWED_EXACT_COMMENT_TIME_RUNNER_PROMPT_BLOB_SHA = "fe269bf84744629eca133937854ee284239cbcc9"
-REVIEWED_POST_LEASE_EVENT_RECOVERY_RUNNER_PROMPT_BLOB_SHA = "f9d3b1f1158aa0c84b486120f22b5173417f54e7"
+REVIEWED_RUNNER_PROMPT_BLOB_SHA = CANONICAL_RUNNER_PROMPT_BLOB_SHA
+OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
+    {
+        "4bc8ce5a73e1238427b1ce999be5cd5a6378988c",
+        "804c8570141934c5a0b5fa86583c867995ce51f4",
+        "fe269bf84744629eca133937854ee284239cbcc9",
+        "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
+    }
+)
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
 CARRIER_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
@@ -77,13 +84,6 @@ CARRIER_PROMPT_REQUIRED_MARKERS = (
     "submit `YIELD` for the current exact holder",
     "create a new unique `run_id` and submit a new initial acquisition TICK",
 )
-EXACT_COMMENT_TIME_PROMPT_REQUIRED_MARKERS = (
-    "GitHub issue-comment list/history surfaces may omit `created_at`.",
-    "fetch that **exact issue-comment resource**",
-    "Use only that exact-resource `created_at` for the 120-second recovery clock and 660-second target-write clock.",
-    "Missing, ambiguous or body-mismatched exact-resource `created_at` fails closed.",
-    "Never infer TICK age from `run_id`, list order, scheduler time or a null list-field.",
-)
 POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS = (
     "Whenever TICK or unresolved EVENT age matters",
     "5400-second unresolved-EVENT retirement clock",
@@ -93,6 +93,29 @@ POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS = (
     "new unique run may safely re-enter through TICK and let the carrier reconcile private expiry normally",
     "do not replay an unresolved EVENT",
     "only the exact-resource 5400-second retirement rule above permits forward scheduling",
+)
+CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS = (
+    "GitHub issue-comment list/history surfaces may omit `created_at`.",
+    "fetch that **exact issue-comment resource**",
+    "Use only that exact-resource `created_at` for the 120-second TICK recovery clock, the 660-second target-write clock, and the 5400-second unresolved-EVENT retirement clock.",
+    "Missing, ambiguous or body-mismatched exact-resource `created_at` fails closed.",
+    "Never infer command age from `run_id`, list order, scheduler time or a null list-field.",
+)
+CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
+    "### Canonical EVENT wire contract",
+    "For every semantic EVENT, copy the correlated trusted `WORK` identity; do not transform it.",
+    "`run_id`, `task_token`, `event`, `repository`, `action`",
+    "plus `candidate` **iff the correlated WORK contained `candidate`**",
+    "copied verbatim from that exact trusted WORK",
+    "Never emit public `holder_*` fields.",
+    "Never copy `protocol`, `result`, `live_candidate`",
+    "Any EVENT that cannot be formed exactly from one correlated trusted WORK fails closed and is not sent.",
+    "A prior `REVIEW_UNAVAILABLE`/`INDETERMINATE` external review remains retryable but must not monopolize later selection",
+)
+HISTORICAL_COHERENCE_REQUIRED_MARKERS = (
+    "status=HISTORICAL_AUDIT_EVIDENCE",
+    "documentation_is_current_status_authority=false",
+    "runtime_snapshot_semantics=HISTORICAL_OBSERVATION_ONLY",
 )
 
 
@@ -197,7 +220,7 @@ def validate_changed_surface(candidate_entries, base_entries) -> set[str]:
     def allowed(path: str) -> bool:
         if path in {RUNTIME_PATH, INDEX_PATH, RUNNER_CONFIG_PATH, RUNNER_PROMPT_PATH}:
             return True
-        if path in LEGACY_CURRENT_PATHS or path in BOUNDED_DOCTRINE_PATHS:
+        if path in LEGACY_CURRENT_PATHS or path in CURRENT_SURFACE_PATHS:
             return True
         if path.startswith("control/missions/") and path.endswith(".mission.json") and "/" not in path[len("control/missions/"):]:
             return True
@@ -220,7 +243,7 @@ def validate_current_surface(root: Path, entries) -> None:
     if stale:
         raise ValidationError("private main retains competing V3.1 current authority")
 
-    for path in sorted(BOUNDED_DOCTRINE_PATHS):
+    for path in sorted(CURRENT_SURFACE_PATHS):
         _regular_blob(entries, path)
 
     mission_readme = _text(root, entries, MISSION_README_PATH)
@@ -231,27 +254,33 @@ def validate_current_surface(root: Path, entries) -> None:
         if stale_marker in mission_readme:
             raise ValidationError("Mission registry README retains V3.1 current semantics")
 
+    coherence = _text(root, entries, COHERENCE_REPAIR_PATH)
+    if any(marker not in coherence for marker in HISTORICAL_COHERENCE_REQUIRED_MARKERS):
+        raise ValidationError(
+            "coherence repair record is not explicitly historical audit evidence; current-looking runtime semantics are forbidden"
+        )
+    for stale_marker in (
+        "status=IMPLEMENTATION_CANDIDATE",
+        "The current queue remains",
+        "Current runtime-carrier invariant",
+    ):
+        if stale_marker in coherence:
+            raise ValidationError("historical coherence record retains current-looking runtime semantics")
+
 
 def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
-    if prompt_oid == REVIEWED_RUNNER_PROMPT_BLOB_SHA:
-        return
-    if prompt_oid == REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA:
-        if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
-            raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
-        return
-    if prompt_oid == REVIEWED_EXACT_COMMENT_TIME_RUNNER_PROMPT_BLOB_SHA:
-        if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
-            raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
-        if any(marker not in prompt_text for marker in EXACT_COMMENT_TIME_PROMPT_REQUIRED_MARKERS):
-            raise ValidationError("exact-comment-time Runner prompt lacks required fail-closed timestamp markers")
-        return
-    if prompt_oid == REVIEWED_POST_LEASE_EVENT_RECOVERY_RUNNER_PROMPT_BLOB_SHA:
-        if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
-            raise ValidationError("carrier-bound Runner prompt lacks required fail-closed transport markers")
-        if any(marker not in prompt_text for marker in POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS):
-            raise ValidationError("post-lease EVENT recovery Runner prompt lacks required fail-closed liveness markers")
-        return
-    raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
+    if prompt_oid in OBSOLETE_RUNNER_PROMPT_BLOB_SHAS:
+        raise ValidationError("obsolete Runner prompt is not trusted by the current canonical EVENT wire contract")
+    if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
+        raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
+    if any(marker not in prompt_text for marker in CARRIER_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("canonical EVENT Runner prompt lacks required carrier transport markers")
+    if any(marker not in prompt_text for marker in POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("canonical EVENT Runner prompt lacks post-lease recovery markers")
+    if any(marker not in prompt_text for marker in CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("canonical EVENT Runner prompt lacks exact-comment timestamp markers")
+    if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("canonical EVENT Runner prompt lacks exact wire/fairness markers")
 
 
 def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:

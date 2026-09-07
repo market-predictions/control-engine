@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "private-control-v3-1-validation.yml"
 VALIDATOR = ROOT / "scripts" / "validate_private_control_v4.py"
 
-# Deliberately independent from validator.BOUNDED_DOCTRINE_PATHS so deleting a
-# required production path cannot silently shrink the regression matrix too.
-REQUIRED_CURRENT_DOCTRINE_PATHS = (
+# Deliberately independent from validator constants so deleting a required
+# production surface cannot silently shrink the regression matrix too.
+REQUIRED_NORMATIVE_DOCTRINE_PATHS = (
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
     "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
     "control/CONTROL_V4_ROADMAP.md",
@@ -21,7 +21,13 @@ REQUIRED_CURRENT_DOCTRINE_PATHS = (
     "control/CONTROL_V4_SURFACE_INVENTORY.md",
     "control/missions/README.md",
     "control/CHANGELOG.md",
+)
+REQUIRED_HISTORICAL_AUDIT_PATHS = (
     "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md",
+)
+REQUIRED_CURRENT_SURFACE_PATHS = (
+    *REQUIRED_NORMATIVE_DOCTRINE_PATHS,
+    *REQUIRED_HISTORICAL_AUDIT_PATHS,
 )
 
 VALID_MISSION_README = (
@@ -30,13 +36,26 @@ VALID_MISSION_README = (
     "MISSION_CONTRACT_V4\n"
     "review_policy\n"
 )
+VALID_HISTORICAL_COHERENCE = (
+    "status=HISTORICAL_AUDIT_EVIDENCE\n"
+    "documentation_is_current_status_authority=false\n"
+    "runtime_snapshot_semantics=HISTORICAL_OBSERVATION_ONLY\n"
+)
 
 
-def _current_doctrine_entries() -> dict[str, tuple[str, str, str]]:
+def _current_surface_entries() -> dict[str, tuple[str, str, str]]:
     return {
         path: ("100644", "blob", f"{index + 1:040x}")
-        for index, path in enumerate(REQUIRED_CURRENT_DOCTRINE_PATHS)
+        for index, path in enumerate(REQUIRED_CURRENT_SURFACE_PATHS)
     }
+
+
+def _surface_text(_root, _tree, path: str) -> str:
+    if path == validator.MISSION_README_PATH:
+        return VALID_MISSION_README
+    if path == validator.COHERENCE_REPAIR_PATH:
+        return VALID_HISTORICAL_COHERENCE
+    raise AssertionError(f"unexpected text path: {path}")
 
 
 def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_workflow():
@@ -109,7 +128,7 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
@@ -149,25 +168,52 @@ def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_pat
         validator.validate_changed_surface(candidate, base)
 
 
-@pytest.mark.parametrize("missing_path", REQUIRED_CURRENT_DOCTRINE_PATHS)
-def test_every_required_current_doctrine_path_is_independently_required(
+def test_coherence_record_is_historical_surface_not_normative_doctrine(monkeypatch, tmp_path):
+    assert validator.COHERENCE_REPAIR_PATH not in validator.NORMATIVE_DOCTRINE_PATHS
+    assert validator.COHERENCE_REPAIR_PATH in validator.HISTORICAL_AUDIT_PATHS
+    entries = _current_surface_entries()
+    monkeypatch.setattr(validator, "_text", _surface_text)
+    validator.validate_current_surface(tmp_path, entries)
+
+
+def test_current_surface_rejects_current_looking_coherence_record(monkeypatch, tmp_path):
+    entries = _current_surface_entries()
+
+    def stale_surface_text(_root, _tree, path: str) -> str:
+        if path == validator.MISSION_README_PATH:
+            return VALID_MISSION_README
+        if path == validator.COHERENCE_REPAIR_PATH:
+            return (
+                "status=IMPLEMENTATION_CANDIDATE\n"
+                "documentation_is_current_status_authority=false\n"
+                "runtime_snapshot_semantics=HISTORICAL_OBSERVATION_ONLY\n"
+            )
+        raise AssertionError(f"unexpected text path: {path}")
+
+    monkeypatch.setattr(validator, "_text", stale_surface_text)
+    with pytest.raises(validator.ValidationError, match="current-looking runtime semantics"):
+        validator.validate_current_surface(tmp_path, entries)
+
+
+@pytest.mark.parametrize("missing_path", REQUIRED_CURRENT_SURFACE_PATHS)
+def test_every_required_current_surface_path_is_independently_required(
     monkeypatch, tmp_path, missing_path
 ):
-    entries = _current_doctrine_entries()
+    entries = _current_surface_entries()
     del entries[missing_path]
-    monkeypatch.setattr(validator, "_text", lambda root, tree, path: VALID_MISSION_README)
+    monkeypatch.setattr(validator, "_text", _surface_text)
 
     with pytest.raises(validator.ValidationError, match=f"required private V4 file missing: {missing_path}"):
         validator.validate_current_surface(tmp_path, entries)
 
 
-@pytest.mark.parametrize("non_regular_path", REQUIRED_CURRENT_DOCTRINE_PATHS)
-def test_every_required_current_doctrine_path_is_independently_inert_regular_blob(
+@pytest.mark.parametrize("non_regular_path", REQUIRED_CURRENT_SURFACE_PATHS)
+def test_every_required_current_surface_path_is_independently_inert_regular_blob(
     monkeypatch, tmp_path, non_regular_path
 ):
-    entries = _current_doctrine_entries()
+    entries = _current_surface_entries()
     entries[non_regular_path] = ("120000", "blob", "f" * 40)
-    monkeypatch.setattr(validator, "_text", lambda root, tree, path: VALID_MISSION_README)
+    monkeypatch.setattr(validator, "_text", _surface_text)
 
     with pytest.raises(
         validator.ValidationError,
@@ -188,9 +234,9 @@ def test_every_required_current_doctrine_path_is_independently_inert_regular_blo
 def test_each_legacy_current_authority_path_is_behaviorally_rejected(
     monkeypatch, tmp_path, legacy_path
 ):
-    entries = _current_doctrine_entries()
+    entries = _current_surface_entries()
     entries[legacy_path] = ("100644", "blob", "e" * 40)
-    monkeypatch.setattr(validator, "_text", lambda root, tree, path: VALID_MISSION_README)
+    monkeypatch.setattr(validator, "_text", _surface_text)
 
     with pytest.raises(validator.ValidationError, match="competing V3.1 current authority"):
         validator.validate_current_surface(tmp_path, entries)
@@ -226,13 +272,23 @@ def _commit_fixture(root: Path, message: str = "fixture") -> dict[str, tuple[str
     return validator.committed_tree(root)
 
 
+def _canonical_prompt_fixture_text() -> str:
+    return "\n".join(
+        (
+            "status=ACTIVE_BOUND",
+            *validator.CARRIER_PROMPT_REQUIRED_MARKERS,
+            *validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS,
+            *validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS,
+            *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
+            "",
+        )
+    )
+
+
 def _write_real_runner_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], str]:
     _init_git_fixture(root)
     prompt_path = root / validator.RUNNER_PROMPT_PATH
-    prompt_path.write_text(
-        "status=ACTIVE_BOUND\ncanonical reviewed prompt\n",
-        encoding="utf-8",
-    )
+    prompt_path.write_text(_canonical_prompt_fixture_text(), encoding="utf-8")
     prompt_oid = _git_blob_oid(root, validator.RUNNER_PROMPT_PATH)
 
     config = {
@@ -283,7 +339,7 @@ def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted_from_real_gi
         tmp_path, entries, validator.RUNNER_PROMPT_PATH
     )
     assert committed_prompt_oid == prompt_oid
-    assert prompt_raw == b"status=ACTIVE_BOUND\ncanonical reviewed prompt\n"
+    assert prompt_raw == _canonical_prompt_fixture_text().encode("utf-8")
 
     monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", prompt_oid)
     runtime = validator.validate_runtime_and_runner(tmp_path, entries)

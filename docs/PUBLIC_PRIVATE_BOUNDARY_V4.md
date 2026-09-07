@@ -28,6 +28,23 @@ Every private queue mutation requires the exact observed private `main`, exact o
 
 Public issue comments are transport/audit evidence only. They never become queue, Mission, status or authority state. The public response is deliberately reduced to publicly observable target/candidate facts plus an opaque task token. Raw private task identity, gap/Mission identity, acceptance text, authority blob identities, review records, blockers, lock state, queue state and Mission documents are not mirrored to the public transport. In particular, execution-lock timestamps or other lock-derived values are never emitted in a public work capsule.
 
+### Canonical EVENT wire contract
+
+`control_engine/v4_runtime_protocol.py` is the **single protocol owner** for `CONTROL_V4_RUNTIME_EVENT`. The workflow transports the raw issue-comment body unchanged; it contains no compatibility parser or alternate EVENT normalizer.
+
+Every EVENT echoes the correlated trusted `WORK` capsule identity exactly:
+
+- `run_id`;
+- `task_token`;
+- `repository`;
+- `action`;
+- `candidate` exactly when the `WORK` capsule contains one;
+- `event` plus only that event type's explicitly allowed fields.
+
+The protocol parser rejects unknown fields and malformed identities. Holder binding then requires `repository`, `action`, and the complete candidate object to match the current task resolved by the opaque token before translating that public identity into the existing private holder checks. The Runner does not construct or transmit private task IDs, Mission data, queue fields, lock state, or an alternative `holder_*` public envelope.
+
+This single-owner rule deliberately replaces the former workflow-level compatibility normalization. Protocol adaptation is not split between YAML and Python.
+
 The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path. This public-read proof is required even when a BUILD task has no candidate yet: the repository name is not emitted until unauthenticated repository metadata proves the target is publicly readable.
 
 The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/record/release path is reintroduced.
@@ -68,7 +85,7 @@ Git history remains the mutation audit trail. No queue, cache, database or publi
 
 Normal V4 engineering uses one ChatGPT Runner with BUILD, REVIEW and REPAIR phases. Same-Runner review is intentionally called review, not independent assurance.
 
-External review is candidate evidence only when Mission policy requires it. Provider/quota/transport unavailability is retryable review unavailability: the carrier may record the bounded retryable status and release/yield the lock, but it can never manufacture an external PASS.
+External review is candidate evidence only when Mission policy requires it. Provider/quota/transport unavailability is retryable review unavailability: the carrier records `INDETERMINATE` and releases/yields the lock, but it can never manufacture an external PASS. Across later acquisition cycles, such a retryable `ACTIVE/REVIEW/EXTERNAL` item is deliberately considered only **after** ordinary productive ACTIVE work, integration-authorized READY work when integration is enabled, and eligible QUEUED work. It remains selectable when no higher-value work is available. No cooldown database, retry queue, retry counter, or second state plane is introduced.
 
 Candidate/head/base drift is deterministic GitHub evidence and does not require Codex. When a held REVIEW candidate no longer matches the live public PR identity, the carrier returns the same stable private task to REPAIR without issuing a duplicate external review request. The carrier re-reads the live public PR identity immediately before applying any REVIEW event that can alter review state (`INTERNAL_PASS`, `INTERNAL_REPAIR`, `EXTERNAL_REQUESTED`, `EXTERNAL_FINDING`, `EXTERNAL_PASS`, or `REVIEW_UNAVAILABLE`); drift wins over the incoming event and deterministically returns the task to REPAIR.
 

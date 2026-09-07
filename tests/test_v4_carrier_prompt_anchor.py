@@ -30,23 +30,25 @@ EXPECTED_CARRIER_PROMPT_MARKERS = (
 )
 
 
-def _carrier_prompt() -> str:
-    return "\n".join(EXPECTED_CARRIER_PROMPT_MARKERS)
-
-
-def test_current_and_recovery_prompt_hashes_are_the_only_transition_anchors():
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4bc8ce5a73e1238427b1ce999be5cd5a6378988c"
-    assert validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA == "804c8570141934c5a0b5fa86583c867995ce51f4"
+def test_current_carrier_markers_remain_part_of_the_canonical_prompt_contract():
     assert validator.CARRIER_PROMPT_REQUIRED_MARKERS == EXPECTED_CARRIER_PROMPT_MARKERS
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
 
-    validator._validate_prompt_trust(
-        "current reviewed prompt",
-        validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
-    )
-    validator._validate_prompt_trust(
-        _carrier_prompt(),
-        validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA,
-    )
+
+@pytest.mark.parametrize(
+    "obsolete_hash",
+    [
+        "4bc8ce5a73e1238427b1ce999be5cd5a6378988c",
+        "804c8570141934c5a0b5fa86583c867995ce51f4",
+    ],
+)
+def test_precanonical_carrier_prompt_hashes_are_obsolete_current_trust(obsolete_hash):
+    assert obsolete_hash in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    with pytest.raises(
+        validator.ValidationError,
+        match="obsolete Runner prompt is not trusted by the current canonical EVENT wire contract",
+    ):
+        validator._validate_prompt_trust("\n".join(EXPECTED_CARRIER_PROMPT_MARKERS), obsolete_hash)
 
 
 @pytest.mark.parametrize(
@@ -64,20 +66,7 @@ def test_superseded_carrier_prompt_hashes_fail_closed(superseded_hash):
         validator.ValidationError,
         match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
     ):
-        validator._validate_prompt_trust(_carrier_prompt(), superseded_hash)
-
-
-def test_recovery_prompt_hash_requires_every_fail_closed_marker():
-    for marker in EXPECTED_CARRIER_PROMPT_MARKERS:
-        text = _carrier_prompt().replace(marker, "REMOVED_MARKER")
-        with pytest.raises(
-            validator.ValidationError,
-            match="carrier-bound Runner prompt lacks required fail-closed transport markers",
-        ):
-            validator._validate_prompt_trust(
-                text,
-                validator.REVIEWED_CARRIER_RUNNER_PROMPT_BLOB_SHA,
-            )
+        validator._validate_prompt_trust("\n".join(EXPECTED_CARRIER_PROMPT_MARKERS), superseded_hash)
 
 
 def test_unknown_prompt_hash_fails_closed_even_with_carrier_markers():
@@ -85,4 +74,4 @@ def test_unknown_prompt_hash_fails_closed_even_with_carrier_markers():
         validator.ValidationError,
         match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
     ):
-        validator._validate_prompt_trust(_carrier_prompt(), "f" * 40)
+        validator._validate_prompt_trust("\n".join(EXPECTED_CARRIER_PROMPT_MARKERS), "f" * 40)
