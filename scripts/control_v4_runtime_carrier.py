@@ -435,16 +435,17 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             queue = state["queue"]
             lock = None
 
+    acquired_now = False
     if isinstance(lock, Mapping):
-        if lock.get("run_id") != command["run_id"]:
-            return state, {"protocol": RESULT_PROTOCOL_ID, "result": "BUSY", "run_id": command["run_id"]}
+        holder_run_id = lock.get("run_id")
         task_id = lock.get("task_id")
-        if not isinstance(task_id, str):
-            raise CarrierError("current private lock task invalid")
+        if not isinstance(holder_run_id, str) or not isinstance(task_id, str):
+            raise CarrierError("current private lock identity invalid")
     else:
+        holder_run_id = command["run_id"]
         task_id = select_task_id_v4(
             queue,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             yielded_task_tokens=command.get("yielded_task_tokens", []),
             integration_enabled=False,
         )
@@ -453,13 +454,14 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         acquired = acquire_task_v4(
             queue,
             task_id=task_id,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             now=now,
             control_runtime_enabled=True,
             integration_enabled=False,
         )
         state = _write_queue_exact(state, acquired, reason="acquire")
         queue = state["queue"]
+        acquired_now = True
 
     task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
     candidate = task.get("candidate")
@@ -473,7 +475,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         blocked = block_holder_v4(
             queue,
             task_id=task_id,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             blocker="TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1",
             now=now,
         )
@@ -482,32 +484,36 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             "protocol": RESULT_PROTOCOL_ID,
             "result": "BLOCKED",
             "code": "TARGET_NOT_PUBLICLY_READABLE",
-            "run_id": command["run_id"],
+            "run_id": holder_run_id,
         }
 
     if task.get("phase") == "REVIEW" and isinstance(candidate, Mapping) and live_candidate is not None:
         reconciled, drifted = reconcile_review_candidate_drift_v4(
             queue,
             task_id=task_id,
-            run_id=command["run_id"],
+            run_id=holder_run_id,
             live_candidate=live_candidate,
             now=now,
         )
         if drifted:
             state = _write_queue_exact(state, reconciled, reason="candidate-drift-to-repair")
-            return state, safe_work_capsule(
+            work = safe_work_capsule(
                 state["queue"],
                 task_id=task_id,
-                run_id=command["run_id"],
+                run_id=holder_run_id,
                 live_candidate=live_candidate,
             )
+            work["acquired_now"] = acquired_now
+            return state, work
 
-    return state, safe_work_capsule(
+    work = safe_work_capsule(
         state["queue"],
         task_id=task_id,
-        run_id=command["run_id"],
+        run_id=holder_run_id,
         live_candidate=live_candidate if task.get("phase") == "REPAIR" else None,
     )
+    work["acquired_now"] = acquired_now
+    return state, work
 
 
 def _validate_public_ref_for_task(task: Mapping[str, Any], value: str) -> None:
