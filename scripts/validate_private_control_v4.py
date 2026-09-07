@@ -57,6 +57,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "fe269bf84744629eca133937854ee284239cbcc9",
         "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
         "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1",
+        "f354539a6493bce9269d77fe085300ac4a0c9fa6",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -70,16 +71,27 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
     "The schedule is a wake-up mechanism, not runtime state.",
     "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Create one new unique `run_id` for this invocation.",
-    "Immediately post exactly one fresh `CONTROL_V4_RUNTIME_TICK`",
+    "Create one new unique `run_id` for this invocation and an empty invocation-local `yielded_task_tokens` set.",
+    "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
     "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
     "`NO_WORK` or `BUSY` ends this invocation without mutation.",
     "carrier expired-lock recovery are the only cross-invocation holder-recovery mechanism",
     "Do not replay the command and do not derive recovery state from issue history.",
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
+POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS = (
+    "After a correlated `YIELD` or `REVIEW_UNAVAILABLE` result that releases the holder",
+    "add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
+    "continue the same invocation",
+    "post one new same-`run_id` acquisition TICK carrying the complete current `yielded_task_tokens` set",
+    "This is a new current-state acquisition query, not a replay of an earlier command.",
+    "Repeat only after another correlated release/yield",
+    "Never carry yielded tokens into another Scheduled invocation.",
+    "This bounded yielded-token continuation is what allows candidate-less BUILD, unavailable external review, or another retryable wait to release ownership without starving unrelated eligible work.",
+)
 TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
-    "Fresh acquisition occurred in this Scheduled invocation under its new unique `run_id`",
+    "Fresh acquisition of the current holder occurred in this Scheduled invocation under its unique `run_id`",
+    "current-holder acquisition TICK",
     "post a **second same-`run_id` TICK**",
     "must be no more than **660 seconds old**",
     "Later revalidation TICKs do not reset or renew this clock.",
@@ -271,6 +283,8 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
         raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
     if any(marker not in prompt_text for marker in STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks required state-first transport markers")
+    if any(marker not in prompt_text for marker in POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks required post-yield continuation markers")
     if any(marker not in prompt_text for marker in TARGET_EFFECT_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks target-effect freshness markers")
     if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
