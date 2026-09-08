@@ -9,8 +9,8 @@ import scripts.control_v4_runtime_carrier as carrier_module
 
 WORKFLOW = Path('.github/workflows/control-v4-runtime-carrier.yml')
 CARRIER = Path('scripts/control_v4_runtime_carrier.py')
-RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212:' + ('a' * 32)
-OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212:' + ('b' * 32)
+RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:7c4e91b2d5a83f60:' + ('a' * 32)
+OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:7c4e91b2d5a83f60:' + ('b' * 32)
 
 
 def _workflow_section(text: str, start: str, end: str) -> str:
@@ -77,7 +77,7 @@ def test_stale_or_old_generation_command_is_rejected_before_private_write_capabi
     assert 'CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}' in admission
     assert "CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'" in admission
     assert 'parse_public_command(raw_command)' in admission
-    assert '6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212' in admission
+    assert '6a9a7e0b18b08191876c134d83cfbba2:7c4e91b2d5a83f60' in admission
     assert 'EXPECTED_RUN_ID.fullmatch(command["run_id"])' in admission
     assert '0 <= age_seconds <= max_age' in admission
     assert "output.write(f\"admitted={'true' if admitted else 'false'}\\n\")" in admission
