@@ -48,6 +48,10 @@ Current V4 therefore has no startup scan of public issue history to decide forwa
 
 A lost transport response is not evidence about whether a private transition landed. The next invocation asks current canonical private state again rather than replaying transport history.
 
+### Maintenance-fenced prompt generation changes
+
+The public carrier accepts only the exact reviewed canonical Runner prompt generation. A prompt-generation change across public `control-engine` trust code and private `control-plane` authority is therefore performed under an **outside-Runner maintenance fence**, not by keeping two current prompt hashes trusted in normal operation: disable and read back the same canonical Runner, merge the reviewed public trust generation, trusted-validate and exact-old-SHA adopt the reviewed private authority generation, rebind/read back that same Runner, then re-enable. During the bounded interval between public trust merge and private adoption the Runner remains disabled, so no normal runtime command is expected to succeed against a mixed generation. This avoids a permanent compatibility trust window while preserving one current prompt truth after adoption.
+
 ### Canonical TICK/EVENT wire contract
 
 `control_engine/v4_runtime_protocol.py` is the **single protocol owner** for `CONTROL_V4_RUNTIME_TICK` and `CONTROL_V4_RUNTIME_EVENT`. The workflow transports the raw issue-comment body unchanged; it contains no compatibility parser or alternate EVENT normalizer.
