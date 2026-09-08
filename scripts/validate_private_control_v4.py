@@ -58,6 +58,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
         "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1",
         "f354539a6493bce9269d77fe085300ac4a0c9fa6",
+        "74e265ad8d2e84a11e6097feb2e2e27ff5d1b64c",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -71,13 +72,27 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
     "The schedule is a wake-up mechanism, not runtime state.",
     "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Create one new unique `run_id` for this invocation and an empty invocation-local `yielded_task_tokens` set.",
+    "Then create one new unique `run_id` for this invocation in the exact generation-bound format and an empty invocation-local `yielded_task_tokens` set.",
     "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
     "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
     "`NO_WORK` or `BUSY` ends this invocation without mutation.",
     "carrier expired-lock recovery are the only cross-invocation holder-recovery mechanism",
     "Do not replay the command and do not derive recovery state from issue history.",
     "The next normal Scheduled invocation starts with a fresh TICK",
+)
+COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
+    "runner_command_generation=c06686c07f09e444",
+    "## Pre-acquisition Runner-binding fence",
+    "Before creating a `run_id` or posting any acquisition-capable TICK",
+    "zero public command writes",
+    "6a9a7e0b18b08191876c134d83cfbba2",
+    "runner_command_generation=c06686c07f09e444",
+    "no second enabled Control V4 Runner object is observed",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444:<32-lowercase-hex-random>",
+    "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
+    "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
+    "no later same-`run_id` Control command",
+    "persists no transport cursor or ledger",
 )
 POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS = (
     "After a correlated `YIELD` or `REVIEW_UNAVAILABLE` result that releases the holder",
@@ -283,6 +298,8 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
         raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
     if any(marker not in prompt_text for marker in STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks required state-first transport markers")
+    if any(marker not in prompt_text for marker in COMMAND_BINDING_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks required pre-acquisition command-binding/correlation markers")
     if any(marker not in prompt_text for marker in POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks required post-yield continuation markers")
     if any(marker not in prompt_text for marker in TARGET_EFFECT_PROMPT_REQUIRED_MARKERS):
