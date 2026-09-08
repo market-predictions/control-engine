@@ -21,8 +21,8 @@ jobs:
         github.event.issue.number == 106 &&
         github.event.issue.pull_request == null &&
         (
-          startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {') ||
-          startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')
+          startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK') ||
+          startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')
         )
       }}
     runs-on: ubuntu-latest
