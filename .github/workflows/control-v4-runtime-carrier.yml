@@ -40,36 +40,28 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
 
-      - name: Reject stale, misbound, or superseded command before private capability
+      - name: Reject stale or misbound command before private capability
         id: admission
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
-          CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
           CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'
-          CONTROL_V4_PUBLIC_TOKEN: ${{ github.token }}
-          CONTROL_V4_PUBLIC_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from datetime import datetime, timezone
-          import json
           import os
           import re
-          import urllib.parse
-          import urllib.request
 
           from control_engine.v4_runtime_protocol import RuntimeProtocolError, parse_public_command
 
           EXPECTED_RUN_ID = re.compile(
               r"^v4:6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444:[0-9a-f]{32}$"
           )
-          TRUSTED_COMMAND_ACTOR = "market-predictions"
 
           raw_command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
           try:
-              command_id = int(os.environ["CONTROL_V4_PUBLIC_COMMAND_ID"])
               created_at = datetime.fromisoformat(
                   os.environ["CONTROL_V4_PUBLIC_COMMAND_CREATED_AT"].replace("Z", "+00:00")
               )
@@ -91,56 +83,6 @@ jobs:
               if not 0 <= age_seconds <= max_age:
                   admitted = False
                   reason = "STALE"
-
-              if admitted:
-                  since = urllib.parse.quote(
-                      created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                      safe="",
-                  )
-                  repository = os.environ["CONTROL_V4_PUBLIC_REPOSITORY"]
-                  url = (
-                      f"https://api.github.com/repos/{repository}/issues/106/comments"
-                      f"?since={since}&per_page=100&sort=created&direction=asc"
-                  )
-                  request = urllib.request.Request(
-                      url,
-                      headers={
-                          "Authorization": f"Bearer {os.environ['CONTROL_V4_PUBLIC_TOKEN']}",
-                          "Accept": "application/vnd.github+json",
-                          "X-GitHub-Api-Version": "2022-11-28",
-                          "User-Agent": "control-v4-runtime-command-admission",
-                      },
-                  )
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      comments = json.load(response)
-                      link = response.headers.get("Link", "")
-                  if not isinstance(comments, list):
-                      raise SystemExit("command supersession read invalid")
-                  if 'rel="next"' in link:
-                      raise SystemExit("command supersession window exceeds bounded read")
-
-                  for item in comments:
-                      if not isinstance(item, dict) or item.get("id") == command_id:
-                          continue
-                      user = item.get("user") or {}
-                      if user.get("login") != TRUSTED_COMMAND_ACTOR:
-                          continue
-                      other_body = item.get("body")
-                      other_created_raw = item.get("created_at")
-                      other_id = item.get("id")
-                      if not isinstance(other_body, str) or not isinstance(other_created_raw, str) or not isinstance(other_id, int):
-                          continue
-                      try:
-                          other_created = datetime.fromisoformat(other_created_raw.replace("Z", "+00:00"))
-                          other = parse_public_command(other_body)
-                      except (ValueError, RuntimeProtocolError):
-                          continue
-                      if other.get("run_id") != command["run_id"]:
-                          continue
-                      if other_created > created_at or (other_created == created_at and other_id > command_id):
-                          admitted = False
-                          reason = "SUPERSEDED"
-                          break
 
           print(f"CONTROL_V4_COMMAND_ADMISSION={reason}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -164,7 +106,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
+          CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
         run: python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
