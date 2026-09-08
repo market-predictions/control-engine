@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 import scripts.control_v4_runtime_carrier as carrier
+from control_engine.v4_runtime_protocol import RuntimeProtocolError, parse_public_command
 
 
 WORKFLOW = Path('.github/workflows/control-v4-runtime-carrier.yml')
@@ -22,20 +23,57 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "github.triggering_actor == 'market-predictions'" in text
     assert 'github.event.issue.number == 106' in text
     assert 'github.event.issue.pull_request == null' in text
-    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" in text
-    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" not in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" not in text
 
 
-def test_runtime_carrier_exposes_repository_root_and_raw_comment_to_single_protocol_parser() -> None:
+def test_strict_parser_accepts_canonical_multiline_tick_and_event_and_existing_space_framing() -> None:
+    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:9510d79361e01a74:0123456789abcdef0123456789abcdef'
+    tick_json = '{"run_id":"' + run_id + '","yielded_task_tokens":[]}'
+    event_json = (
+        '{"run_id":"' + run_id + '","task_token":"' + ('a' * 64)
+        + '","event":"YIELD","repository":"market-predictions/control-engine","action":"BUILD"}'
+    )
+
+    assert parse_public_command('CONTROL_V4_RUNTIME_TICK\n' + tick_json) == {
+        'kind': 'TICK',
+        'run_id': run_id,
+        'yielded_task_tokens': [],
+    }
+    assert parse_public_command('CONTROL_V4_RUNTIME_TICK ' + tick_json) == {
+        'kind': 'TICK',
+        'run_id': run_id,
+        'yielded_task_tokens': [],
+    }
+    event = parse_public_command('CONTROL_V4_RUNTIME_EVENT\n' + event_json)
+    assert event['kind'] == 'EVENT'
+    assert event['run_id'] == run_id
+    assert event['event'] == 'YIELD'
+    assert event['task_token'] == 'a' * 64
+
+    with pytest.raises(RuntimeProtocolError):
+        parse_public_command('CONTROL_V4_RUNTIME_TICKX ' + tick_json)
+
+
+def test_runtime_carrier_exposes_raw_comment_to_same_protocol_parser_for_admission_execution_and_supersession() -> None:
     text = WORKFLOW.read_text(encoding='utf-8')
+    admission = text.split('Reject stale or misbound command before private capability', 1)[1].split(
+        'Create exact private runtime capability', 1
+    )[0]
     carrier_step = text.split('Execute bounded typed V4 runtime carrier', 1)[1].split(
         'Publish public-safe carrier result', 1
     )[0]
-    assert 'PYTHONPATH: ${{ github.workspace }}' in carrier_step
+    script = SCRIPT.read_text(encoding='utf-8')
+
+    assert 'CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}' in admission
+    assert 'parse_public_command(raw_command)' in admission
     assert 'CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}' in carrier_step
     assert 'run: python scripts/control_v4_runtime_carrier.py' in carrier_step
-    assert 'Normalize observed V4 Runner compatibility envelope' not in text
-    assert 'object_pairs_hook=unique_object' not in text
+    assert 'other = parse_public_command(other_body)' in script
+    assert 'command = parse_public_command(raw_command)' in script
+    assert 'control_v4_public_command_normalize' not in text + script
 
 
 def test_runtime_carrier_installs_same_pinned_schema_dependency_as_ci() -> None:
