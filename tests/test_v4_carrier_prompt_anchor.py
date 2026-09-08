@@ -25,15 +25,17 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "ab005b25b74c3a79ddff2266d90af60e25ddbb77"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "f984584f7680428db5ecedf414d0bdd518245f1c"
 
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=c06686c07f09e444" in markers
+    assert "runner_command_generation=a9e42156e401b212" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert any("command_comment_id" in marker for marker in markers)
     assert "no later same-`run_id` Control command" in markers
+    assert any("previously unused" in marker for marker in markers)
+    assert any("transition time" in marker for marker in markers)
     assert "persists no transport cursor or ledger" in markers
 
 
