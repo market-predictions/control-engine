@@ -118,7 +118,8 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "e100b7655dd1596f0562820e55a8da2a3358a6a8"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
+    assert "e100b7655dd1596f0562820e55a8da2a3358a6a8" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
@@ -196,7 +197,7 @@ def _commit_fixture(root: Path, message: str = "fixture") -> dict[str, tuple[str
     _git(root, "add", "."); _git(root, "commit", "-qm", message); return validator.committed_tree(root)
 
 def _canonical_prompt_fixture_text() -> str:
-    return "\n".join(("status=ACTIVE_BOUND", *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, ""))
+    return "\n".join(("status=ACTIVE_BOUND", *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, *validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS, ""))
 
 def _write_real_runner_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], str]:
     _init_git_fixture(root)
@@ -223,12 +224,23 @@ def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(mo
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=9510d79361e01a74" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
+    assert "runner_command_generation=965d03fc71359d0e" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
 
 
 def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
     markers = validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS
     assert "### Live-TICK responsibility window" in markers; assert any("do not classify its result as missing" in marker for marker in markers); assert any("created_at` has passed 120 seconds" in marker for marker in markers); assert "Control V4 runtime command <command_comment_id>" in markers; assert "status `completed`" in markers; assert any("final exact-command result read" in marker for marker in markers); assert "The age check alone is never sufficient" in markers; assert any("Never post a replacement TICK" in marker for marker in markers); assert any("carrier-run ledger or runtime state" in marker for marker in markers)
+
+
+def test_holder_closeout_markers_cover_normal_exit_and_drift_paths():
+    markers = validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS
+    assert "HOLDER CLOSEOUT OBLIGATION" in markers
+    assert "### Holder closeout after WORK" in markers
+    assert any("EVENT returns `WORK`" in marker for marker in markers)
+    assert any("CANDIDATE_READY" in marker for marker in markers)
+    assert any("YIELD" in marker for marker in markers)
+    assert any("normal invocation exit" in marker for marker in markers)
+    assert any("missing or ambiguous EVENT" in marker for marker in markers)
 
 
 def _valid_system_index() -> bytes:
