@@ -608,6 +608,33 @@ def _validate_public_ref_for_task(task: Mapping[str, Any], value: str) -> None:
         raise RuntimeProtocolError("public evidence reference is outside exact target PR")
 
 
+def _release_event_holder_boundary(queue: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one queue image in which an accepted EVENT cannot retain its holder."""
+    lock = queue.get("execution_lock")
+    if lock is None:
+        return dict(queue)
+    if not isinstance(lock, Mapping):
+        raise RuntimeProtocolError("EVENT holder identity invalid")
+    if lock.get("run_id") != command["run_id"] or lock.get("task_id") != command["task_id"]:
+        raise RuntimeProtocolError("EVENT transition produced a different holder")
+    released = dict(queue)
+    released["execution_lock"] = None
+    validate_queue_v4(released)
+    return released
+
+
+def _event_result(state: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
+    current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
+    if state["queue"].get("execution_lock") is not None:
+        raise RuntimeProtocolError("accepted EVENT retained execution lock")
+    return {
+        "protocol": RESULT_PROTOCOL_ID,
+        "result": "READY" if current.get("status") == "READY" else "YIELDED",
+        "run_id": command["run_id"],
+        "task_token": task_token(current, command["run_id"]),
+    }
+
+
 def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
     if state["runtime_enabled"] is not True:
         raise StaleEventError("runtime disabled")
@@ -641,13 +668,9 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
             now=now,
         )
         if drifted:
-            state = _write_queue_exact(state, reconciled, reason="candidate-drift-to-repair")
-            return state, safe_work_capsule(
-                state["queue"],
-                task_id=command["task_id"],
-                run_id=command["run_id"],
-                live_candidate=live_candidate,
-            )
+            next_queue = _release_event_holder_boundary(reconciled, command)
+            state = _write_queue_exact(state, next_queue, reason="candidate-drift-to-repair")
+            return state, _event_result(state, command)
 
     if event == "YIELD":
         next_queue = yield_holder_v4(queue, command, now=now)
@@ -681,28 +704,10 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
     else:  # pragma: no cover
         raise RuntimeProtocolError("unsupported event")
 
+    next_queue = _release_event_holder_boundary(next_queue, command)
     if next_queue != queue:
         state = _write_queue_exact(state, next_queue, reason=event.lower().replace("_", "-"))
-
-    current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
-    lock = state["queue"].get("execution_lock")
-    if isinstance(lock, Mapping) and lock.get("run_id") == command["run_id"] and lock.get("task_id") == command["task_id"]:
-        live_candidate = None
-        if isinstance(current.get("candidate"), Mapping) and current.get("phase") == "REPAIR":
-            live_candidate = _target_pr_candidate(current["repository"], current["candidate"]["candidate_pr_number"])
-        return state, safe_work_capsule(
-            state["queue"],
-            task_id=command["task_id"],
-            run_id=command["run_id"],
-            live_candidate=live_candidate,
-        )
-
-    return state, {
-        "protocol": RESULT_PROTOCOL_ID,
-        "result": "READY" if current.get("status") == "READY" else "YIELDED",
-        "run_id": command["run_id"],
-        "task_token": task_token(current, command["run_id"]),
-    }
+    return state, _event_result(state, command)
 
 
 def _set_outputs(result: Mapping[str, Any], *, ok: bool) -> None:
