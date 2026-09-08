@@ -25,7 +25,7 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "97bb8a66d2cd6a55c8c81e0b48542e32b9586e6c"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "ab005b25b74c3a79ddff2266d90af60e25ddbb77"
 
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
