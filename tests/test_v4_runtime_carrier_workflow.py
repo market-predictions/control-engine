@@ -22,8 +22,22 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "github.triggering_actor == 'market-predictions'" in text
     assert 'github.event.issue.number == 106' in text
     assert 'github.event.issue.pull_request == null' in text
-    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" in text
-    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" not in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" not in text
+
+
+def test_runtime_carrier_trigger_accepts_runner_multiline_envelope_before_strict_parser() -> None:
+    text = WORKFLOW.read_text(encoding='utf-8')
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK')" in text
+    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
+    admission = text.split('Reject stale or misbound command before private capability', 1)[1].split(
+        'Create exact private runtime capability', 1
+    )[0]
+    assert 'parse_public_command(raw_command)' in admission
+    assert 'command admission identity invalid' in admission
+    assert "output.write(f\"admitted={'true' if admitted else 'false'}\\n\")" in admission
 
 
 def test_runtime_carrier_exposes_repository_root_and_raw_comment_to_single_protocol_parser() -> None:
