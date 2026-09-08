@@ -13,8 +13,8 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
     "The schedule is a wake-up mechanism, not runtime state.",
     "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Create one new unique `run_id` for this invocation.",
-    "Immediately post exactly one fresh `CONTROL_V4_RUNTIME_TICK`",
+    "Create one new unique `run_id` for this invocation and an empty invocation-local `yielded_task_tokens` set.",
+    "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
     "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
     "`NO_WORK` or `BUSY` ends this invocation without mutation.",
     "carrier expired-lock recovery are the only cross-invocation holder-recovery mechanism",
@@ -25,7 +25,7 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "f354539a6493bce9269d77fe085300ac4a0c9fa6"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "74e265ad8d2e84a11e6097feb2e2e27ff5d1b64c"
 
 
 @pytest.mark.parametrize("obsolete_hash", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))
