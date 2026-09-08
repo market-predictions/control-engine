@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.control_v4_public_command_normalize as envelope
 import scripts.control_v4_runtime_carrier as carrier
 
 
@@ -28,28 +29,48 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" not in text
 
 
-def test_runtime_carrier_trigger_accepts_runner_multiline_envelope_before_strict_parser() -> None:
+def test_runner_multiline_tick_and_event_are_normalized_before_strict_parser() -> None:
+    tick_payload = '{"run_id":"v4:runner:generation:0123456789abcdef0123456789abcdef","yielded_task_tokens":[]}'
+    event_payload = '{"run_id":"run","task_token":"' + ('a' * 64) + '","event":"YIELD","repository":"market-predictions/control-engine","action":"BUILD"}'
+
+    assert envelope.normalize_public_command_envelope(
+        'CONTROL_V4_RUNTIME_TICK\n' + tick_payload
+    ) == 'CONTROL_V4_RUNTIME_TICK ' + tick_payload
+    assert envelope.normalize_public_command_envelope(
+        'CONTROL_V4_RUNTIME_EVENT\n' + event_payload
+    ) == 'CONTROL_V4_RUNTIME_EVENT ' + event_payload
+    assert envelope.normalize_public_command_envelope(
+        'CONTROL_V4_RUNTIME_TICK ' + tick_payload
+    ) == 'CONTROL_V4_RUNTIME_TICK ' + tick_payload
+
+    with pytest.raises(envelope.PublicCommandEnvelopeError):
+        envelope.normalize_public_command_envelope('CONTROL_V4_RUNTIME_TICKX ' + tick_payload)
+    with pytest.raises(envelope.PublicCommandEnvelopeError):
+        envelope.normalize_public_command_envelope('CONTROL_V4_RUNTIME_TICK\n\n' + tick_payload)
+
+
+def test_runtime_carrier_uses_one_normalized_command_for_admission_and_execution() -> None:
     text = WORKFLOW.read_text(encoding='utf-8')
-    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK')" in text
-    assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
+    normalize = text.split('Normalize canonical Runner command envelope', 1)[1].split(
+        'Reject stale or misbound command before private capability', 1
+    )[0]
     admission = text.split('Reject stale or misbound command before private capability', 1)[1].split(
         'Create exact private runtime capability', 1
     )[0]
-    assert 'parse_public_command(raw_command)' in admission
-    assert 'command admission identity invalid' in admission
-    assert "output.write(f\"admitted={'true' if admitted else 'false'}\\n\")" in admission
-
-
-def test_runtime_carrier_exposes_repository_root_and_raw_comment_to_single_protocol_parser() -> None:
-    text = WORKFLOW.read_text(encoding='utf-8')
     carrier_step = text.split('Execute bounded typed V4 runtime carrier', 1)[1].split(
         'Publish public-safe carrier result', 1
     )[0]
-    assert 'PYTHONPATH: ${{ github.workspace }}' in carrier_step
-    assert 'CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}' in carrier_step
-    assert 'run: python scripts/control_v4_runtime_carrier.py' in carrier_step
-    assert 'Normalize observed V4 Runner compatibility envelope' not in text
-    assert 'object_pairs_hook=unique_object' not in text
+
+    assert 'CONTROL_V4_PUBLIC_COMMAND_RAW: ${{ github.event.comment.body }}' in normalize
+    assert 'run: python scripts/control_v4_public_command_normalize.py' in normalize
+    assert 'CONTROL_V4_NORMALIZED_COMMAND_PATH: ${{ runner.temp }}/control-v4-public-command.txt' in normalize
+    assert 'Path(os.environ["CONTROL_V4_NORMALIZED_COMMAND_PATH"]).read_text' in admission
+    assert 'parse_public_command(raw_command)' in admission
+    assert 'CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}' not in admission
+    assert 'CONTROL_V4_NORMALIZED_COMMAND_PATH: ${{ runner.temp }}/control-v4-public-command.txt' in carrier_step
+    assert 'export CONTROL_V4_PUBLIC_COMMAND="$(cat "$CONTROL_V4_NORMALIZED_COMMAND_PATH")"' in carrier_step
+    assert 'python scripts/control_v4_runtime_carrier.py' in carrier_step
+    assert 'CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}' not in carrier_step
 
 
 def test_runtime_carrier_installs_same_pinned_schema_dependency_as_ci() -> None:
