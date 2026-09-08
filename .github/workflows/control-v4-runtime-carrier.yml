@@ -1,4 +1,5 @@
 name: Control V4 Runtime Carrier
+run-name: Control V4 runtime command ${{ github.event.comment.id }}
 
 on:
   issue_comment:
@@ -40,7 +41,57 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
 
+      - name: Reject stale or misbound command before private capability
+        id: admission
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
+          CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          import os
+          import re
+
+          from control_engine.v4_runtime_protocol import RuntimeProtocolError, parse_public_command
+
+          EXPECTED_RUN_ID = re.compile(
+              r"^v4:6a9a7e0b18b08191876c134d83cfbba2:9510d79361e01a74:[0-9a-f]{32}$"
+          )
+
+          raw_command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
+          try:
+              created_at = datetime.fromisoformat(
+                  os.environ["CONTROL_V4_PUBLIC_COMMAND_CREATED_AT"].replace("Z", "+00:00")
+              )
+              command = parse_public_command(raw_command)
+          except (KeyError, TypeError, ValueError, RuntimeProtocolError) as exc:
+              raise SystemExit("command admission identity invalid") from exc
+          if created_at.tzinfo is None:
+              raise SystemExit("command admission timestamp must be timezone-aware")
+
+          admitted = EXPECTED_RUN_ID.fullmatch(command["run_id"]) is not None
+          reason = "PASS" if admitted else "RUNNER_GENERATION_MISMATCH"
+
+          if admitted and command["kind"] == "TICK":
+              try:
+                  max_age = int(os.environ["CONTROL_V4_TICK_MAX_AGE_SECONDS"])
+              except (KeyError, TypeError, ValueError) as exc:
+                  raise SystemExit("TICK max age invalid") from exc
+              age_seconds = (datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)).total_seconds()
+              if not 0 <= age_seconds <= max_age:
+                  admitted = False
+                  reason = "STALE"
+
+          print(f"CONTROL_V4_COMMAND_ADMISSION={reason}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"admitted={'true' if admitted else 'false'}\n")
+          PY
+
       - name: Create exact private runtime capability
+        if: ${{ steps.admission.outputs.admitted == 'true' }}
         id: private-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -51,11 +102,15 @@ jobs:
           permission-contents: write
 
       - name: Execute bounded typed V4 runtime carrier
+        if: ${{ steps.admission.outputs.admitted == 'true' }}
         id: carrier
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
+          CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
         run: python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
@@ -63,6 +118,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+          COMMAND_COMMENT_ID: ${{ github.event.comment.id }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -71,7 +127,12 @@ jobs:
           import os
           import urllib.request
 
-          body = f"CONTROL_V4_RUNTIME_RESULT {os.environ['RESULT_JSON']}"
+          payload = json.loads(os.environ["RESULT_JSON"])
+          if not isinstance(payload, dict) or "command_comment_id" in payload:
+              raise SystemExit("carrier result envelope invalid")
+          payload["command_comment_id"] = int(os.environ["COMMAND_COMMENT_ID"])
+          result_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+          body = f"CONTROL_V4_RUNTIME_RESULT {result_json}"
           request = urllib.request.Request(
               f"https://api.github.com/repos/{os.environ['REPOSITORY']}/issues/106/comments",
               data=json.dumps({"body": body}, separators=(",", ":")).encode("utf-8"),

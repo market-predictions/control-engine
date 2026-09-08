@@ -14,6 +14,13 @@ PREDECESSOR_PROMPT_BLOB_SHAS = (
     "804c8570141934c5a0b5fa86583c867995ce51f4",
     "fe269bf84744629eca133937854ee284239cbcc9",
     "f9d3b1f1158aa0c84b486120f22b5173417f54e7",
+    "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1",
+    "f354539a6493bce9269d77fe085300ac4a0c9fa6",
+    "74e265ad8d2e84a11e6097feb2e2e27ff5d1b64c",
+    "97bb8a66d2cd6a55c8c81e0b48542e32b9586e6c",
+    "ab005b25b74c3a79ddff2266d90af60e25ddbb77",
+    "f984584f7680428db5ecedf414d0bdd518245f1c",
+    "04e7dbb577e1dbe630a1422d7b38dff2fd337e3c",
 )
 PROMPT_TEXT = "\n".join(
     (
@@ -53,12 +60,12 @@ def _binding(prompt_blob_sha: str):
     )
 
 
-def test_runtime_binding_accepts_only_current_canonical_prompt_wire_contract() -> None:
-    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+def test_runtime_binding_accepts_only_final_unique_generation_runner_prompt() -> None:
+    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "e100b7655dd1596f0562820e55a8da2a3358a6a8"
     assert _binding(CANONICAL_RUNNER_PROMPT_BLOB_SHA) == (True, False)
 
 
 @pytest.mark.parametrize("prompt_blob_sha", PREDECESSOR_PROMPT_BLOB_SHAS)
-def test_runtime_binding_rejects_every_predecessor_prompt_after_wire_cutover(prompt_blob_sha: str) -> None:
+def test_runtime_binding_rejects_every_predecessor_prompt(prompt_blob_sha: str) -> None:
     with pytest.raises(RuntimeProtocolError, match="runner prompt wire contract is not current"):
         _binding(prompt_blob_sha)

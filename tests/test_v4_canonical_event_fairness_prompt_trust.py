@@ -8,16 +8,18 @@ from scripts import validate_private_control_v4 as validator
 def _trusted_prompt() -> str:
     return "\n".join(
         (
-            *validator.CARRIER_PROMPT_REQUIRED_MARKERS,
-            *validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS,
-            *validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS,
+            *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
+            *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS,
+            *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS,
+            *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS,
+            *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
         )
     )
 
 
-def test_canonical_event_fairness_prompt_has_exact_public_trust_anchor() -> None:
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "0a536651ad3096e2c6de44e6dd25d0cea14ec8e1"
+def test_stateless_runner_prompt_has_exact_public_trust_anchor() -> None:
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "e100b7655dd1596f0562820e55a8da2a3358a6a8"
     validator._validate_prompt_trust(
         _trusted_prompt(),
         validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
@@ -25,10 +27,10 @@ def test_canonical_event_fairness_prompt_has_exact_public_trust_anchor() -> None
 
 
 @pytest.mark.parametrize("prompt_oid", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))
-def test_all_predecessor_runner_prompt_hashes_are_rejected_after_wire_cutover(prompt_oid: str) -> None:
+def test_all_predecessor_runner_prompt_hashes_are_rejected(prompt_oid: str) -> None:
     with pytest.raises(
         validator.ValidationError,
-        match="obsolete Runner prompt is not trusted by the current canonical EVENT wire contract",
+        match="obsolete Runner prompt is not trusted by the current stateless transport contract",
     ):
         validator._validate_prompt_trust("", prompt_oid)
 
@@ -36,20 +38,32 @@ def test_all_predecessor_runner_prompt_hashes_are_rejected_after_wire_cutover(pr
 @pytest.mark.parametrize(
     "markers,error",
     [
-        (validator.CARRIER_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks required carrier transport markers"),
-        (validator.POST_LEASE_EVENT_RECOVERY_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks post-lease recovery markers"),
-        (validator.CANONICAL_EVENT_TIMESTAMP_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks exact-comment timestamp markers"),
-        (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "canonical EVENT Runner prompt lacks exact wire/fairness markers"),
+        (validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required state-first transport markers"),
+        (validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required pre-acquisition command-binding/correlation markers"),
+        (validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required live-TICK responsibility markers"),
+        (validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required post-yield continuation markers"),
+        (validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks target-effect freshness markers"),
+        (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks canonical EVENT/fairness markers"),
     ],
 )
-def test_canonical_event_fairness_prompt_fails_closed_without_each_required_marker(markers, error) -> None:
-    for marker in markers:
-        # Remove every occurrence: some canonical marker phrases are intentionally
-        # repeated across marker families, and leaving another occurrence would
-        # not actually test absence of the required semantic marker.
+def test_stateless_runner_prompt_fails_closed_without_each_required_marker(markers, error) -> None:
+    for marker in dict.fromkeys(markers):
         prompt = _trusted_prompt().replace(marker, "")
         with pytest.raises(validator.ValidationError, match=error):
             validator._validate_prompt_trust(
                 prompt,
                 validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
             )
+
+
+@pytest.mark.parametrize("obsolete_marker", validator.OBSOLETE_TRANSPORT_RECOVERY_MARKERS)
+def test_current_runner_prompt_rejects_obsolete_public_history_recovery_semantics(obsolete_marker: str) -> None:
+    prompt = _trusted_prompt() + "\n" + obsolete_marker
+    with pytest.raises(
+        validator.ValidationError,
+        match="current Runner prompt retains obsolete public-history recovery semantics",
+    ):
+        validator._validate_prompt_trust(
+            prompt,
+            validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
+        )
