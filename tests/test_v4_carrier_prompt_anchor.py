@@ -13,7 +13,7 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
     "The schedule is a wake-up mechanism, not runtime state.",
     "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Create one new unique `run_id` for this invocation and an empty invocation-local `yielded_task_tokens` set.",
+    "Then create one new unique `run_id` for this invocation in the exact generation-bound format and an empty invocation-local `yielded_task_tokens` set.",
     "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
     "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
     "`NO_WORK` or `BUSY` ends this invocation without mutation.",
@@ -25,7 +25,16 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "74e265ad8d2e84a11e6097feb2e2e27ff5d1b64c"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "97bb8a66d2cd6a55c8c81e0b48542e32b9586e6c"
+
+
+def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
+    markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
+    assert "runner_command_generation=c06686c07f09e444" in markers
+    assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
+    assert any("command_comment_id" in marker for marker in markers)
+    assert "no later same-`run_id` Control command" in markers
+    assert "persists no transport cursor or ledger" in markers
 
 
 @pytest.mark.parametrize("obsolete_hash", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))
