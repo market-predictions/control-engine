@@ -14,12 +14,13 @@ def _trusted_prompt() -> str:
             *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS,
             *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
+            *validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS,
         )
     )
 
 
 def test_stateless_runner_prompt_has_exact_public_trust_anchor() -> None:
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "e100b7655dd1596f0562820e55a8da2a3358a6a8"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
     validator._validate_prompt_trust(
         _trusted_prompt(),
         validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
@@ -44,6 +45,7 @@ def test_all_predecessor_runner_prompt_hashes_are_rejected(prompt_oid: str) -> N
         (validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required post-yield continuation markers"),
         (validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks target-effect freshness markers"),
         (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks canonical EVENT/fairness markers"),
+        (validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks holder-closeout markers"),
     ],
 )
 def test_stateless_runner_prompt_fails_closed_without_each_required_marker(markers, error) -> None:

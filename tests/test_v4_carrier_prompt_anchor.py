@@ -25,12 +25,12 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "e100b7655dd1596f0562820e55a8da2a3358a6a8"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
 
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=9510d79361e01a74" in markers
+    assert "runner_command_generation=965d03fc71359d0e" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert any("command_comment_id" in marker for marker in markers)
     assert "no later same-`run_id` Control command" in markers
@@ -50,6 +50,17 @@ def test_live_tick_responsibility_markers_close_abandoned_fresh_tick_window():
     assert "The age check alone is never sufficient" in markers
     assert any("Never post a replacement TICK" in marker for marker in markers)
     assert any("carrier-run ledger or runtime state" in marker for marker in markers)
+
+
+def test_holder_closeout_markers_are_part_of_current_prompt_trust():
+    markers = validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS
+    assert "HOLDER CLOSEOUT OBLIGATION" in markers
+    assert "### Holder closeout after WORK" in markers
+    assert any("EVENT returns `WORK`" in marker for marker in markers)
+    assert any("CANDIDATE_READY" in marker for marker in markers)
+    assert any("YIELD" in marker for marker in markers)
+    assert any("normal invocation exit" in marker for marker in markers)
+    assert any("missing or ambiguous EVENT" in marker for marker in markers)
 
 
 @pytest.mark.parametrize("obsolete_hash", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))

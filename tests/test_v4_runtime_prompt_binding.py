@@ -21,6 +21,7 @@ PREDECESSOR_PROMPT_BLOB_SHAS = (
     "ab005b25b74c3a79ddff2266d90af60e25ddbb77",
     "f984584f7680428db5ecedf414d0bdd518245f1c",
     "04e7dbb577e1dbe630a1422d7b38dff2fd337e3c",
+    "e100b7655dd1596f0562820e55a8da2a3358a6a8",
 )
 PROMPT_TEXT = "\n".join(
     (
@@ -61,7 +62,7 @@ def _binding(prompt_blob_sha: str):
 
 
 def test_runtime_binding_accepts_only_final_unique_generation_runner_prompt() -> None:
-    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "e100b7655dd1596f0562820e55a8da2a3358a6a8"
+    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
     assert _binding(CANONICAL_RUNNER_PROMPT_BLOB_SHA) == (True, False)
 
 

@@ -32,7 +32,7 @@ Public issue comments are transport/audit evidence only. They never become queue
 
 A Scheduled invocation must not obtain acquisition authority merely because it contains text that resembles the Runner prompt. Before the invocation posts its first TICK, the canonical Runner prompt requires a read-only scheduler readback of the exact reviewed automation object, exact `:30` schedule, enabled state, current prompt identity/generation, and absence of a second enabled Control V4 Runner. Failure means zero public command writes.
 
-The current command generation is `9510d79361e01a74`. Predecessor generation `7c4e91b2d5a83f60` is historical only. A generation is not a reusable descriptive label: any canonical Runner prompt change that can alter command authority, acquisition, command correlation or target-effect behavior requires a new previously unused generation before adoption.
+The current command generation is `965d03fc71359d0e`. Predecessor generation `9510d79361e01a74` is historical only. A generation is not a reusable descriptive label: any canonical Runner prompt change that can alter command authority, acquisition, command correlation, holder-closeout or target-effect behavior requires a new previously unused generation before adoption.
 
 This platform readback is an **operational generation/binding fence**, not a new source of Control runtime authority and not a cryptographic per-invocation credential: the platform exposes no stable Scheduled credential identifier that can be committed as authority. The complete boundary therefore remains fail-closed and layered:
 
@@ -100,6 +100,16 @@ This **live-TICK responsibility window** is invocation-local control flow, not r
 Current V4 therefore has no startup scan of public issue history to decide forward progress, no unresolved-TICK or unresolved-EVENT runtime state, no same-command replay loop, no public replay clock, no public EVENT-retirement/spent-identity clock, no transport cursor/retry ledger, and no cross-invocation holder reconstruction from public comments.
 
 A lost transport response is not evidence about whether a private transition landed. For TICK, only after the exact correlated carrier run is terminal and the post-terminal final exact-command read still finds no result may that invocation classify the result missing; a later invocation then asks current canonical private state again rather than replaying transport history.
+
+### Holder closeout after WORK
+
+A trusted `WORK` result creates an invocation-local **holder-closeout obligation**. The Runner must not normally end while that exact acquired holder is still live merely because reasoning, target facts, candidate drift, time pressure, or a safe target effect cannot proceed.
+
+After WORK, the Runner consumes correlated semantic EVENT results until that holder is released or the lifecycle transitions. If an EVENT returns `WORK`, it is not closeout: the holder remains live and same-holder processing continues.
+
+For REPAIR candidate drift, the Runner first performs bounded read-only target reconciliation. A safely reviewable already-published candidate on the same governed PR, head branch and base context is reconciled with exactly one existing `CANDIDATE_READY` EVENT populated from the exact `live_candidate` fields; no duplicate target write is required. Ambiguous, out-of-scope, wrong-identity or otherwise unreconcilable drift is closed out with exactly one existing `YIELD` EVENT while the holder remains valid. More generally, before any normal exit after WORK, a still-live holder with no safe semantic progress EVENT must be YIELDed and the correlated result consumed.
+
+A missing or ambiguous EVENT result remains fail-closed transport ambiguity. The Runner never blind-replays that EVENT and never fabricates holder-closeout evidence. This obligation is invocation-local and derives only from the trusted WORK and exact correlated EVENT results; it never reconstructs private holder state from public history. The rule reuses existing transitions and adds no scheduler, queue, state plane, recovery ledger, cancellation protocol, lease renewal or carrier semantic authority.
 
 ### Maintenance-fenced prompt generation changes
 
