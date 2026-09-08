@@ -56,7 +56,9 @@ live foreign lock -> BUSY
 
 A TICK has acquisition authority only while its immutable GitHub issue-comment `created_at` is current. The carrier workflow first enforces a **120-second maximum TICK age before it issues the scoped private write capability**. It also rejects any command whose `run_id` is not bound to the exact current Runner object/prompt generation. A TICK with an invalid, future, already-old, or wrong-generation identity therefore cannot obtain private capability.
 
-That outer admission is necessary but not sufficient: private-authority and correlation reads consume time. After the carrier has loaded current private authority/queue state and performed the bounded same-run supersession check, it captures a fresh transition time and re-evaluates the **same immutable GitHub `created_at`** against the exact closed interval **0..120 seconds immediately before `_tick()`**. A TICK that entered the workflow just inside the age limit but aged out during network/private reads is rejected before acquisition or private mutation. Both age checks are stateless.
+That outer admission is necessary but not sufficient: private-authority and correlation reads consume time. After the carrier has loaded current private authority/queue state and performed the bounded same-run supersession check, it captures a fresh transition time and re-evaluates the **same immutable GitHub `created_at`** against the exact closed interval **0..120 seconds immediately before `_tick()`**. A TICK that entered the workflow just inside the age limit but aged out during those reads is rejected before transition.
+
+A TICK transition may still need private Git-object construction before a queue write becomes durable. Therefore every central `_update_refs_exact` call reparses the current typed public command and, when it is a TICK, rechecks that same immutable `created_at` again using fresh UTC time **immediately before the GraphQL `updateRefs` mutation**. A TICK that ages out while blob/tree/commit material is being prepared is rejected before the durable private ref CAS. EVENT-driven ref CAS remains governed by exact current-holder/lease/candidate semantics and is not subjected to the TICK age fence. All three TICK age checks are stateless and persist nothing.
 
 Same-invocation TICKs intentionally retain one `run_id` so invocation-local yielded-task exclusions remain stable. The unique command identity is instead the immutable GitHub command-comment id. Every published carrier result echoes that triggering id as `command_comment_id`; the Runner accepts a result only when it matches the exact command comment it just posted. This prevents a result from an earlier same-run TICK or EVENT from being mistaken for the current command result.
 
@@ -71,12 +73,14 @@ bounded immutable-command supersession check
         ↓
 transition-time immutable-created_at freshness recheck (0..120s)
         ↓
-typed TICK transition
+typed TICK transition / prepare exact queue commit
+        ↓
+durable-CAS immutable-created_at freshness recheck (0..120s)
         ↓
 exact private old-ref/blob CAS + readback
 ```
 
-That ordering closes both time and concurrency races without a transport state machine: a release that landed before the snapshot is visible as a later command and supersedes the old TICK; a release that occurs after the snapshot leaves the loaded queue holding the same run and therefore the old TICK does not perform a fresh acquisition; a command that ages out during reads is rejected before transition; any concurrent private write that invalidates the snapshot is rejected by the existing exact CAS.
+That ordering closes the relevant time and concurrency races without a transport state machine: a release that landed before the snapshot is visible as a later command and supersedes the old TICK; a release that occurs after the snapshot leaves the loaded queue holding the same run and therefore the old TICK does not perform a fresh acquisition; a command that ages out during private reads or Git-object preparation is rejected before durable mutation; any concurrent private write that invalidates the snapshot is rejected by the existing exact CAS.
 
 `BUSY`, `NO_WORK`, a missing/ambiguous result, or another fail-closed transport outcome ends only that invocation. A later normal Scheduled wake starts again with a new fresh TICK. The private queue's fixed non-renewable 5400-second lease plus carrier-side objectively expired-lock recovery is the sole cross-invocation holder/crash-recovery mechanism.
 
@@ -115,7 +119,7 @@ The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/r
 
 ## Consequential target effects
 
-Transport success does not authorize a target mutation. Any non-transport target/review write additionally requires fresh acquisition in the current Scheduled invocation, exact same-run pre-effect revalidation, bounded freshness/time windows, current target identity, sufficient remaining private lease, and mandatory exact effect readback. The second same-run TICK is revalidation only and never renews the fixed private lease. It must itself pass both TICK age boundaries, and its result must carry the exact triggering `command_comment_id`, so a stale or late result from an older same-run TICK cannot satisfy the pre-effect fence.
+Transport success does not authorize a target mutation. Any non-transport target/review write additionally requires fresh acquisition in the current Scheduled invocation, exact same-run pre-effect revalidation, bounded freshness/time windows, current target identity, sufficient remaining private lease, and mandatory exact effect readback. The second same-run TICK is revalidation only and never renews the fixed private lease. It must itself pass all TICK age boundaries, and its result must carry the exact triggering `command_comment_id`, so a stale or late result from an older same-run TICK cannot satisfy the pre-effect fence.
 
 Lost, timed-out or ambiguous side effects are reconciled fact-first and never blindly retried.
 
