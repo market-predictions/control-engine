@@ -128,7 +128,7 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "f984584f7680428db5ecedf414d0bdd518245f1c"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "04e7dbb577e1dbe630a1422d7b38dff2fd337e3c"
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
@@ -278,6 +278,7 @@ def _canonical_prompt_fixture_text() -> str:
             "status=ACTIVE_BOUND",
             *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
             *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS,
+            *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS,
             *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS,
             *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
@@ -363,13 +364,22 @@ def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=a9e42156e401b212" in markers
+    assert "runner_command_generation=7c4e91b2d5a83f60" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert any("command_comment_id" in marker for marker in markers)
     assert "no later same-`run_id` Control command" in markers
     assert any("previously unused" in marker for marker in markers)
     assert any("transition time" in marker for marker in markers)
     assert "persists no transport cursor or ledger" in markers
+
+
+def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
+    markers = validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS
+    assert "### Live-TICK responsibility window" in markers
+    assert any("do not classify its result as missing" in marker for marker in markers)
+    assert any("strictly more than **120 seconds old**" in marker for marker in markers)
+    assert any("final exact-command result read" in marker for marker in markers)
+    assert any("Never post a replacement TICK" in marker for marker in markers)
 
 
 def _valid_system_index() -> bytes:
