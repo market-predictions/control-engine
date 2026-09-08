@@ -23,6 +23,8 @@ from control_engine.v4_contracts import (
 RESULT_PROTOCOL_ID = "CONTROL_V4_RUNTIME_RESULT_V1"
 TICK_PREFIX = "CONTROL_V4_RUNTIME_TICK "
 EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
+TICK_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_TICK\n"
+EVENT_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_EVENT\n"
 PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
 CANONICAL_RUNNER_PROMPT_BLOB_SHA = "e100b7655dd1596f0562820e55a8da2a3358a6a8"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
@@ -164,11 +166,19 @@ def _public_ref(value: object) -> str:
     return value
 
 
+def _payload_after_command_prefix(comment_body: str, prefixes: Sequence[str]) -> str | None:
+    for prefix in prefixes:
+        if comment_body.startswith(prefix):
+            return comment_body[len(prefix):]
+    return None
+
+
 def parse_public_command(comment_body: str) -> dict[str, Any]:
     if not isinstance(comment_body, str):
         raise RuntimeProtocolError("comment body invalid")
-    if comment_body.startswith(TICK_PREFIX):
-        payload = strict_json_object(comment_body[len(TICK_PREFIX):])
+    tick_payload = _payload_after_command_prefix(comment_body, (TICK_PREFIX, TICK_NEWLINE_PREFIX))
+    if tick_payload is not None:
+        payload = strict_json_object(tick_payload)
         _exact_keys(payload, {"run_id", "yielded_task_tokens"}, {"run_id"})
         run_id = _run_id(payload["run_id"])
         yielded = payload.get("yielded_task_tokens", [])
@@ -182,8 +192,9 @@ def parse_public_command(comment_body: str) -> dict[str, Any]:
             clean.append(token)
         return {"kind": "TICK", "run_id": run_id, "yielded_task_tokens": clean}
 
-    if comment_body.startswith(EVENT_PREFIX):
-        payload = strict_json_object(comment_body[len(EVENT_PREFIX):])
+    event_payload = _payload_after_command_prefix(comment_body, (EVENT_PREFIX, EVENT_NEWLINE_PREFIX))
+    if event_payload is not None:
+        payload = strict_json_object(event_payload)
         common = {"run_id", "task_token", "event", "repository", "action", "candidate"}
         event = payload.get("event")
         if event not in EVENTS:
