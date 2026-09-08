@@ -60,6 +60,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "f354539a6493bce9269d77fe085300ac4a0c9fa6",
         "74e265ad8d2e84a11e6097feb2e2e27ff5d1b64c",
         "ab005b25b74c3a79ddff2266d90af60e25ddbb77",
+        "f984584f7680428db5ecedf414d0bdd518245f1c",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -82,19 +83,29 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=a9e42156e401b212",
+    "runner_command_generation=7c4e91b2d5a83f60",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
     "6a9a7e0b18b08191876c134d83cfbba2",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:7c4e91b2d5a83f60:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
     "no later same-`run_id` Control command",
     "a TICK older than 120 seconds at transition time is rejected before `_tick()` can acquire or mutate private runtime state.",
     "persists no transport cursor or ledger",
+)
+LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS = (
+    "### Live-TICK responsibility window",
+    "Every acquisition-capable TICK posted by this invocation",
+    "do not classify its result as missing, do not end the invocation, and do not abandon responsibility",
+    "strictly more than **120 seconds old**",
+    "a final exact-command result read performed after that expiry still finds no correlated result",
+    "Only case (b) may be treated as a missing TICK result and end the invocation.",
+    "Never post a replacement TICK merely because the current one is slow.",
+    "persists no timer, cursor, retry record, scheduler state or runtime state",
 )
 POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS = (
     "After a correlated `YIELD` or `REVIEW_UNAVAILABLE` result that releases the holder",
@@ -302,6 +313,8 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
         raise ValidationError("current Runner prompt lacks required state-first transport markers")
     if any(marker not in prompt_text for marker in COMMAND_BINDING_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks required pre-acquisition command-binding/correlation markers")
+    if any(marker not in prompt_text for marker in LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks required live-TICK responsibility markers")
     if any(marker not in prompt_text for marker in POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks required post-yield continuation markers")
     if any(marker not in prompt_text for marker in TARGET_EFFECT_PROMPT_REQUIRED_MARKERS):
@@ -440,4 +453,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    sys.exit(main(sys.argv))
