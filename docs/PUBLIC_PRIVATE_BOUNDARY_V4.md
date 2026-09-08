@@ -99,7 +99,7 @@ Normal runtime trusts one current prompt hash and one current generation. A prom
 
 The V1 carrier remains activation-bounded to `integration_enabled=false` and publicly readable target repositories. It does not merge, deploy or converge. V3.1 semantic runtime writers remain retired. The one mutable private state file remains `control-plane@control-runtime-state:control/DISPATCH_QUEUE.json`; Git history remains mutation audit history.
 
-`ENGINE_MANIFEST.json` is component-local and `semantic_runtime_authority=false` means the public engine does not own Control semantics. Current global status must be reconstructed from current private V4 authority and the canonical private queue, with bounded target evidence as needed.
+`ENGINE_MANIFEST.json` is the component-local manifest, and `semantic_runtime_authority=false` means the public engine does not own Control semantics. Current global status must be reconstructed from current private V4 authority and the canonical private queue, with bounded target evidence as needed.
 
 Same-Runner BUILD/REVIEW/REPAIR remains semantic execution; external review evidence is used only when Mission policy requires it. Provider/quota/transport unavailability cannot manufacture PASS. Candidate/head/base drift remains deterministic GitHub evidence.
 
