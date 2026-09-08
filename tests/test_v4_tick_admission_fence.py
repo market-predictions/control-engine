@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -8,8 +9,8 @@ import scripts.control_v4_runtime_carrier as carrier_module
 
 WORKFLOW = Path('.github/workflows/control-v4-runtime-carrier.yml')
 CARRIER = Path('scripts/control_v4_runtime_carrier.py')
-RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444:' + ('a' * 32)
-OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444:' + ('b' * 32)
+RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212:' + ('a' * 32)
+OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212:' + ('b' * 32)
 
 
 def _workflow_section(text: str, start: str, end: str) -> str:
@@ -76,7 +77,7 @@ def test_stale_or_old_generation_command_is_rejected_before_private_write_capabi
     assert 'CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}' in admission
     assert "CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'" in admission
     assert 'parse_public_command(raw_command)' in admission
-    assert '6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444' in admission
+    assert '6a9a7e0b18b08191876c134d83cfbba2:a9e42156e401b212' in admission
     assert 'EXPECTED_RUN_ID.fullmatch(command["run_id"])' in admission
     assert '0 <= age_seconds <= max_age' in admission
     assert "output.write(f\"admitted={'true' if admitted else 'false'}\\n\")" in admission
@@ -101,21 +102,50 @@ def test_pre_capability_fence_does_not_reconstruct_public_history() -> None:
     assert 'yielded_task_tokens' not in admission
 
 
-def test_supersession_is_revalidated_after_private_state_read_and_before_tick_transition() -> None:
+def test_supersession_and_freshness_are_revalidated_after_private_snapshot_before_tick_transition() -> None:
     text = CARRIER.read_text(encoding='utf-8')
     main = text.split('def main() -> int:', 1)[1]
     assert 'state = _load_current()' in main
     assert '_assert_tick_not_superseded(command)' in main
+    assert 'now = datetime.now(timezone.utc)' in main
+    assert '_assert_tick_fresh(now=now)' in main
     assert '_state, result = _tick(command, state, now=now)' in main
     assert main.index('state = _load_current()') < main.index('_assert_tick_not_superseded(command)')
-    assert main.index('_assert_tick_not_superseded(command)') < main.index('_state, result = _tick(command, state, now=now)')
+    assert main.index('_assert_tick_not_superseded(command)') < main.index('_assert_tick_fresh(now=now)')
+    assert main.index('_assert_tick_fresh(now=now)') < main.index('_state, result = _tick(command, state, now=now)')
+
+
+def test_transition_freshness_uses_same_immutable_comment_time_and_exact_120_second_bound(monkeypatch) -> None:
+    now = datetime(2026, 9, 8, 7, 2, 0, tzinfo=timezone.utc)
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_ID', '100')
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_CREATED_AT', '2026-09-08T07:00:00Z')
+    carrier_module._assert_tick_fresh(now=now)
+
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_CREATED_AT', '2026-09-08T06:59:59.999999Z')
+    with pytest.raises(carrier_module.StaleEventError, match='TICK command stale at transition'):
+        carrier_module._assert_tick_fresh(now=now)
+
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_CREATED_AT', '2026-09-08T07:02:00.000001Z')
+    with pytest.raises(carrier_module.StaleEventError, match='TICK command stale at transition'):
+        carrier_module._assert_tick_fresh(now=now)
+
+
+def test_transition_freshness_is_not_anchored_to_process_start_time() -> None:
+    text = CARRIER.read_text(encoding='utf-8')
+    main = text.split('def main() -> int:', 1)[1]
+    before_load = main.split('state = _load_current()', 1)[0]
+    assert 'datetime.now(timezone.utc)' not in before_load
+    assert main.index('_assert_tick_not_superseded(command)') < main.index('now = datetime.now(timezone.utc)')
 
 
 def test_supersession_uses_immutable_comment_identity_without_new_runtime_state() -> None:
     text = CARRIER.read_text(encoding='utf-8')
-    section = text.split('def _assert_tick_not_superseded', 1)[1].split('def _update_refs_exact', 1)[0]
+    section = text.split('def _tick_command_identity', 1)[1].split('def _update_refs_exact', 1)[0]
     assert 'CONTROL_V4_PUBLIC_COMMAND_ID' in section
     assert 'CONTROL_V4_PUBLIC_COMMAND_CREATED_AT' in section
+    assert 'TICK_MAX_AGE_SECONDS = 120' in text
+    assert 'age_seconds = (current - created_at).total_seconds()' in section
+    assert '0 <= age_seconds <= TICK_MAX_AGE_SECONDS' in section
     assert f'issues/{{PUBLIC_COMMAND_ISSUE}}/comments' in section
     assert 'per_page=100&sort=created&direction=asc' in section
     assert 'len(comments) >= 100' in section
