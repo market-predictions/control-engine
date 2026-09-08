@@ -62,6 +62,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "ab005b25b74c3a79ddff2266d90af60e25ddbb77",
         "f984584f7680428db5ecedf414d0bdd518245f1c",
         "04e7dbb577e1dbe630a1422d7b38dff2fd337e3c",
+        "e100b7655dd1596f0562820e55a8da2a3358a6a8",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -84,13 +85,13 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=9510d79361e01a74",
+    "runner_command_generation=965d03fc71359d0e",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
     "6a9a7e0b18b08191876c134d83cfbba2",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:9510d79361e01a74:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:965d03fc71359d0e:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
@@ -140,6 +141,17 @@ CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
     "Never copy `protocol`, `result`, `live_candidate`",
     "Any EVENT that cannot be formed exactly from one correlated trusted WORK fails closed and is not sent.",
     "A prior `REVIEW_UNAVAILABLE`/`INDETERMINATE` external review remains retryable but must not monopolize later selection",
+)
+HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS = (
+    "HOLDER CLOSEOUT OBLIGATION",
+    "### Holder closeout after WORK",
+    "If an EVENT returns `WORK`, the holder remains live",
+    "Candidate drift in a REPAIR WORK capsule is not a terminal or fail-closed reason to silently stop.",
+    "Send exactly one `CANDIDATE_READY` EVENT using the exact `live_candidate` fields",
+    "send exactly one `YIELD` EVENT while the current holder remains valid",
+    "before any normal invocation exit after obtaining `WORK`",
+    "A missing or ambiguous EVENT result remains exceptional fail-closed transport ambiguity",
+    "never infer private holder state from public history",
 )
 OBSOLETE_TRANSPORT_RECOVERY_MARKERS = (
     "read only the bounded issue-#106 history",
@@ -324,6 +336,8 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
         raise ValidationError("current Runner prompt lacks target-effect freshness markers")
     if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks canonical EVENT/fairness markers")
+    if any(marker not in prompt_text for marker in HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks holder-closeout markers")
     if any(marker in prompt_text for marker in OBSOLETE_TRANSPORT_RECOVERY_MARKERS):
         raise ValidationError("current Runner prompt retains obsolete public-history recovery semantics")
 
