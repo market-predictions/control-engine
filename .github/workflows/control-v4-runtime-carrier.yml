@@ -40,7 +40,42 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
 
+      - name: Reject delayed TICK before private capability
+        id: admission
+        env:
+          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
+          CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          import os
+
+          command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
+          admitted = True
+          if command.startswith("CONTROL_V4_RUNTIME_TICK {"):
+              try:
+                  created_at = datetime.fromisoformat(
+                      os.environ["CONTROL_V4_PUBLIC_COMMAND_CREATED_AT"].replace("Z", "+00:00")
+                  )
+                  max_age = int(os.environ["CONTROL_V4_TICK_MAX_AGE_SECONDS"])
+              except (KeyError, TypeError, ValueError) as exc:
+                  raise SystemExit("TICK admission timestamp invalid") from exc
+              if created_at.tzinfo is None:
+                  raise SystemExit("TICK admission timestamp must be timezone-aware")
+              age_seconds = (datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)).total_seconds()
+              admitted = 0 <= age_seconds <= max_age
+              print(f"CONTROL_V4_TICK_ADMISSION={'PASS' if admitted else 'STALE'} age_seconds={age_seconds:.3f}")
+          else:
+              print("CONTROL_V4_TICK_ADMISSION=NOT_APPLICABLE")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"admitted={'true' if admitted else 'false'}\n")
+          PY
+
       - name: Create exact private runtime capability
+        if: ${{ steps.admission.outputs.admitted == 'true' }}
         id: private-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -51,6 +86,7 @@ jobs:
           permission-contents: write
 
       - name: Execute bounded typed V4 runtime carrier
+        if: ${{ steps.admission.outputs.admitted == 'true' }}
         id: carrier
         env:
           PYTHONPATH: ${{ github.workspace }}
