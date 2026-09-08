@@ -44,10 +44,7 @@ VALID_HISTORICAL_COHERENCE = (
 
 
 def _current_surface_entries() -> dict[str, tuple[str, str, str]]:
-    return {
-        path: ("100644", "blob", f"{index + 1:040x}")
-        for index, path in enumerate(REQUIRED_CURRENT_SURFACE_PATHS)
-    }
+    return {path: ("100644", "blob", f"{index + 1:040x}") for index, path in enumerate(REQUIRED_CURRENT_SURFACE_PATHS)}
 
 
 def _surface_text(_root, _tree, path: str) -> str:
@@ -81,14 +78,7 @@ def test_existing_private_carrier_adds_exact_pair_v4_profile_without_second_work
 
 
 def test_v4_production_module_invocation_can_import_trusted_public_packages():
-    result = subprocess.run(
-        [sys.executable, "-m", "scripts.validate_private_control_v4"],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    result = subprocess.run([sys.executable, "-m", "scripts.validate_private_control_v4"], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     assert result.returncode == 2
     assert "usage: validate_private_control_v4.py" in result.stderr
     assert "ModuleNotFoundError" not in result.stderr
@@ -123,7 +113,7 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
     validator.require_zero_relay_count({"principal_manual_relay_count": 0})
     for value in (0.0, False, True, "0", None):
         with pytest.raises(validator.ValidationError, match="exact integer zero"):
-            validator.require_zero_relay_count({"principal_manual_relay_count": value)
+            validator.require_zero_relay_count({"principal_manual_relay_count": value})
 
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
@@ -140,29 +130,16 @@ def test_v4_frozen_authority_loader_uses_exact_v4_40_commit(monkeypatch, tmp_pat
     assert validator.V4_40_FROZEN_AUTHORITY_COMMIT == "3c314362341570349c15de00156dd6f5ab037fbe"
     calls = []
     sentinel = object()
-
-    def fake_loader(root, *, commit_sha=None):
-        calls.append((Path(root), commit_sha))
-        return sentinel
-
+    def fake_loader(root, *, commit_sha=None): calls.append((Path(root), commit_sha)); return sentinel
     monkeypatch.setattr(validator, "load_v4_authority_from_git", fake_loader)
     assert validator.load_frozen_v4_40_authority(tmp_path) is sentinel
     assert calls == [(tmp_path, validator.V4_40_FROZEN_AUTHORITY_COMMIT)]
 
 
 def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_paths():
-    base = {
-        validator.RUNTIME_PATH: ("100644", "blob", "a" * 40),
-        validator.INDEX_PATH: ("100644", "blob", "b" * 40),
-        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json": ("100644", "blob", "c" * 40),
-    }
-    candidate = dict(base)
-    candidate[validator.RUNTIME_PATH] = ("100644", "blob", "d" * 40)
-    del candidate["control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"]
-    assert validator.validate_changed_surface(candidate, base) == {
-        validator.RUNTIME_PATH,
-        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
-    }
+    base = {validator.RUNTIME_PATH: ("100644", "blob", "a" * 40), validator.INDEX_PATH: ("100644", "blob", "b" * 40), "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json": ("100644", "blob", "c" * 40)}
+    candidate = dict(base); candidate[validator.RUNTIME_PATH] = ("100644", "blob", "d" * 40); del candidate["control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"]
+    assert validator.validate_changed_surface(candidate, base) == {validator.RUNTIME_PATH, "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"}
     candidate["tools/private_runtime.py"] = ("100644", "blob", "e" * 40)
     with pytest.raises(validator.ValidationError, match="non-declarative authority surface"):
         validator.validate_changed_surface(candidate, base)
@@ -171,274 +148,99 @@ def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_pat
 def test_coherence_record_is_historical_surface_not_normative_doctrine(monkeypatch, tmp_path):
     assert validator.COHERENCE_REPAIR_PATH not in validator.NORMATIVE_DOCTRINE_PATHS
     assert validator.COHERENCE_REPAIR_PATH in validator.HISTORICAL_AUDIT_PATHS
-    entries = _current_surface_entries()
-    monkeypatch.setattr(validator, "_text", _surface_text)
-    validator.validate_current_surface(tmp_path, entries)
+    entries = _current_surface_entries(); monkeypatch.setattr(validator, "_text", _surface_text); validator.validate_current_surface(tmp_path, entries)
 
 
 def test_current_surface_rejects_current_looking_coherence_record(monkeypatch, tmp_path):
     entries = _current_surface_entries()
-
     def stale_surface_text(_root, _tree, path: str) -> str:
-        if path == validator.MISSION_README_PATH:
-            return VALID_MISSION_README
-        if path == validator.COHERENCE_REPAIR_PATH:
-            return (
-                "status=IMPLEMENTATION_CANDIDATE\n"
-                "documentation_is_current_status_authority=false\n"
-                "runtime_snapshot_semantics=HISTORICAL_OBSERVATION_ONLY\n"
-            )
+        if path == validator.MISSION_README_PATH: return VALID_MISSION_README
+        if path == validator.COHERENCE_REPAIR_PATH: return "status=IMPLEMENTATION_CANDIDATE\ndocumentation_is_current_status_authority=false\nruntime_snapshot_semantics=HISTORICAL_OBSERVATION_ONLY\n"
         raise AssertionError(f"unexpected text path: {path}")
-
     monkeypatch.setattr(validator, "_text", stale_surface_text)
     with pytest.raises(validator.ValidationError, match="current-looking runtime semantics"):
         validator.validate_current_surface(tmp_path, entries)
 
 
 @pytest.mark.parametrize("missing_path", REQUIRED_CURRENT_SURFACE_PATHS)
-def test_every_required_current_surface_path_is_independently_required(
-    monkeypatch, tmp_path, missing_path
-):
-    entries = _current_surface_entries()
-    del entries[missing_path]
-    monkeypatch.setattr(validator, "_text", _surface_text)
-
+def test_every_required_current_surface_path_is_independently_required(monkeypatch, tmp_path, missing_path):
+    entries = _current_surface_entries(); del entries[missing_path]; monkeypatch.setattr(validator, "_text", _surface_text)
     with pytest.raises(validator.ValidationError, match=f"required private V4 file missing: {missing_path}"):
         validator.validate_current_surface(tmp_path, entries)
 
 
 @pytest.mark.parametrize("non_regular_path", REQUIRED_CURRENT_SURFACE_PATHS)
-def test_every_required_current_surface_path_is_independently_inert_regular_blob(
-    monkeypatch, tmp_path, non_regular_path
-):
-    entries = _current_surface_entries()
-    entries[non_regular_path] = ("120000", "blob", "f" * 40)
-    monkeypatch.setattr(validator, "_text", _surface_text)
-
-    with pytest.raises(
-        validator.ValidationError,
-        match=f"private V4 path is not one inert regular Git blob: {non_regular_path}",
-    ):
+def test_every_required_current_surface_path_is_independently_inert_regular_blob(monkeypatch, tmp_path, non_regular_path):
+    entries = _current_surface_entries(); entries[non_regular_path] = ("120000", "blob", "f" * 40); monkeypatch.setattr(validator, "_text", _surface_text)
+    with pytest.raises(validator.ValidationError, match=f"private V4 path is not one inert regular Git blob: {non_regular_path}"):
         validator.validate_current_surface(tmp_path, entries)
 
 
-@pytest.mark.parametrize(
-    "legacy_path",
-    (
-        "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
-        "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
-        "schemas/mission_contract_v31.schema.json",
-        "schemas/repository_authority_v31.schema.json",
-    ),
-)
-def test_each_legacy_current_authority_path_is_behaviorally_rejected(
-    monkeypatch, tmp_path, legacy_path
-):
-    entries = _current_surface_entries()
-    entries[legacy_path] = ("100644", "blob", "e" * 40)
-    monkeypatch.setattr(validator, "_text", _surface_text)
-
+@pytest.mark.parametrize("legacy_path", ("control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md", "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json", "schemas/mission_contract_v31.schema.json", "schemas/repository_authority_v31.schema.json"))
+def test_each_legacy_current_authority_path_is_behaviorally_rejected(monkeypatch, tmp_path, legacy_path):
+    entries = _current_surface_entries(); entries[legacy_path] = ("100644", "blob", "e" * 40); monkeypatch.setattr(validator, "_text", _surface_text)
     with pytest.raises(validator.ValidationError, match="competing V3.1 current authority"):
         validator.validate_current_surface(tmp_path, entries)
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args],
-        cwd=root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    ).stdout.strip()
-
+    return subprocess.run(["git", *args], cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.strip()
 
 def _init_git_fixture(root: Path) -> None:
-    _git(root, "init", "-q")
-    _git(root, "config", "user.name", "Control Tests")
-    _git(root, "config", "user.email", "control-tests@example.invalid")
-    (root / "control").mkdir(parents=True, exist_ok=True)
-
+    _git(root, "init", "-q"); _git(root, "config", "user.name", "Control Tests"); _git(root, "config", "user.email", "control-tests@example.invalid"); (root / "control").mkdir(parents=True, exist_ok=True)
 
 def _git_blob_oid(root: Path, path: str) -> str:
-    oid = _git(root, "hash-object", path)
-    assert len(oid) == 40
-    return oid
-
+    oid = _git(root, "hash-object", path); assert len(oid) == 40; return oid
 
 def _commit_fixture(root: Path, message: str = "fixture") -> dict[str, tuple[str, str, str]]:
-    _git(root, "add", ".")
-    _git(root, "commit", "-qm", message)
-    return validator.committed_tree(root)
-
+    _git(root, "add", "."); _git(root, "commit", "-qm", message); return validator.committed_tree(root)
 
 def _canonical_prompt_fixture_text() -> str:
-    return "\n".join(
-        (
-            "status=ACTIVE_BOUND",
-            *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
-            *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS,
-            *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS,
-            *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS,
-            *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
-            *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
-            "",
-        )
-    )
-
+    return "\n".join(("status=ACTIVE_BOUND", *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, ""))
 
 def _write_real_runner_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], str]:
     _init_git_fixture(root)
-    prompt_path = root / validator.RUNNER_PROMPT_PATH
-    prompt_path.write_text(_canonical_prompt_fixture_text(), encoding="utf-8")
-    prompt_oid = _git_blob_oid(root, validator.RUNNER_PROMPT_PATH)
-
-    config = {
-        "protocol_id": "CONTROL_RUNNER_V4",
-        "runner_id": "CONTROL_V4_RUNNER",
-        "execution_surface": "CHATGPT_SCHEDULED",
-        "prompt_path": validator.RUNNER_PROMPT_PATH,
-        "prompt_blob_sha": prompt_oid,
-        "schedule": {
-            "timing_mode": "exact_schedule",
-            "timezone": "Europe/Amsterdam",
-            "rrule": "FREQ=HOURLY;BYMINUTE=30;BYSECOND=0",
-        },
-        "automation_object_id": validator.REVIEWED_AUTOMATION_OBJECT_ID,
-        "automation_object_binding_status": "BOUND",
-        "scheduled_credential_binding_status": "PLATFORM_MANAGED_NO_STABLE_CREDENTIAL_ID_EXPOSED",
-        "effective_capability_binding_status": "BOUND_TO_EXACT_SCHEDULED_OBJECT_TOOL_SURFACE",
-        "scheduled_capability_observation": {
-            "scheduler_automation_admin": "PLATFORM_EXPOSED_ACCEPTED",
-            "protection_rules_admin": "UNAVAILABLE_OBSERVED_V4_30",
-            "positive_git_cas_proof": "PROVEN_V4_30",
-        },
-        "principal_manual_relay_count": 0,
-    }
-    config_path = root / validator.RUNNER_CONFIG_PATH
-    config_path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
-    config_oid = _git_blob_oid(root, validator.RUNNER_CONFIG_PATH)
-
-    runtime = {
-        "protocol_id": "CONTROL_RUNTIME_AUTHORITY_V4",
-        "control_runtime_enabled": True,
-        "integration_enabled": False,
-        "runner_config_path": validator.RUNNER_CONFIG_PATH,
-        "runner_config_blob_sha": config_oid,
-        "principal_manual_relay_count": 0,
-    }
-    runtime_path = root / validator.RUNTIME_PATH
-    runtime_path.write_text(json.dumps(runtime, separators=(",", ":")) + "\n", encoding="utf-8")
-
+    prompt_path = root / validator.RUNNER_PROMPT_PATH; prompt_path.write_text(_canonical_prompt_fixture_text(), encoding="utf-8"); prompt_oid = _git_blob_oid(root, validator.RUNNER_PROMPT_PATH)
+    config = {"protocol_id":"CONTROL_RUNNER_V4","runner_id":"CONTROL_V4_RUNNER","execution_surface":"CHATGPT_SCHEDULED","prompt_path":validator.RUNNER_PROMPT_PATH,"prompt_blob_sha":prompt_oid,"schedule":{"timing_mode":"exact_schedule","timezone":"Europe/Amsterdam","rrule":"FREQ=HOURLY;BYMINUTE=30;BYSECOND=0"},"automation_object_id":validator.REVIEWED_AUTOMATION_OBJECT_ID,"automation_object_binding_status":"BOUND","scheduled_credential_binding_status":"PLATFORM_MANAGED_NO_STABLE_CREDENTIAL_ID_EXPOSED","effective_capability_binding_status":"BOUND_TO_EXACT_SCHEDULED_OBJECT_TOOL_SURFACE","scheduled_capability_observation":{"scheduler_automation_admin":"PLATFORM_EXPOSED_ACCEPTED","protection_rules_admin":"UNAVAILABLE_OBSERVED_V4_30","positive_git_cas_proof":"PROVEN_V4_30"},"principal_manual_relay_count":0}
+    config_path = root / validator.RUNNER_CONFIG_PATH; config_path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8"); config_oid = _git_blob_oid(root, validator.RUNNER_CONFIG_PATH)
+    runtime = {"protocol_id":"CONTROL_RUNTIME_AUTHORITY_V4","control_runtime_enabled":True,"integration_enabled":False,"runner_config_path":validator.RUNNER_CONFIG_PATH,"runner_config_blob_sha":config_oid,"principal_manual_relay_count":0}
+    runtime_path = root / validator.RUNTIME_PATH; runtime_path.write_text(json.dumps(runtime, separators=(",", ":")) + "\n", encoding="utf-8")
     return _commit_fixture(root), prompt_oid
 
 
-def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted_from_real_git(
-    monkeypatch, tmp_path
-):
-    entries, prompt_oid = _write_real_runner_fixture(tmp_path)
-    prompt_raw, committed_prompt_oid = validator._blob(
-        tmp_path, entries, validator.RUNNER_PROMPT_PATH
-    )
-    assert committed_prompt_oid == prompt_oid
-    assert prompt_raw == _canonical_prompt_fixture_text().encode("utf-8")
-
-    monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", prompt_oid)
-    runtime = validator.validate_runtime_and_runner(tmp_path, entries)
-    assert runtime["control_runtime_enabled"] is True
-    assert runtime["integration_enabled"] is False
+def test_exact_reviewed_runner_prompt_blob_is_behaviorally_accepted_from_real_git(monkeypatch, tmp_path):
+    entries, prompt_oid = _write_real_runner_fixture(tmp_path); prompt_raw, committed_prompt_oid = validator._blob(tmp_path, entries, validator.RUNNER_PROMPT_PATH)
+    assert committed_prompt_oid == prompt_oid; assert prompt_raw == _canonical_prompt_fixture_text().encode("utf-8")
+    monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", prompt_oid); runtime = validator.validate_runtime_and_runner(tmp_path, entries)
+    assert runtime["control_runtime_enabled"] is True; assert runtime["integration_enabled"] is False
 
 
-def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(
-    monkeypatch, tmp_path
-):
-    entries, prompt_oid = _write_real_runner_fixture(tmp_path)
-    assert validator._regular_blob(entries, validator.RUNNER_PROMPT_PATH) == prompt_oid
-    monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", "d" * 40)
-    with pytest.raises(
-        validator.ValidationError,
-        match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
-    ):
+def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(monkeypatch, tmp_path):
+    entries, prompt_oid = _write_real_runner_fixture(tmp_path); assert validator._regular_blob(entries, validator.RUNNER_PROMPT_PATH) == prompt_oid; monkeypatch.setattr(validator, "REVIEWED_RUNNER_PROMPT_BLOB_SHA", "d" * 40)
+    with pytest.raises(validator.ValidationError, match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract"):
         validator.validate_runtime_and_runner(tmp_path, entries)
 
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=9510d79361e01a74" in markers
-    assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
-    assert any("command_comment_id" in marker for marker in markers)
-    assert "no later same-`run_id` Control command" in markers
-    assert any("previously unused" in marker for marker in markers)
-    assert any("transition time" in marker for marker in markers)
-    assert "persists no transport cursor or ledger" in markers
+    assert "runner_command_generation=9510d79361e01a74" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
 
 
 def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
     markers = validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS
-    assert "### Live-TICK responsibility window" in markers
-    assert any("do not classify its result as missing" in marker for marker in markers)
-    assert any("created_at` has passed 120 seconds" in marker for marker in markers)
-    assert "Control V4 runtime command <command_comment_id>" in markers
-    assert "status `completed`" in markers
-    assert any("final exact-command result read" in marker for marker in markers)
-    assert "The age check alone is never sufficient" in markers
-    assert any("Never post a replacement TICK" in marker for marker in markers)
-    assert any("carrier-run ledger or runtime state" in marker for marker in markers)
+    assert "### Live-TICK responsibility window" in markers; assert any("do not classify its result as missing" in marker for marker in markers); assert any("created_at` has passed 120 seconds" in marker for marker in markers); assert "Control V4 runtime command <command_comment_id>" in markers; assert "status `completed`" in markers; assert any("final exact-command result read" in marker for marker in markers); assert "The age check alone is never sufficient" in markers; assert any("Never post a replacement TICK" in marker for marker in markers); assert any("carrier-run ledger or runtime state" in marker for marker in markers)
 
 
 def _valid_system_index() -> bytes:
-    return "\n".join(
-        (
-            "# Control — Canonical System Index V4",
-            "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
-            "runtime=control-runtime-state:control/DISPATCH_QUEUE.json",
-            "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
-            "runner_config=control/CONTROL_RUNNER_V4.json",
-            "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
-            "Current status is a fresh live projection, not a documentation lookup.",
-            "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
-        )
-    ).encode("utf-8")
+    return "\n".join(("# Control — Canonical System Index V4","architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md","runtime=control-runtime-state:control/DISPATCH_QUEUE.json","global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json","runner_config=control/CONTROL_RUNNER_V4.json","runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md","Current status is a fresh live projection, not a documentation lookup.","Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.")).encode("utf-8")
 
+def _write_real_system_index_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
+    _init_git_fixture(root); index_path = root / validator.INDEX_PATH; index_path.write_bytes(_valid_system_index()); entries = _commit_fixture(root); raw, oid = validator._blob(root, entries, validator.INDEX_PATH); assert raw == _valid_system_index(); return entries, raw, oid
 
-def _write_real_system_index_fixture(
-    root: Path,
-) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
-    _init_git_fixture(root)
-    index_path = root / validator.INDEX_PATH
-    index_path.write_bytes(_valid_system_index())
-    entries = _commit_fixture(root)
-    raw, oid = validator._blob(root, entries, validator.INDEX_PATH)
-    assert raw == _valid_system_index()
-    return entries, raw, oid
+def test_exact_reviewed_system_index_blob_is_behaviorally_accepted_from_real_git(monkeypatch, tmp_path):
+    _entries, raw, oid = _write_real_system_index_fixture(tmp_path); monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", oid); validator.validate_system_index(raw, {"control_runtime_enabled": True, "integration_enabled": False}, index_oid=oid)
 
-
-def test_exact_reviewed_system_index_blob_is_behaviorally_accepted_from_real_git(
-    monkeypatch, tmp_path
-):
-    _entries, raw, oid = _write_real_system_index_fixture(tmp_path)
-    monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", oid)
-    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    validator.validate_system_index(raw, runtime, index_oid=oid)
-
-
-def test_changed_committed_system_index_blob_is_behaviorally_rejected_from_real_git(
-    monkeypatch, tmp_path
-):
-    _entries, approved_raw, approved_oid = _write_real_system_index_fixture(tmp_path)
-    monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", approved_oid)
-
-    index_path = tmp_path / validator.INDEX_PATH
-    index_path.write_bytes(approved_raw + b"\nchanged after review\n")
-    changed_entries = _commit_fixture(tmp_path, "changed index")
-    changed_raw, changed_oid = validator._blob(
-        tmp_path, changed_entries, validator.INDEX_PATH
-    )
-    assert changed_oid != approved_oid
-
-    runtime = {"control_runtime_enabled": True, "integration_enabled": False}
-    with pytest.raises(
-        validator.ValidationError,
-        match="SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract",
-    ):
-        validator.validate_system_index(changed_raw, runtime, index_oid=changed_oid)
+def test_changed_committed_system_index_blob_is_behaviorally_rejected_from_real_git(monkeypatch, tmp_path):
+    _entries, approved_raw, approved_oid = _write_real_system_index_fixture(tmp_path); monkeypatch.setattr(validator, "REVIEWED_SYSTEM_INDEX_BLOB_SHA", approved_oid); index_path = tmp_path / validator.INDEX_PATH; index_path.write_bytes(approved_raw + b"\nchanged after review\n"); changed_entries = _commit_fixture(tmp_path, "changed index"); changed_raw, changed_oid = validator._blob(tmp_path, changed_entries, validator.INDEX_PATH); assert changed_oid != approved_oid
+    with pytest.raises(validator.ValidationError, match="SYSTEM_INDEX blob differs from exact trusted reviewed V4 live-first contract"):
+        validator.validate_system_index(changed_raw, {"control_runtime_enabled": True, "integration_enabled": False}, index_oid=changed_oid)
