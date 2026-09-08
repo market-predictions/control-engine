@@ -346,6 +346,16 @@ def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
             raise StaleEventError("TICK command superseded by later same-run command")
 
 
+def _assert_current_tick_fresh_at_ref_cas() -> None:
+    raw_command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
+    try:
+        command = parse_public_command(raw_command)
+    except RuntimeProtocolError as exc:
+        raise CarrierError("current public command unavailable at private ref CAS") from exc
+    if command.get("kind") == "TICK":
+        _assert_tick_fresh(now=datetime.now(timezone.utc))
+
+
 def _update_refs_exact(
     *,
     repository_node_id: str,
@@ -359,6 +369,7 @@ def _update_refs_exact(
       updateRefs(input: $input) { clientMutationId }
     }
     """
+    _assert_current_tick_fresh_at_ref_cas()
     result = _request_json(
         GRAPHQL,
         headers=_private_headers(),
