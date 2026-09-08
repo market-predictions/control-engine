@@ -1,12 +1,58 @@
+import json
 from pathlib import Path
+
+import pytest
+
+import scripts.control_v4_runtime_carrier as carrier_module
 
 
 WORKFLOW = Path('.github/workflows/control-v4-runtime-carrier.yml')
 CARRIER = Path('scripts/control_v4_runtime_carrier.py')
+RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444:' + ('a' * 32)
+OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:c06686c07f09e444:' + ('b' * 32)
 
 
 def _workflow_section(text: str, start: str, end: str) -> str:
     return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def _tick_command(run_id: str = RUN_ID) -> dict[str, object]:
+    return {'kind': 'TICK', 'run_id': run_id, 'yielded_task_tokens': []}
+
+
+def _event_body(run_id: str, event: str = 'YIELD') -> str:
+    return 'CONTROL_V4_RUNTIME_EVENT ' + json.dumps(
+        {
+            'run_id': run_id,
+            'task_token': 'c' * 64,
+            'event': event,
+            'repository': 'market-predictions/control-engine',
+            'action': 'BUILD',
+        },
+        separators=(',', ':'),
+    )
+
+
+def _tick_body(run_id: str) -> str:
+    return 'CONTROL_V4_RUNTIME_TICK ' + json.dumps(
+        {'run_id': run_id},
+        separators=(',', ':'),
+    )
+
+
+def _install_supersession_fixture(monkeypatch, comments: list[dict[str, object]]) -> None:
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_ID', '100')
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_CREATED_AT', '2026-09-08T07:00:00Z')
+    monkeypatch.setattr(carrier_module, '_public_command_headers', lambda: {})
+
+    def fake_request_json(url, *, headers=None, method='GET', payload=None, allow_404=False):
+        assert method == 'GET'
+        assert payload is None
+        assert '/repos/market-predictions/control-engine/issues/106/comments?' in url
+        assert 'per_page=100&sort=created&direction=asc' in url
+        return comments
+
+    monkeypatch.setattr(carrier_module, '_request_json', fake_request_json)
 
 
 def test_stale_or_old_generation_command_is_rejected_before_private_write_capability() -> None:
@@ -79,6 +125,71 @@ def test_supersession_uses_immutable_comment_identity_without_new_runtime_state(
     assert 'TICK command superseded by later same-run command' in section
     for forbidden in ('cursor', 'retry ledger', 'transport_state', 'last_tick_id', 'last_command_id'):
         assert forbidden not in section.lower()
+
+
+def test_later_trusted_same_run_release_behaviorally_supersedes_earlier_tick(monkeypatch) -> None:
+    _install_supersession_fixture(
+        monkeypatch,
+        [
+            {
+                'id': 101,
+                'created_at': '2026-09-08T07:00:01Z',
+                'body': _event_body(RUN_ID, 'YIELD'),
+                'user': {'login': 'market-predictions'},
+            }
+        ],
+    )
+
+    with pytest.raises(
+        carrier_module.StaleEventError,
+        match='TICK command superseded by later same-run command',
+    ):
+        carrier_module._assert_tick_not_superseded(_tick_command())
+
+
+def test_supersession_ignores_foreign_actor_other_run_and_earlier_identity(monkeypatch) -> None:
+    _install_supersession_fixture(
+        monkeypatch,
+        [
+            {
+                'id': 101,
+                'created_at': '2026-09-08T07:00:02Z',
+                'body': _event_body(RUN_ID, 'YIELD'),
+                'user': {'login': 'someone-else'},
+            },
+            {
+                'id': 102,
+                'created_at': '2026-09-08T07:00:03Z',
+                'body': _tick_body(OTHER_RUN_ID),
+                'user': {'login': 'market-predictions'},
+            },
+            {
+                'id': 99,
+                'created_at': '2026-09-08T07:00:00Z',
+                'body': _tick_body(RUN_ID),
+                'user': {'login': 'market-predictions'},
+            },
+        ],
+    )
+
+    carrier_module._assert_tick_not_superseded(_tick_command())
+
+
+def test_same_timestamp_higher_comment_id_behaviorally_supersedes_tick(monkeypatch) -> None:
+    _install_supersession_fixture(
+        monkeypatch,
+        [
+            {
+                'id': 101,
+                'created_at': '2026-09-08T07:00:00Z',
+                'body': _tick_body(RUN_ID),
+                'user': {'login': 'market-predictions'},
+            }
+        ],
+    )
+
+    with pytest.raises(carrier_module.StaleEventError):
+        carrier_module._assert_tick_not_superseded(_tick_command())
 
 
 def test_workflow_passes_command_identity_to_carrier_and_echoes_it_in_result_envelope() -> None:
