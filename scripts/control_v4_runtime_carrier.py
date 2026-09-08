@@ -46,6 +46,9 @@ from control_engine.v4_runtime_protocol import (
 
 
 PRIVATE_REPOSITORY = "market-predictions/control-plane"
+PUBLIC_COMMAND_REPOSITORY = "market-predictions/control-engine"
+PUBLIC_COMMAND_ISSUE = 106
+PUBLIC_COMMAND_ACTOR = "market-predictions"
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 AUTHORITY_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
@@ -74,6 +77,18 @@ def _private_headers() -> dict[str, str]:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "control-v4-runtime-carrier",
+    }
+
+
+def _public_command_headers() -> dict[str, str]:
+    token = os.environ.get("CONTROL_ENGINE_TOKEN", "")
+    if not token:
+        raise CarrierError("public command read capability unavailable")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "control-v4-runtime-command-correlation",
     }
 
 
@@ -266,6 +281,55 @@ def _load_current() -> dict[str, Any]:
         "runtime_enabled": runtime_enabled,
         "integration_enabled": integration_enabled,
     }
+
+
+def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
+    if command.get("kind") != "TICK":
+        return
+    try:
+        command_id = int(os.environ["CONTROL_V4_PUBLIC_COMMAND_ID"])
+        created_at = datetime.fromisoformat(
+            os.environ["CONTROL_V4_PUBLIC_COMMAND_CREATED_AT"].replace("Z", "+00:00")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CarrierError("TICK command correlation identity invalid") from exc
+    if created_at.tzinfo is None:
+        raise CarrierError("TICK command correlation timestamp invalid")
+
+    since = urllib.parse.quote(
+        created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        safe="",
+    )
+    comments = _request_json(
+        f"{API}/repos/{PUBLIC_COMMAND_REPOSITORY}/issues/{PUBLIC_COMMAND_ISSUE}/comments"
+        f"?since={since}&per_page=100&sort=created&direction=asc",
+        headers=_public_command_headers(),
+    )
+    if not isinstance(comments, list):
+        raise CarrierError("TICK command supersession read invalid")
+    if len(comments) >= 100:
+        raise CarrierError("TICK command supersession window exceeds bounded read")
+
+    for item in comments:
+        if not isinstance(item, Mapping) or item.get("id") == command_id:
+            continue
+        user = item.get("user") or {}
+        if not isinstance(user, Mapping) or user.get("login") != PUBLIC_COMMAND_ACTOR:
+            continue
+        other_body = item.get("body")
+        other_created_raw = item.get("created_at")
+        other_id = item.get("id")
+        if not isinstance(other_body, str) or not isinstance(other_created_raw, str) or not isinstance(other_id, int):
+            continue
+        try:
+            other_created = datetime.fromisoformat(other_created_raw.replace("Z", "+00:00"))
+            other = parse_public_command(other_body)
+        except (ValueError, RuntimeProtocolError):
+            continue
+        if other.get("run_id") != command.get("run_id"):
+            continue
+        if other_created > created_at or (other_created == created_at and other_id > command_id):
+            raise StaleEventError("TICK command superseded by later same-run command")
 
 
 def _update_refs_exact(
@@ -639,6 +703,7 @@ def main() -> int:
     try:
         state = _load_current()
         if command["kind"] == "TICK":
+            _assert_tick_not_superseded(command)
             _state, result = _tick(command, state, now=now)
         else:
             _state, result = _event(command, state, now=now)
