@@ -49,6 +49,7 @@ PRIVATE_REPOSITORY = "market-predictions/control-plane"
 PUBLIC_COMMAND_REPOSITORY = "market-predictions/control-engine"
 PUBLIC_COMMAND_ISSUE = 106
 PUBLIC_COMMAND_ACTOR = "market-predictions"
+TICK_MAX_AGE_SECONDS = 120
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 AUTHORITY_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
@@ -283,9 +284,7 @@ def _load_current() -> dict[str, Any]:
     }
 
 
-def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
-    if command.get("kind") != "TICK":
-        return
+def _tick_command_identity() -> tuple[int, datetime]:
     try:
         command_id = int(os.environ["CONTROL_V4_PUBLIC_COMMAND_ID"])
         created_at = datetime.fromisoformat(
@@ -295,9 +294,24 @@ def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
         raise CarrierError("TICK command correlation identity invalid") from exc
     if created_at.tzinfo is None:
         raise CarrierError("TICK command correlation timestamp invalid")
+    return command_id, created_at.astimezone(timezone.utc)
+
+
+def _assert_tick_fresh(*, now: datetime) -> None:
+    _command_id, created_at = _tick_command_identity()
+    current = now.astimezone(timezone.utc)
+    age_seconds = (current - created_at).total_seconds()
+    if not 0 <= age_seconds <= TICK_MAX_AGE_SECONDS:
+        raise StaleEventError("TICK command stale at transition")
+
+
+def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
+    if command.get("kind") != "TICK":
+        return
+    command_id, created_at = _tick_command_identity()
 
     since = urllib.parse.quote(
-        created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        created_at.isoformat().replace("+00:00", "Z"),
         safe="",
     )
     comments = _request_json(
@@ -693,7 +707,6 @@ def _set_outputs(result: Mapping[str, Any], *, ok: bool) -> None:
 
 def main() -> int:
     comment = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
-    now = datetime.now(timezone.utc)
     try:
         command = parse_public_command(comment)
     except RuntimeProtocolError:
@@ -704,8 +717,11 @@ def main() -> int:
         state = _load_current()
         if command["kind"] == "TICK":
             _assert_tick_not_superseded(command)
+            now = datetime.now(timezone.utc)
+            _assert_tick_fresh(now=now)
             _state, result = _tick(command, state, now=now)
         else:
+            now = datetime.now(timezone.utc)
             _state, result = _event(command, state, now=now)
         _set_outputs(result, ok=True)
     except StaleWriteError:
