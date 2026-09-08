@@ -41,11 +41,17 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
 
+      - name: Normalize canonical Runner command envelope
+        env:
+          CONTROL_V4_PUBLIC_COMMAND_RAW: ${{ github.event.comment.body }}
+          CONTROL_V4_NORMALIZED_COMMAND_PATH: ${{ runner.temp }}/control-v4-public-command.txt
+        run: python scripts/control_v4_public_command_normalize.py
+
       - name: Reject stale or misbound command before private capability
         id: admission
         env:
           PYTHONPATH: ${{ github.workspace }}
-          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_NORMALIZED_COMMAND_PATH: ${{ runner.temp }}/control-v4-public-command.txt
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
           CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'
         run: |
@@ -54,6 +60,7 @@ jobs:
           from datetime import datetime, timezone
           import os
           import re
+          from pathlib import Path
 
           from control_engine.v4_runtime_protocol import RuntimeProtocolError, parse_public_command
 
@@ -61,13 +68,13 @@ jobs:
               r"^v4:6a9a7e0b18b08191876c134d83cfbba2:9510d79361e01a74:[0-9a-f]{32}$"
           )
 
-          raw_command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
           try:
+              raw_command = Path(os.environ["CONTROL_V4_NORMALIZED_COMMAND_PATH"]).read_text(encoding="utf-8")
               created_at = datetime.fromisoformat(
                   os.environ["CONTROL_V4_PUBLIC_COMMAND_CREATED_AT"].replace("Z", "+00:00")
               )
               command = parse_public_command(raw_command)
-          except (KeyError, TypeError, ValueError, RuntimeProtocolError) as exc:
+          except (KeyError, OSError, TypeError, ValueError, RuntimeProtocolError) as exc:
               raise SystemExit("command admission identity invalid") from exc
           if created_at.tzinfo is None:
               raise SystemExit("command admission timestamp must be timezone-aware")
@@ -108,10 +115,13 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
-          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_NORMALIZED_COMMAND_PATH: ${{ runner.temp }}/control-v4-public-command.txt
           CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
-        run: python scripts/control_v4_runtime_carrier.py
+        run: |
+          set -euo pipefail
+          export CONTROL_V4_PUBLIC_COMMAND="$(cat "$CONTROL_V4_NORMALIZED_COMMAND_PATH")"
+          python scripts/control_v4_runtime_carrier.py
 
       - name: Publish public-safe carrier result
         if: ${{ always() && steps.carrier.outputs.result_json != '' }}
