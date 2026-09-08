@@ -109,6 +109,10 @@ def test_atomic_main_and_runtime_ref_cas_rejects_authority_interleaving_without_
 
     monkeypatch.setattr(carrier, "_private_headers", lambda: {})
     monkeypatch.setattr(carrier, "_request_json", fake_request_json)
+    monkeypatch.setenv(
+        "CONTROL_V4_PUBLIC_COMMAND",
+        'CONTROL_V4_RUNTIME_EVENT {"run_id":"cas-test","task_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"YIELD","repository":"market-predictions/control-engine","action":"BUILD"}',
+    )
 
     with pytest.raises(carrier.StaleWriteError):
         carrier._update_refs_exact(
