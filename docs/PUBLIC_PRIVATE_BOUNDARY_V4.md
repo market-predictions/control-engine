@@ -28,6 +28,18 @@ Every private queue mutation requires the exact observed private `main`, exact o
 
 Public issue comments are transport/audit evidence only. They never become queue, Mission, status or authority state. The public response is deliberately reduced to publicly observable target/candidate facts plus an opaque task token. Raw private task identity, gap/Mission identity, acceptance text, authority blob identities, review records, blockers, lock state, queue state and Mission documents are not mirrored to the public transport. In particular, execution-lock timestamps or other lock-derived values are never emitted in a public work capsule.
 
+### Pre-acquisition Runner generation fence
+
+A Scheduled invocation must not obtain acquisition authority merely because it contains text that resembles the Runner prompt. Before the invocation posts its first TICK, the canonical Runner prompt requires a read-only scheduler readback of the exact reviewed automation object, exact `:30` schedule, enabled state, current prompt identity/generation, and absence of a second enabled Control V4 Runner. Failure means zero public command writes.
+
+This platform readback is an **operational generation/binding fence**, not a new source of Control runtime authority and not a cryptographic per-invocation credential: the platform exposes no stable Scheduled credential identifier that can be committed as authority. The complete boundary therefore remains fail-closed and layered:
+
+1. the canonical Scheduled prompt verifies the current reviewed scheduler object before emitting any command;
+2. the public workflow accepts only the exact current generation-bound `run_id` before creating the scoped private capability;
+3. the carrier then fresh-validates the exact current private runtime-authority → Runner-config → prompt-blob chain before any queue transition.
+
+The generation-bound `run_id` format identifies both the reviewed automation object and current prompt generation plus a fresh invocation-local random suffix. Old prompt generations therefore cannot accidentally remain acquisition-compatible during a maintenance-fenced cutover. This protects against stale/overlapping Runner generations; it is not presented as authentication against an arbitrary hostile actor that already controls the trusted GitHub principal or scheduler administration surface.
+
 ### Stateless transport/recovery boundary
 
 Issue #106 is typed transport plus audit evidence only. It is never queue, lease, retry, holder or recovery state.
@@ -40,7 +52,25 @@ expired lock      -> deterministic expired-lock recovery -> select/acquire -> WO
 live foreign lock -> BUSY
 ```
 
-A TICK has acquisition authority only while its immutable GitHub issue-comment `created_at` is current. The carrier workflow enforces a **120-second maximum TICK admission age before it issues the scoped private write capability**. A TICK with an invalid, future, or older timestamp cannot reach private state and therefore cannot create a delayed/orphan lease after the Scheduled invocation that posted it has already moved on. This 120-second bound is an admission fence only: it is not public runtime state, is never persisted, does not trigger replay, and is never used to reconstruct holder/recovery state from issue history. EVENT semantics remain protected by exact current-holder, unexpired-lease and candidate/base validation in the canonical protocol/carrier path.
+A TICK has acquisition authority only while its immutable GitHub issue-comment `created_at` is current. The carrier workflow enforces a **120-second maximum TICK admission age before it issues the scoped private write capability**. It also rejects any command whose `run_id` is not bound to the exact current Runner object/prompt generation. A TICK with an invalid, future, older, or wrong-generation identity therefore cannot reach private state.
+
+Same-invocation TICKs intentionally retain one `run_id` so invocation-local yielded-task exclusions remain stable. The unique command identity is instead the immutable GitHub command-comment id. Every published carrier result echoes that triggering id as `command_comment_id`; the Runner accepts a result only when it matches the exact command comment it just posted. This prevents a result from an earlier same-run TICK or EVENT from being mistaken for the current command result.
+
+A second protection prevents a duplicated earlier TICK from reacquiring after a later same-run holder release. After the carrier has loaded the current private authority/queue snapshot and before it performs the TICK transition, it performs one bounded read of issue #106 comments from that TICK's immutable `created_at`. It considers only canonical Control commands from the trusted `market-predictions` principal. If a later same-`run_id` TICK or EVENT already exists by immutable `(created_at, comment id)` order, the older TICK is superseded and rejected. The check is bounded to the TICK freshness window and fails closed if the bounded result set is unexpectedly saturated.
+
+This supersession read has one purpose only: establish whether **this public command identity is still current within its invocation**. It never derives queue state, lock ownership, lease expiry, task selection, retry state, holder recovery, or forward scheduling from comments. It persists no cursor, ledger, counter, retry record or public runtime state. The decisive ordering is:
+
+```text
+fresh private authority/queue snapshot
+        ↓
+bounded immutable-command supersession check
+        ↓
+typed TICK transition
+        ↓
+exact private old-ref/blob CAS + readback
+```
+
+That ordering closes the relevant race without a transport state machine: a release that landed before the snapshot is visible as a later command and supersedes the old TICK; a release that occurs after the snapshot leaves the loaded queue holding the same run and therefore the old TICK does not perform a fresh acquisition; any concurrent private write that invalidates the snapshot is rejected by the existing exact CAS.
 
 `BUSY`, `NO_WORK`, a missing/ambiguous result, or another fail-closed transport outcome ends only that invocation. A later normal Scheduled wake starts again with a new fresh TICK. The private queue's fixed non-renewable 5400-second lease plus carrier-side objectively expired-lock recovery is the sole cross-invocation holder/crash-recovery mechanism.
 
@@ -56,7 +86,7 @@ Dual-current prompt trust is not a supported steady-state or rollout mechanism. 
 
 ### Canonical TICK/EVENT wire contract
 
-`control_engine/v4_runtime_protocol.py` is the **single protocol owner** for `CONTROL_V4_RUNTIME_TICK` and `CONTROL_V4_RUNTIME_EVENT`. The workflow transports the raw issue-comment body unchanged; it contains no compatibility parser or alternate EVENT normalizer.
+`control_engine/v4_runtime_protocol.py` is the **single semantic protocol owner** for `CONTROL_V4_RUNTIME_TICK` and `CONTROL_V4_RUNTIME_EVENT`. The workflow transports the raw issue-comment body unchanged; it contains no compatibility parser or alternate EVENT normalizer. Workflow admission may reject stale/wrong-generation commands before private capability, and the result publisher adds only the immutable triggering `command_comment_id` as transport-correlation metadata.
 
 Every EVENT echoes the correlated trusted `WORK` capsule identity exactly:
 
@@ -67,17 +97,19 @@ Every EVENT echoes the correlated trusted `WORK` capsule identity exactly:
 - `candidate` exactly when the `WORK` capsule contains one;
 - `event` plus only that event type's explicitly allowed fields.
 
+`command_comment_id` is never copied into an EVENT. It identifies the public command/result pair only and is not semantic holder identity.
+
 The protocol parser rejects unknown fields and malformed identities. Holder binding then requires `repository`, `action`, and the complete candidate object to match the current task resolved by the opaque token before translating that public identity into the existing private holder checks. The Runner does not construct or transmit private task IDs, Mission data, queue fields, lock state, or an alternative `holder_*` public envelope.
 
 This single-owner rule deliberately replaces the former workflow-level compatibility normalization. Protocol adaptation is not split between YAML and Python.
 
-The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path. This public-read proof is required even when a BUILD task has no candidate yet: the repository name is not emitted until unauthenticated repository metadata proves the target is publicly readable.
+The V1 carrier is deliberately activation-bounded to `integration_enabled=false`. It restores acquisition/review/repair/wait liveness without introducing merge authority. A later integration-capable carrier extension requires separate concrete need, implementation and review. V1 also supports only publicly readable target repositories; private/unreadable targets fail closed instead of adding a second target credential path. This public-read proof is required even when a BUILD task has no candidate yet: the repository name is not emitted until public repository metadata proves the target is publicly readable.
 
 The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/record/release path is reintroduced.
 
 ## Consequential target effects
 
-Transport success does not authorize a target mutation. Any non-transport target/review write additionally requires fresh acquisition in the current Scheduled invocation, exact same-run pre-effect revalidation, bounded freshness/time windows, current target identity, sufficient remaining private lease, and mandatory exact effect readback. The second same-run TICK is revalidation only and never renews the fixed private lease.
+Transport success does not authorize a target mutation. Any non-transport target/review write additionally requires fresh acquisition in the current Scheduled invocation, exact same-run pre-effect revalidation, bounded freshness/time windows, current target identity, sufficient remaining private lease, and mandatory exact effect readback. The second same-run TICK is revalidation only and never renews the fixed private lease. Its result must carry the exact triggering `command_comment_id`, so a late result from an older same-run TICK cannot satisfy the pre-effect fence.
 
 Lost, timed-out or ambiguous side effects are reconciled fact-first and never blindly retried.
 
