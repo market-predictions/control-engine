@@ -1,4 +1,5 @@
 name: Control V4 Runtime Carrier
+run-name: Control V4 runtime command ${{ github.event.comment.id }}
 
 on:
   issue_comment:
@@ -57,7 +58,7 @@ jobs:
           from control_engine.v4_runtime_protocol import RuntimeProtocolError, parse_public_command
 
           EXPECTED_RUN_ID = re.compile(
-              r"^v4:6a9a7e0b18b08191876c134d83cfbba2:7c4e91b2d5a83f60:[0-9a-f]{32}$"
+              r"^v4:6a9a7e0b18b08191876c134d83cfbba2:9510d79361e01a74:[0-9a-f]{32}$"
           )
 
           raw_command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
