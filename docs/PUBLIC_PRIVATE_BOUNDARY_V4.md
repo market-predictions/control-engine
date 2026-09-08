@@ -40,9 +40,11 @@ expired lock      -> deterministic expired-lock recovery -> select/acquire -> WO
 live foreign lock -> BUSY
 ```
 
+A TICK has acquisition authority only while its immutable GitHub issue-comment `created_at` is current. The carrier workflow enforces a **120-second maximum TICK admission age before it issues the scoped private write capability**. A TICK with an invalid, future, or older timestamp cannot reach private state and therefore cannot create a delayed/orphan lease after the Scheduled invocation that posted it has already moved on. This 120-second bound is an admission fence only: it is not public runtime state, is never persisted, does not trigger replay, and is never used to reconstruct holder/recovery state from issue history. EVENT semantics remain protected by exact current-holder, unexpired-lease and candidate/base validation in the canonical protocol/carrier path.
+
 `BUSY`, `NO_WORK`, a missing/ambiguous result, or another fail-closed transport outcome ends only that invocation. A later normal Scheduled wake starts again with a new fresh TICK. The private queue's fixed non-renewable 5400-second lease plus carrier-side objectively expired-lock recovery is the sole cross-invocation holder/crash-recovery mechanism.
 
-Current V4 therefore has no startup scan of public issue history to decide forward progress, no unresolved-TICK or unresolved-EVENT runtime state, no same-command replay loop, no public 120-second replay clock, no public 5400-second EVENT-retirement/spent-identity clock, no transport cursor/retry ledger, and no cross-invocation holder reconstruction from public comments.
+Current V4 therefore has no startup scan of public issue history to decide forward progress, no unresolved-TICK or unresolved-EVENT runtime state, no same-command replay loop, no public replay clock, no public EVENT-retirement/spent-identity clock, no transport cursor/retry ledger, and no cross-invocation holder reconstruction from public comments.
 
 A lost transport response is not evidence about whether a private transition landed. The next invocation asks current canonical private state again rather than replaying transport history.
 
