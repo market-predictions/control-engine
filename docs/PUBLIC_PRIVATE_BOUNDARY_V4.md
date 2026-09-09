@@ -10,7 +10,7 @@ source_of_truth=GITHUB
 
 Private `market-predictions/control-plane` is the sole Mission, runtime-authority and mutable runtime-state plane.
 
-Public `market-predictions/control-engine` owns deterministic contracts, validation and bounded transport/carrier code. It owns no semantic runtime authority and persists no private Control runtime state. A component-local manifest or public carrier result must never be promoted into global Control state; global status is reconstructed from current private authority/queue truth plus bounded target evidence when needed.
+Public `market-predictions/control-engine` owns deterministic contracts, validation and bounded transport/carrier code. It owns no semantic runtime authority and persists no private Control runtime state. A component-local manifest or public carrier result must never be promoted into global Control state and is never a source for current **global Control runtime status**; global status is reconstructed from current private authority/queue truth plus bounded target evidence when needed.
 
 Canonical mutable state is exactly:
 
