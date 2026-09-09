@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,7 +26,6 @@ from control_engine.v4_runtime_protocol import (
     StaleEventError,
     assert_event_identity,
     bind_public_event_to_holder,
-    block_holder_v4,
     candidate_ready_v4,
     compact_public_result,
     external_finding_v4,
@@ -59,8 +57,6 @@ RUNNER_CONFIG_PATH = "control/CONTROL_RUNNER_V4.json"
 PROMPT_PATH = "control/CONTROL_RUNNER_V4_PROMPT.md"
 MISSION_DIR = "control/missions"
 REPOSITORY_AUTHORITY_DIR = "control/repository-authority"
-REF_READBACK_ATTEMPTS = 6
-REF_READBACK_DELAY_SECONDS = 0.5
 API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
 
@@ -184,25 +180,6 @@ def _branch_head(branch: str) -> str:
     if not isinstance(sha, str) or len(sha) != 40:
         raise CarrierError("private branch identity invalid")
     return sha
-
-
-def _git_ref_head(branch: str) -> str:
-    result = _private_get(f"repos/{PRIVATE_REPOSITORY}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
-    if not isinstance(result, Mapping):
-        raise CarrierError("private Git ref response invalid")
-    sha = ((result.get("object") or {}).get("sha"))
-    if not isinstance(sha, str) or len(sha) != 40:
-        raise CarrierError("private Git ref identity invalid")
-    return sha
-
-
-def _await_git_ref_head(branch: str, expected_sha: str) -> None:
-    for attempt in range(REF_READBACK_ATTEMPTS):
-        if _git_ref_head(branch) == expected_sha:
-            return
-        if attempt < REF_READBACK_ATTEMPTS - 1:
-            time.sleep(REF_READBACK_DELAY_SECONDS)
-    raise CarrierError(f"mandatory private {branch} ref readback failed")
 
 
 def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
@@ -394,7 +371,9 @@ def _update_refs_exact(
 ) -> None:
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
-      updateRefs(input: $input) { clientMutationId }
+      updateRefs(input: $input) {
+        clientMutationId
+      }
     }
     """
     _assert_current_command_fresh_at_ref_cas(source_queue)
@@ -406,8 +385,8 @@ def _update_refs_exact(
             "query": mutation,
             "variables": {
                 "input": {
-                    "repositoryId": repository_node_id,
                     "clientMutationId": client_id,
+                    "repositoryId": repository_node_id,
                     "refUpdates": [
                         {
                             "name": "refs/heads/main",
@@ -492,14 +471,9 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
         source_queue=state["queue"],
     )
-    _await_git_ref_head(RUNTIME_BRANCH, new_commit)
-    if _git_ref_head("main") != state["main_sha"]:
-        raise CarrierError("private authority moved during runtime write")
-    readback, readback_blob = _json_file(QUEUE_PATH, new_commit)
-    if readback_blob != new_blob or readback != queue:
-        raise CarrierError("mandatory private queue readback failed")
-    validate_queue_v4(readback)
-    return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": readback}
+    # Successful updateRefs is the commit boundary. Everything that can reject
+    # this transition has already run; later commands reload canonical truth.
+    return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": dict(queue)}
 
 
 def _assert_public_target_repository(repository: str) -> None:
@@ -545,12 +519,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
 
     queue = state["queue"]
     lock = queue.get("execution_lock")
+    recovery_pending = False
     if isinstance(lock, Mapping) and datetime.fromisoformat(lock["expires_at"].replace("Z", "+00:00")) <= now:
         recovered, changed = recover_expired_lock_v4(queue, now=now)
         if changed:
-            state = _write_queue_exact(state, recovered, reason="expired-lock-recovery")
-            queue = state["queue"]
+            queue = recovered
             lock = None
+            recovery_pending = True
 
     if isinstance(lock, Mapping):
         if lock.get("run_id") != command["run_id"]:
@@ -558,73 +533,62 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         task_id = lock.get("task_id")
         if not isinstance(task_id, str):
             raise CarrierError("current private lock task invalid")
-    else:
-        task_id = select_task_id_v4(
-            queue,
-            run_id=command["run_id"],
-            yielded_task_tokens=command.get("yielded_task_tokens", []),
-            integration_enabled=False,
-        )
-        if task_id is None:
-            return state, {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
-        acquired = acquire_task_v4(
-            queue,
-            task_id=task_id,
-            run_id=command["run_id"],
-            now=now,
-            control_runtime_enabled=True,
-            integration_enabled=False,
-        )
-        state = _write_queue_exact(state, acquired, reason="acquire")
-        queue = state["queue"]
-
-    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
-    candidate = task.get("candidate")
-    live_candidate = None
-    try:
-        if isinstance(candidate, Mapping):
+        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+        candidate = task.get("candidate")
+        live_candidate = None
+        if task.get("phase") == "REPAIR" and isinstance(candidate, Mapping):
+            # Same-run revalidation has no holder write, so refreshing this
+            # read-only compatibility hint cannot create a write/result mismatch.
             live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
-        else:
-            _assert_public_target_repository(task["repository"])
-    except RuntimeProtocolError:
-        blocked = block_holder_v4(
-            queue,
-            task_id=task_id,
-            run_id=command["run_id"],
-            blocker="TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1",
-            now=now,
-        )
-        state = _write_queue_exact(state, blocked, reason="unsupported-target-block")
-        return state, {
-            "protocol": RESULT_PROTOCOL_ID,
-            "result": "BLOCKED",
-            "code": "TARGET_NOT_PUBLICLY_READABLE",
-            "run_id": command["run_id"],
-        }
-
-    if task.get("phase") == "REVIEW" and isinstance(candidate, Mapping) and live_candidate is not None:
-        reconciled, drifted = reconcile_review_candidate_drift_v4(
+        work_result = safe_work_capsule(
             queue,
             task_id=task_id,
             run_id=command["run_id"],
             live_candidate=live_candidate,
-            now=now,
         )
-        if drifted:
-            state = _write_queue_exact(state, reconciled, reason="candidate-drift-to-repair")
-            return state, safe_work_capsule(
-                state["queue"],
-                task_id=task_id,
-                run_id=command["run_id"],
-                live_candidate=live_candidate,
-            )
+        return state, work_result
 
-    return state, safe_work_capsule(
-        state["queue"],
+    task_id = select_task_id_v4(
+        queue,
+        run_id=command["run_id"],
+        yielded_task_tokens=command.get("yielded_task_tokens", []),
+        integration_enabled=False,
+    )
+    if task_id is None:
+        result = {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
+        if recovery_pending:
+            state = _write_queue_exact(state, queue, reason="expired-lock-recovery")
+        return state, result
+
+    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+    candidate = task.get("candidate")
+    live_candidate = None
+    # All target I/O required for a new public WORK projection occurs before
+    # durable ownership. Semantic candidate-drift reconciliation is EVENT-side.
+    if isinstance(candidate, Mapping):
+        observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
+        if task.get("phase") == "REPAIR":
+            live_candidate = observed
+    else:
+        _assert_public_target_repository(task["repository"])
+
+    acquired = acquire_task_v4(
+        queue,
         task_id=task_id,
         run_id=command["run_id"],
-        live_candidate=live_candidate if task.get("phase") == "REPAIR" else None,
+        now=now,
+        control_runtime_enabled=True,
+        integration_enabled=False,
     )
+    work_result = safe_work_capsule(
+        acquired,
+        task_id=task_id,
+        run_id=command["run_id"],
+        live_candidate=live_candidate,
+    )
+    reason = "expired-lock-recovery-acquire" if recovery_pending else "acquire"
+    state = _write_queue_exact(state, acquired, reason=reason)
+    return state, work_result
 
 
 def _validate_public_ref_for_task(task: Mapping[str, Any], value: str) -> None:
@@ -651,9 +615,9 @@ def _release_event_holder_boundary(queue: Mapping[str, Any], command: Mapping[st
     return released
 
 
-def _event_result(state: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
-    current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
-    if state["queue"].get("execution_lock") is not None:
+def _event_result(queue: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
+    current = next(item for item in queue["tasks"] if item["task_id"] == command["task_id"])
+    if queue.get("execution_lock") is not None:
         raise RuntimeProtocolError("accepted EVENT retained execution lock")
     return {
         "protocol": RESULT_PROTOCOL_ID,
@@ -697,8 +661,9 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
         )
         if drifted:
             next_queue = _release_event_holder_boundary(reconciled, command)
+            result = _event_result(next_queue, command)
             state = _write_queue_exact(state, next_queue, reason="candidate-drift-to-repair")
-            return state, _event_result(state, command)
+            return state, result
 
     if event == "YIELD":
         next_queue = yield_holder_v4(queue, command, now=now)
@@ -733,9 +698,10 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
         raise RuntimeProtocolError("unsupported event")
 
     next_queue = _release_event_holder_boundary(next_queue, command)
+    result = _event_result(next_queue, command)
     if next_queue != queue:
         state = _write_queue_exact(state, next_queue, reason=event.lower().replace("_", "-"))
-    return state, _event_result(state, command)
+    return state, result
 
 
 def _set_outputs(result: Mapping[str, Any], *, ok: bool) -> None:

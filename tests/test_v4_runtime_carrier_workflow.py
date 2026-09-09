@@ -27,10 +27,12 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" not in text
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" not in text
+    assert 'f7beb2a3571eae1f' in text
+    assert 'bdabf8391bbd1a6c' not in text
 
 
 def test_strict_parser_accepts_canonical_multiline_tick_and_event_and_existing_space_framing() -> None:
-    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:0123456789abcdef0123456789abcdef'
+    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:f7beb2a3571eae1f:0123456789abcdef0123456789abcdef'
     tick_json = '{"run_id":"' + run_id + '","yielded_task_tokens":[]}'
     event_json = (
         '{"run_id":"' + run_id + '","task_token":"' + ('a' * 64)
@@ -100,7 +102,7 @@ def test_public_workflow_token_cannot_write_repository_contents_and_private_toke
     assert 'permission-pull-requests: write' not in capability
 
 
-def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_mandatory_readback() -> None:
+def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_atomic_commit_boundary() -> None:
     text = SCRIPT.read_text(encoding='utf-8')
     assert 'QUEUE_PATH = "control/DISPATCH_QUEUE.json"' in text
     assert 'RUNTIME_BRANCH = "control-runtime-state"' in text
@@ -117,11 +119,13 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_mandatory_read
     assert '"base_tree": parent_tree' in text
     assert '"path": QUEUE_PATH' in text
     assert '"parents": [state["runtime_sha"]]' in text
-    assert '_await_git_ref_head(RUNTIME_BRANCH, new_commit)' in text
-    assert 'git/ref/heads/' in text
-    assert 'REF_READBACK_ATTEMPTS = 6' in text
-    assert 'REF_READBACK_DELAY_SECONDS = 0.5' in text
-    assert 'mandatory private queue readback failed' in text
+
+    write = text.split('def _write_queue_exact', 1)[1].split('def _assert_public_target_repository', 1)[0]
+    assert '_update_refs_exact(' in write
+    assert '_await_git_ref_head' not in write
+    assert '_git_ref_head' not in write
+    assert 'mandatory private queue readback failed' not in write
+    assert 'private authority moved during runtime write' not in write
 
 
 def test_atomic_main_and_runtime_ref_cas_rejects_authority_interleaving_without_runtime_move(monkeypatch) -> None:
@@ -185,22 +189,36 @@ def test_transport_has_no_generic_queue_patch_and_public_result_forbids_private_
     assert 'RESULT_JSON' in workflow
 
 
-def test_carrier_is_activation_bounded_to_integration_disabled_and_private_targets_fail_closed() -> None:
+def test_carrier_is_activation_bounded_and_private_targets_fail_closed_before_acquire() -> None:
     script = SCRIPT.read_text(encoding='utf-8')
     assert 'INTEGRATION_ENABLED_REQUIRES_SEPARATE_REVIEWED_CARRIER_EXTENSION' in script
     assert 'carrier V1 requires integration disabled' in script
     assert 'target repository is not publicly readable by carrier V1' in script
-    assert 'TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1' in script
-    assert 'TARGET_NOT_PUBLICLY_READABLE' in script
+
+    tick = script.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
+    public_check = '_assert_public_target_repository(task["repository"])'
+    cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
+    assert public_check in tick
+    assert cas in tick
+    assert tick.index(public_check) < tick.index(cas)
+    assert 'unsupported-target-block' not in tick
+    assert 'TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1' not in tick
 
 
-def test_candidate_less_build_proves_public_target_before_work_capsule() -> None:
+def test_candidate_less_build_proves_public_target_before_acquire_and_work_capsule() -> None:
     text = SCRIPT.read_text(encoding='utf-8')
     assert 'def _assert_public_target_repository(repository: str) -> None:' in text
     assert '_assert_public_target_repository(repository)' in text.split('def _target_pr_candidate', 1)[1].split('def _tick', 1)[0]
     tick = text.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
-    assert 'else:\n            _assert_public_target_repository(task["repository"])' in tick
-    assert tick.index('_assert_public_target_repository(task["repository"])') < tick.rindex('safe_work_capsule(')
+    public_check = '_assert_public_target_repository(task["repository"])'
+    cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
+    result_build = 'work_result = safe_work_capsule('
+    assert public_check in tick
+    assert result_build in tick
+    assert cas in tick
+    assert tick.index(public_check) < tick.rindex(result_build) < tick.index(cas)
+    assert 'return state, work_result' in tick.split(cas, 1)[1]
+    assert 'reconcile_review_candidate_drift_v4(' not in tick
 
 
 def test_carrier_does_not_persist_private_state_in_public_repository() -> None:
