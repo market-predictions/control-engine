@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+
 import pytest
 
 from scripts import validate_private_control_v4 as validator
@@ -21,17 +24,42 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
     "Do not replay the command and do not derive recovery state from issue history.",
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
+FIXTURE = Path("tests/fixtures/control_runner_v4_prompt_compact.md")
+
+
+def _prompt_fixture() -> str:
+    return FIXTURE.read_text(encoding="utf-8")
+
+
+def _git_blob_sha(text: str) -> str:
+    raw = text.encode("utf-8")
+    return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
 
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0"
+    assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
 
 
-def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
+def test_command_binding_markers_cover_generation_object_identity_exact_schedule_and_pre_private_admission():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=dcd5dd2495113a68" in markers
+    assert "runner_command_generation=bdabf8391bbd1a6c" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
+    assert "timing_mode=exact_schedule" in markers
+    for marker in (
+        "document_id=CONTROL_RUNNER_V4_PROMPT",
+        "status=ACTIVE_BOUND",
+        "architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4",
+        "source_of_truth=GITHUB",
+        "principal_manual_relay_target=0",
+    ):
+        assert marker in markers
+    assert any("Before any private capability is created" in marker for marker in markers)
+    assert any("current generation-bound identity is invalid" in marker for marker in markers)
+    assert any("inclusive `0..120` second admission window" in marker for marker in markers)
     assert any("command_comment_id" in marker for marker in markers)
     assert "no later same-`run_id` Control command" in markers
     assert any("previously unused" in marker for marker in markers)
@@ -64,13 +92,36 @@ def test_holder_closeout_markers_are_part_of_current_prompt_trust():
     assert any("missing or ambiguous EVENT" in marker for marker in markers)
 
 
+def test_exact_repaired_compact_prompt_fixture_is_current_trusted_surface():
+    prompt = _prompt_fixture()
+    assert _git_blob_sha(prompt) == validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA
+    assert not any(marker in prompt for marker in validator.OBSOLETE_TRANSPORT_RECOVERY_MARKERS)
+    validator._validate_prompt_trust(prompt, validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA)
+
+
+@pytest.mark.parametrize(
+    "removed_marker",
+    (
+        "timing_mode=exact_schedule",
+        "no additional reasoning, waiting, or unrelated work is allowed before effect start",
+        "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
+    ),
+)
+def test_repaired_fail_closed_predicates_are_required_by_real_prompt(removed_marker):
+    prompt = _prompt_fixture()
+    assert removed_marker in prompt
+    broken = prompt.replace(removed_marker, "", 1)
+    with pytest.raises(validator.ValidationError):
+        validator._validate_prompt_trust(broken, validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA)
+
+
 @pytest.mark.parametrize("obsolete_hash", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))
 def test_predecessor_prompt_hashes_are_obsolete_current_trust(obsolete_hash):
     with pytest.raises(
         validator.ValidationError,
         match="obsolete Runner prompt is not trusted by the current stateless transport contract",
     ):
-        validator._validate_prompt_trust("\n".join(EXPECTED_STATELESS_TRANSPORT_MARKERS), obsolete_hash)
+        validator._validate_prompt_trust(_prompt_fixture(), obsolete_hash)
 
 
 def test_unknown_prompt_hash_fails_closed_even_with_current_markers():
@@ -78,4 +129,4 @@ def test_unknown_prompt_hash_fails_closed_even_with_current_markers():
         validator.ValidationError,
         match="Runner prompt blob differs from exact trusted reviewed V4 prompt contract",
     ):
-        validator._validate_prompt_trust("\n".join(EXPECTED_STATELESS_TRANSPORT_MARKERS), "f" * 40)
+        validator._validate_prompt_trust(_prompt_fixture(), "f" * 40)

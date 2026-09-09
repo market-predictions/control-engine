@@ -118,7 +118,10 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0"
+    assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
@@ -224,7 +227,7 @@ def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(mo
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=dcd5dd2495113a68" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
+    assert "runner_command_generation=bdabf8391bbd1a6c" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert "timing_mode=exact_schedule" in markers; assert any("Before any private capability is created" in marker for marker in markers); assert any("inclusive `0..120` second admission window" in marker for marker in markers); assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
 
 
 def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
