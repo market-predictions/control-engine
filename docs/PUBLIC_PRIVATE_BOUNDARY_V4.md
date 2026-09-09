@@ -10,7 +10,7 @@ source_of_truth=GITHUB
 
 Private `market-predictions/control-plane` is the sole Mission, runtime-authority and mutable runtime-state plane.
 
-Public `market-predictions/control-engine` owns deterministic contracts, validation and bounded transport/carrier code. It owns no semantic runtime authority and persists no private Control runtime state.
+Public `market-predictions/control-engine` owns deterministic contracts, validation and bounded transport/carrier code. It owns no semantic runtime authority and persists no private Control runtime state. A component-local manifest or public carrier result must never be promoted into global Control state; global status is reconstructed from current private authority/queue truth plus bounded target evidence when needed.
 
 Canonical mutable state is exactly:
 
@@ -55,13 +55,17 @@ fresh admission
   -> bounded same-run supersession check
   -> transition-time freshness check
   -> expired-holder recovery when required
-  -> select/acquire
+  -> select task
+  -> bounded public target eligibility/candidate observation when needed
+  -> acquire
   -> final freshness check immediately before CAS
   -> atomic CAS
   -> WORK
 ```
 
-TICK performs no target-repository or pull-request network verification after durable ownership is acquired. Acquisition must not be followed by fallible network work that can turn a successful holder write into a reported failure.
+Any public target read needed to prove the target is supported or to supply the existing REPAIR compatibility hint occurs **before a new holder CAS**. Semantic candidate-drift decisions do not occur on TICK; they occur at EVENT.
+
+TICK performs no target-repository or pull-request network verification after durable ownership is acquired. Acquisition must not be followed by fallible network work that can turn a successful holder write into a reported failure. A same-run TICK that merely revalidates an already-held REPAIR task may refresh its read-only compatibility hint because that command performs no holder write.
 
 A live foreign holder returns `BUSY`; no eligible work returns `NO_WORK`. The fixed private lease remains non-renewable. Objectively expired-holder recovery is derived only from canonical private state.
 
@@ -99,7 +103,7 @@ Transport success does not authorize arbitrary target mutation. Consequential ta
 
 The current carrier is bounded to `integration_enabled=false`. It provides acquisition, review, repair and wait-state transport only; it has no merge/integration authority.
 
-The current carrier also relies on publicly readable target repositories for target/candidate EVENT verification. General private-target credentials are not part of V4 current scope.
+The current carrier also relies on publicly readable target repositories. General private-target credentials are not part of V4 current scope. Unsupported/private target eligibility therefore fails closed before a new holder is acquired; target/candidate EVENT verification remains fail closed at the semantic boundary.
 
 ## Retired and explicitly absent mechanisms
 
@@ -108,7 +112,8 @@ Current V4 does **not** use:
 - post-CAS Git-ref polling or retry;
 - post-CAS private-main readback;
 - post-CAS queue/blob readback;
-- TICK-side target/PR verification after acquisition;
+- TICK-side semantic candidate-drift reconciliation;
+- target/PR network verification after a new acquire CAS;
 - V3.1 semantic runtime writers;
 - a second scheduler or semantic worker;
 - a second queue or public runtime-state mirror;
