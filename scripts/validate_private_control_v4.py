@@ -65,6 +65,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "e100b7655dd1596f0562820e55a8da2a3358a6a8",
         "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0",
         "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242",
+        "419afc91bc4b1f3fa7f1d624d713077452a3d7ee",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -87,13 +88,19 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=c81e7a4f2d1b9306",
+    "runner_command_generation=83ee437c017961ce",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
     "6a9a7e0b18b08191876c134d83cfbba2",
+    "timing_mode=exact_schedule",
+    "document_id=CONTROL_RUNNER_V4_PROMPT",
+    "status=ACTIVE_BOUND",
+    "architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4",
+    "source_of_truth=GITHUB",
+    "principal_manual_relay_target=0",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:c81e7a4f2d1b9306:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:83ee437c017961ce:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
@@ -132,6 +139,8 @@ TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
     "must be no more than **660 seconds old**",
     "Later revalidation TICKs do not reset or renew this clock.",
     "no more than **15 seconds old**",
+    "perform only the minimum fresh public target identity read and then start the effect",
+    "no additional reasoning, waiting, or unrelated work is allowed before effect start",
     "bounded to **300 seconds or less**",
     "The second same-`run_id` TICK is revalidation only",
     "A fresh phase reacquisition creates a fresh acquisition identity for subsequent target effects.",
