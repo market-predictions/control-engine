@@ -232,6 +232,55 @@ def parse_public_command(text: str) -> dict[str, Any]:
     return result
 
 
+def validate_runtime_binding(
+    authority: Mapping[str, Any],
+    runner_config: Mapping[str, Any],
+    prompt_text: str,
+    *,
+    runner_config_blob_sha: str,
+    prompt_blob_sha: str,
+) -> tuple[bool, bool]:
+    if authority.get("protocol_id") != "CONTROL_RUNTIME_AUTHORITY_V4":
+        raise RuntimeProtocolError("runtime authority identity invalid")
+    if authority.get("principal_manual_relay_count") != 0:
+        raise RuntimeProtocolError("runtime authority relay invalid")
+    runtime_enabled = authority.get("control_runtime_enabled")
+    integration_enabled = authority.get("integration_enabled")
+    if not isinstance(runtime_enabled, bool) or not isinstance(integration_enabled, bool):
+        raise RuntimeProtocolError("runtime switches invalid")
+    if integration_enabled and not runtime_enabled:
+        raise RuntimeProtocolError("integration cannot be enabled while runtime disabled")
+    if authority.get("runner_config_path") != "control/CONTROL_RUNNER_V4.json":
+        raise RuntimeProtocolError("runner config path invalid")
+    if authority.get("runner_config_blob_sha") != _sha(runner_config_blob_sha):
+        raise RuntimeProtocolError("runner config blob binding invalid")
+    if runner_config.get("protocol_id") != "CONTROL_RUNNER_V4" or runner_config.get("runner_id") != "CONTROL_V4_RUNNER":
+        raise RuntimeProtocolError("runner config identity invalid")
+    if runner_config.get("execution_surface") != "CHATGPT_SCHEDULED":
+        raise RuntimeProtocolError("runner execution surface invalid")
+    if runner_config.get("automation_object_binding_status") != "BOUND":
+        raise RuntimeProtocolError("runner automation binding invalid")
+    if runner_config.get("principal_manual_relay_count") != 0:
+        raise RuntimeProtocolError("runner relay invalid")
+    if runner_config.get("prompt_path") != "control/CONTROL_RUNNER_V4_PROMPT.md":
+        raise RuntimeProtocolError("runner prompt path invalid")
+    bound_prompt_blob_sha = _sha(prompt_blob_sha)
+    if runner_config.get("prompt_blob_sha") != bound_prompt_blob_sha:
+        raise RuntimeProtocolError("runner prompt blob binding invalid")
+    if bound_prompt_blob_sha != CANONICAL_RUNNER_PROMPT_BLOB_SHA:
+        raise RuntimeProtocolError("runner prompt wire contract is not current")
+    required_markers = (
+        "document_id=CONTROL_RUNNER_V4_PROMPT",
+        "status=ACTIVE_BOUND",
+        "architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4",
+        "source_of_truth=GITHUB",
+        "principal_manual_relay_target=0",
+    )
+    if not isinstance(prompt_text, str) or any(marker not in prompt_text for marker in required_markers):
+        raise RuntimeProtocolError("runner prompt identity invalid")
+    return runtime_enabled, integration_enabled
+
+
 def task_token(task: Mapping[str, Any], run_id: str) -> str:
     payload = f"{run_id}\n{task['task_id']}\n{task['mission_contract_blob_sha']}\n{task['repository_authority_blob_sha']}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
