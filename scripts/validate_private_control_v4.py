@@ -63,6 +63,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "f984584f7680428db5ecedf414d0bdd518245f1c",
         "04e7dbb577e1dbe630a1422d7b38dff2fd337e3c",
         "e100b7655dd1596f0562820e55a8da2a3358a6a8",
+        "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -85,13 +86,13 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=965d03fc71359d0e",
+    "runner_command_generation=dcd5dd2495113a68",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
     "6a9a7e0b18b08191876c134d83cfbba2",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:965d03fc71359d0e:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:dcd5dd2495113a68:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
@@ -112,14 +113,16 @@ LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS = (
     "persists no timer, cursor, retry record, scheduler state, carrier-run ledger or runtime state",
 )
 POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS = (
-    "After a correlated `YIELD` or `REVIEW_UNAVAILABLE` result that releases the holder",
+    "### Progress EVENT versus wait EVENT continuation",
+    "Progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, and `EXTERNAL_FINDING`",
+    "**do not** add that task token to `yielded_task_tokens`",
+    "one fresh same-`run_id` acquisition TICK with the unchanged yielded-token set",
+    "Wait/release EVENTs `YIELD` and `REVIEW_UNAVAILABLE`",
+    "`EXTERNAL_REQUESTED` is also a wait boundary",
     "add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
-    "continue the same invocation",
-    "posting one new same-`run_id` acquisition TICK carrying the complete current `yielded_task_tokens` set",
     "This is a new current-state acquisition query, not a replay of an earlier command.",
-    "Repeat only after another correlated release/yield",
     "Never carry yielded tokens into another Scheduled invocation.",
-    "This bounded yielded-token continuation is what allows candidate-less BUILD, unavailable external review, or another retryable wait to release ownership without starving unrelated eligible work.",
+    "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth",
 )
 TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
     "Fresh acquisition of the current holder occurred in this Scheduled invocation under its unique `run_id`",
@@ -130,6 +133,7 @@ TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
     "no more than **15 seconds old**",
     "bounded to **300 seconds or less**",
     "The second same-`run_id` TICK is revalidation only",
+    "A fresh phase reacquisition creates a fresh acquisition identity for subsequent target effects.",
 )
 CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
     "### Canonical EVENT wire contract",
@@ -144,9 +148,12 @@ CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
 )
 HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS = (
     "HOLDER CLOSEOUT OBLIGATION",
-    "### Holder closeout after WORK",
-    "If an EVENT returns `WORK`, the holder remains live",
-    "Candidate drift in a REPAIR WORK capsule is not a terminal or fail-closed reason to silently stop.",
+    "### Holder closeout after WORK — atomic EVENT boundary",
+    "Every accepted semantic EVENT is an **ATOMIC HOLDER BOUNDARY**",
+    "the event transition and release of that exact holder are committed in the same private queue mutation/CAS",
+    "Under the current contract an accepted EVENT must never return `WORK`.",
+    "`READY` means the task reached READY with no holder; `YIELDED` means the EVENT transition completed and the holder was atomically released.",
+    "No normal invocation is required to retain a private holder across semantic phases.",
     "Send exactly one `CANDIDATE_READY` EVENT using the exact `live_candidate` fields",
     "send exactly one `YIELD` EVENT while the current holder remains valid",
     "before any normal invocation exit after obtaining `WORK`",
@@ -162,6 +169,7 @@ OBSOLETE_TRANSPORT_RECOVERY_MARKERS = (
     "spent for forward scheduling",
     "5400-second unresolved-EVENT retirement clock",
     "earliest TICK for that `run_id` remains the sole initial acquisition TICK",
+    "If an EVENT returns `WORK`, the holder remains live",
 )
 HISTORICAL_COHERENCE_REQUIRED_MARKERS = (
     "status=HISTORICAL_AUDIT_EVIDENCE",
