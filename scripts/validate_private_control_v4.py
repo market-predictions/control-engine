@@ -19,7 +19,7 @@ import sys
 from typing import Any, Mapping
 
 from control_engine.v4_authority_io import load_v4_authority_from_git
-from control_engine.v4_contracts import V4ValidationError
+from control_engine.v4_contracts import V4ValidationError, revision_strictly_precedes
 from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 
 RUNTIME_PATH = "control/CONTROL_RUNTIME_AUTHORITY_V4.json"
@@ -309,6 +309,34 @@ def load_frozen_v4_40_authority(base_root: Path):
     return load_v4_authority_from_git(Path(base_root), commit_sha=V4_40_FROZEN_AUTHORITY_COMMIT)
 
 
+def validate_authority_evolution(candidate_bundle, base_bundle) -> None:
+    base_missions = {mission["mission_id"]: mission for mission in base_bundle.missions}
+    candidate_missions = {mission["mission_id"]: mission for mission in candidate_bundle.missions}
+
+    missing_missions = sorted(set(base_missions) - set(candidate_missions))
+    if missing_missions:
+        raise ValidationError("current V4 Mission authority may not be deleted")
+
+    missing_authorities = sorted(set(base_bundle.authority_blob_shas) - set(candidate_bundle.authority_blob_shas))
+    if missing_authorities:
+        raise ValidationError("current V4 repository authority may not be deleted")
+
+    for mission_id, base_mission in base_missions.items():
+        if candidate_bundle.mission_blob_shas[mission_id] == base_bundle.mission_blob_shas[mission_id]:
+            continue
+        candidate_mission = candidate_missions[mission_id]
+        base_revision = base_mission["mission_revision"]
+        candidate_revision = candidate_mission["mission_revision"]
+        try:
+            advances = revision_strictly_precedes(base_revision, candidate_revision)
+        except V4ValidationError as exc:
+            raise ValidationError("changed V4 Mission revision is invalid") from exc
+        if not advances:
+            raise ValidationError("changed V4 Mission must advance mission_revision")
+        if candidate_mission.get("supersedes_revision") != base_revision:
+            raise ValidationError("changed V4 Mission must supersede exact current revision")
+
+
 def validate_current_surface(root: Path, entries) -> None:
     stale = sorted(path for path in LEGACY_CURRENT_PATHS if path in entries)
     if stale:
@@ -453,16 +481,11 @@ def validate_candidate(candidate_root: Path, base_root: Path) -> None:
 
     try:
         candidate_bundle = load_v4_authority_from_git(candidate_root)
-        load_v4_authority_from_git(base_root)
-        frozen_bundle = load_frozen_v4_40_authority(base_root)
+        base_bundle = load_v4_authority_from_git(base_root)
     except V4ValidationError as exc:
         raise ValidationError("trusted public V4 authority validation failed") from exc
 
-    if dict(candidate_bundle.mission_blob_shas) != dict(frozen_bundle.mission_blob_shas):
-        raise ValidationError("V4-40 adopted Mission blob set drifted during frozen rollback window")
-    if dict(candidate_bundle.authority_blob_shas) != dict(frozen_bundle.authority_blob_shas):
-        raise ValidationError("V4-40 adopted repository-authority blob set drifted during frozen rollback window")
-
+    validate_authority_evolution(candidate_bundle, base_bundle)
     validate_current_surface(candidate_root, candidate_entries)
     runtime = validate_runtime_and_runner(candidate_root, candidate_entries)
     index_raw, index_oid = _blob(candidate_root, candidate_entries, INDEX_PATH)
@@ -472,8 +495,7 @@ def validate_candidate(candidate_root: Path, base_root: Path) -> None:
     print("CONTROL_PRIVATE_CANDIDATE_EXECUTION=false")
     print("CONTROL_PRIVATE_RUNTIME_MUTATION=false")
     print("CONTROL_PRIVATE_V4_CURRENT_SURFACE_CLEAN=true")
-    print("CONTROL_PRIVATE_V4_MISSION_SET_FROZEN=true")
-    print("CONTROL_PRIVATE_V4_REPOSITORY_AUTHORITY_SET_FROZEN=true")
+    print("CONTROL_PRIVATE_V4_AUTHORITY_EVOLUTION_VALID=true")
     print("CONTROL_PRIVATE_V4_CHANGED_PATHS=" + ",".join(sorted(changed)))
 
 
