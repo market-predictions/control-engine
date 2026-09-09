@@ -147,6 +147,7 @@ def test_atomic_main_and_runtime_ref_cas_rejects_authority_interleaving_without_
 
     monkeypatch.setattr(carrier, "_private_headers", lambda: {})
     monkeypatch.setattr(carrier, "_request_json", fake_request_json)
+    monkeypatch.setattr(carrier, "_assert_current_command_fresh_at_ref_cas", lambda source_queue: None)
     monkeypatch.setenv(
         "CONTROL_V4_PUBLIC_COMMAND",
         'CONTROL_V4_RUNTIME_EVENT {"run_id":"cas-test","task_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"YIELD","repository":"market-predictions/control-engine","action":"BUILD"}',
@@ -159,6 +160,7 @@ def test_atomic_main_and_runtime_ref_cas_rejects_authority_interleaving_without_
             runtime_before_oid=runtime_a,
             runtime_after_oid=runtime_b,
             client_id="test",
+            source_queue={},
         )
 
     assert refs["refs/heads/main"] == main_b
