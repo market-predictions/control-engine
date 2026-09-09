@@ -9,8 +9,8 @@ import scripts.control_v4_runtime_carrier as carrier_module
 
 WORKFLOW = Path('.github/workflows/control-v4-runtime-carrier.yml')
 CARRIER = Path('scripts/control_v4_runtime_carrier.py')
-RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:965d03fc71359d0e:' + ('a' * 32)
-OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:965d03fc71359d0e:' + ('b' * 32)
+RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:dcd5dd2495113a68:' + ('a' * 32)
+OTHER_RUN_ID = 'v4:6a9a7e0b18b08191876c134d83cfbba2:dcd5dd2495113a68:' + ('b' * 32)
 
 
 def _workflow_section(text: str, start: str, end: str) -> str:
@@ -77,7 +77,7 @@ def test_stale_or_old_generation_command_is_rejected_before_private_write_capabi
     assert 'CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}' in admission
     assert "CONTROL_V4_TICK_MAX_AGE_SECONDS: '120'" in admission
     assert 'parse_public_command(raw_command)' in admission
-    assert '6a9a7e0b18b08191876c134d83cfbba2:965d03fc71359d0e' in admission
+    assert '6a9a7e0b18b08191876c134d83cfbba2:dcd5dd2495113a68' in admission
     assert 'EXPECTED_RUN_ID.fullmatch(command["run_id"])' in admission
     assert '0 <= age_seconds <= max_age' in admission
     assert "output.write(f\"admitted={'true' if admitted else 'false'}\\n\")" in admission
@@ -175,6 +175,27 @@ def test_later_trusted_same_run_release_behaviorally_supersedes_earlier_tick(mon
         match='TICK command superseded by later same-run command',
     ):
         carrier_module._assert_tick_not_superseded(_tick_command())
+
+
+def test_fresh_same_run_tick_after_progress_event_is_not_superseded(monkeypatch) -> None:
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_ID', '102')
+    monkeypatch.setenv('CONTROL_V4_PUBLIC_COMMAND_CREATED_AT', '2026-09-08T07:00:02Z')
+    monkeypatch.setattr(carrier_module, '_public_command_headers', lambda: {})
+
+    def fake_request_json(url, *, headers=None, method='GET', payload=None, allow_404=False):
+        assert method == 'GET'
+        assert payload is None
+        return [
+            {
+                'id': 101,
+                'created_at': '2026-09-08T07:00:01Z',
+                'body': _event_body(RUN_ID, 'INTERNAL_REPAIR'),
+                'user': {'login': 'market-predictions'},
+            }
+        ]
+
+    monkeypatch.setattr(carrier_module, '_request_json', fake_request_json)
+    carrier_module._assert_tick_not_superseded(_tick_command())
 
 
 def test_supersession_ignores_foreign_actor_other_run_and_earlier_identity(monkeypatch) -> None:
