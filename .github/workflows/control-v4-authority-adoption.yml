@@ -123,6 +123,7 @@ jobs:
           import json
           import os
           import re
+          import time
           import urllib.error
           import urllib.parse
           import urllib.request
@@ -160,6 +161,10 @@ jobs:
                   if allow_404 and exc.code == 404:
                       return None
                   raise GateError(f'GitHub REST read failed with HTTP {exc.code}') from exc
+
+          def read_main_ref_sha():
+              value = rest_get(f'repos/{REPOSITORY}/git/ref/heads/main')
+              return (value.get('object') or {}).get('sha')
 
           mutation = '''
           mutation UpdateRefs($input: UpdateRefsInput!) {
@@ -307,7 +312,13 @@ jobs:
                   after_oid=CANDIDATE,
                   client_id=f'control-v4-authority-adopt-{RUN_ID}',
               )
-              adopted = (rest_get(f'repos/{REPOSITORY}/branches/main').get('commit') or {}).get('sha')
+              adopted = None
+              for attempt in range(6):
+                  adopted = read_main_ref_sha()
+                  if adopted == CANDIDATE:
+                      break
+                  if attempt < 5:
+                      time.sleep(0.5)
               if adopted != CANDIDATE:
                   raise GateError('mandatory exact authority post-adoption readback failed')
               print('CONTROL_V4_AUTHORITY_ADOPTION=PASS')
