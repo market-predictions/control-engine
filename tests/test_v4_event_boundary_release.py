@@ -93,6 +93,20 @@ def event(q: dict, name: str, **extra: object) -> dict:
     return parse_public_command("CONTROL_V4_RUNTIME_EVENT " + json.dumps(payload, separators=(",", ":")))
 
 
+def event_text(q: dict, name: str = "YIELD") -> str:
+    current = q["tasks"][0]
+    work = safe_work_capsule(q, task_id=current["task_id"], run_id=RUN_ID)
+    payload = {
+        "run_id": RUN_ID,
+        "task_token": work["task_token"],
+        "event": name,
+        "repository": work["repository"],
+        "action": work["action"],
+        "candidate": work["candidate"],
+    }
+    return "CONTROL_V4_RUNTIME_EVENT " + json.dumps(payload, separators=(",", ":"))
+
+
 def run_event(monkeypatch, q: dict, command: dict, *, live: dict | None = None):
     writes: list[tuple[dict, str]] = []
 
@@ -225,3 +239,71 @@ def test_carrier_event_source_has_no_work_return_path_after_transition() -> None
     source = open(carrier.__file__, encoding="utf-8").read().split("def _event(", 1)[1].split("def _set_outputs", 1)[0]
     assert "return state, safe_work_capsule" not in source
     assert "return state, _event_result(state, command)" in source
+
+
+def test_event_expiring_before_ref_cas_is_rejected_without_graphql_mutation(monkeypatch) -> None:
+    q = queue(task(phase="REVIEW"))
+    raw = event_text(q)
+    parsed = parse_public_command(raw)
+    bound = carrier.bind_public_event_to_holder(q, parsed)
+    carrier.assert_event_identity(q, bound, now=datetime(2026, 9, 9, 1, 29, 59, tzinfo=timezone.utc))
+    monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", raw)
+    monkeypatch.setattr(carrier, "_private_headers", lambda: {})
+
+    class AtExpiry(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime(2026, 9, 9, 1, 30, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(carrier, "datetime", AtExpiry)
+    graphql_calls = []
+
+    def fake_request_json(*args, **kwargs):
+        graphql_calls.append((args, kwargs))
+        raise AssertionError("GraphQL mutation must not be attempted after EVENT lease expiry")
+
+    monkeypatch.setattr(carrier, "_request_json", fake_request_json)
+    with pytest.raises(carrier.StaleEventError, match="event lease expired"):
+        carrier._update_refs_exact(
+            repository_node_id="NODE",
+            main_oid="a" * 40,
+            runtime_before_oid="b" * 40,
+            runtime_after_oid="c" * 40,
+            client_id="event-expired",
+            source_queue=q,
+        )
+    assert graphql_calls == []
+
+
+def test_unexpired_event_passes_ref_cas_fence_and_calls_graphql_once(monkeypatch) -> None:
+    q = queue(task(phase="REVIEW"))
+    raw = event_text(q)
+    monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", raw)
+    monkeypatch.setattr(carrier, "_private_headers", lambda: {})
+
+    class BeforeExpiry(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime(2026, 9, 9, 1, 29, 59, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(carrier, "datetime", BeforeExpiry)
+    graphql_calls = []
+
+    def fake_request_json(url, *, headers=None, method="GET", payload=None, allow_404=False):
+        graphql_calls.append((url, method, payload))
+        assert url == carrier.GRAPHQL
+        assert method == "POST"
+        return {"data": {"updateRefs": {"clientMutationId": "event-live"}}}
+
+    monkeypatch.setattr(carrier, "_request_json", fake_request_json)
+    carrier._update_refs_exact(
+        repository_node_id="NODE",
+        main_oid="a" * 40,
+        runtime_before_oid="b" * 40,
+        runtime_after_oid="c" * 40,
+        client_id="event-live",
+        source_queue=q,
+    )
+    assert len(graphql_calls) == 1
