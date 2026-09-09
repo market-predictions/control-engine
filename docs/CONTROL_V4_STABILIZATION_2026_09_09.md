@@ -78,7 +78,9 @@ This stabilization does not add:
 - special OVERIGE runtime logic;
 - another queue, scheduler, task type, inbox, retry ledger or state plane;
 - integration/merge authority;
-- a new Runner prompt/generation.
+- a second Runner or scheduler object.
+
+The same canonical Runner is intentionally rebound to reviewed generation `f7beb2a3571eae1f` because its command-authority contract changed; that trust-anchor rotation is part of this stabilization, not new runtime architecture.
 
 `market-predictions/overige` may remain registered inertly, but `[control] task overige: ...` is not end-to-end supported until the separate root-work intake gap is explicitly implemented.
 
