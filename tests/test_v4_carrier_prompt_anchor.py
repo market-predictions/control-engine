@@ -38,14 +38,15 @@ def _git_blob_sha(text: str) -> str:
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2d686b2271a9ff5cde931109d7a8078c8a2154d5"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0"
+    assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
 
 
-def test_command_binding_markers_cover_generation_object_identity_and_exact_schedule():
+def test_command_binding_markers_cover_generation_object_identity_exact_schedule_and_pre_private_admission():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=83ee437c017961ce" in markers
+    assert "runner_command_generation=bdabf8391bbd1a6c" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert "timing_mode=exact_schedule" in markers
     for marker in (
@@ -56,6 +57,9 @@ def test_command_binding_markers_cover_generation_object_identity_and_exact_sche
         "principal_manual_relay_target=0",
     ):
         assert marker in markers
+    assert any("Before any private capability is created" in marker for marker in markers)
+    assert any("current generation-bound identity is invalid" in marker for marker in markers)
+    assert any("inclusive `0..120` second admission window" in marker for marker in markers)
     assert any("command_comment_id" in marker for marker in markers)
     assert "no later same-`run_id` Control command" in markers
     assert any("previously unused" in marker for marker in markers)
@@ -100,6 +104,7 @@ def test_exact_repaired_compact_prompt_fixture_is_current_trusted_surface():
     (
         "timing_mode=exact_schedule",
         "no additional reasoning, waiting, or unrelated work is allowed before effect start",
+        "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
     ),
 )
 def test_repaired_fail_closed_predicates_are_required_by_real_prompt(removed_marker):
