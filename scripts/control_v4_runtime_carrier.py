@@ -26,7 +26,6 @@ from control_engine.v4_runtime_protocol import (
     StaleEventError,
     assert_event_identity,
     bind_public_event_to_holder,
-    block_holder_v4,
     candidate_ready_v4,
     compact_public_result,
     external_finding_v4,
@@ -528,12 +527,19 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             queue = state["queue"]
             lock = None
 
+    live_candidate = None
     if isinstance(lock, Mapping):
         if lock.get("run_id") != command["run_id"]:
             return state, {"protocol": RESULT_PROTOCOL_ID, "result": "BUSY", "run_id": command["run_id"]}
         task_id = lock.get("task_id")
         if not isinstance(task_id, str):
             raise CarrierError("current private lock task invalid")
+        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+        candidate = task.get("candidate")
+        if task.get("phase") == "REPAIR" and isinstance(candidate, Mapping):
+            # This command performs no holder write. The read keeps the existing
+            # REPAIR WORK compatibility hint without creating a post-write failure path.
+            live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
     else:
         task_id = select_task_id_v4(
             queue,
@@ -543,6 +549,16 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         )
         if task_id is None:
             return state, {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
+
+        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+        candidate = task.get("candidate")
+        # Any target read needed for the public WORK projection happens before
+        # durable ownership. Semantic candidate verification remains an EVENT concern.
+        if isinstance(candidate, Mapping):
+            live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
+        else:
+            _assert_public_target_repository(task["repository"])
+
         acquired = acquire_task_v4(
             queue,
             task_id=task_id,
@@ -553,14 +569,15 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         )
         state = _write_queue_exact(state, acquired, reason="acquire")
         queue = state["queue"]
+        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
 
-    # TICK is intentionally only acquire -> WORK. Target/candidate network
-    # verification belongs at semantic EVENT boundaries where it can affect a
-    # transition, not after durable ownership has already been acquired.
+    # After a holder CAS succeeds there is no fallible network I/O in this TICK.
+    # REVIEW/candidate drift is reconciled only at an EVENT boundary.
     return state, safe_work_capsule(
         state["queue"],
         task_id=task_id,
         run_id=command["run_id"],
+        live_candidate=live_candidate if task.get("phase") == "REPAIR" else None,
     )
 
 
