@@ -24,6 +24,7 @@ from control_engine.v4_runtime_protocol import (
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
+    assert_event_identity,
     bind_public_event_to_holder,
     block_holder_v4,
     candidate_ready_v4,
@@ -346,7 +347,7 @@ def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
             raise StaleEventError("TICK command superseded by later same-run command")
 
 
-def _assert_current_tick_fresh_at_ref_cas() -> None:
+def _assert_current_command_fresh_at_ref_cas(source_queue: Mapping[str, Any]) -> None:
     raw_command = os.environ.get("CONTROL_V4_PUBLIC_COMMAND", "")
     try:
         command = parse_public_command(raw_command)
@@ -354,6 +355,10 @@ def _assert_current_tick_fresh_at_ref_cas() -> None:
         raise CarrierError("current public command unavailable at private ref CAS") from exc
     if command.get("kind") == "TICK":
         _assert_tick_fresh(now=datetime.now(timezone.utc))
+        return
+    if command.get("kind") == "EVENT":
+        bound_event = bind_public_event_to_holder(source_queue, command)
+        assert_event_identity(source_queue, bound_event, now=datetime.now(timezone.utc))
 
 
 def _update_refs_exact(
@@ -363,13 +368,14 @@ def _update_refs_exact(
     runtime_before_oid: str,
     runtime_after_oid: str,
     client_id: str,
+    source_queue: Mapping[str, Any],
 ) -> None:
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
       updateRefs(input: $input) { clientMutationId }
     }
     """
-    _assert_current_tick_fresh_at_ref_cas()
+    _assert_current_command_fresh_at_ref_cas(source_queue)
     result = _request_json(
         GRAPHQL,
         headers=_private_headers(),
@@ -462,6 +468,7 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         runtime_before_oid=state["runtime_sha"],
         runtime_after_oid=new_commit,
         client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
+        source_queue=state["queue"],
     )
     if _branch_head(RUNTIME_BRANCH) != new_commit:
         raise CarrierError("mandatory private runtime ref readback failed")
