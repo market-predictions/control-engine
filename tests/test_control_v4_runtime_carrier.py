@@ -61,14 +61,16 @@ def test_new_acquire_has_no_post_cas_target_network_dependency() -> None:
     tick_start = text.index("def _tick(")
     tick_end = text.index("\ndef _validate_public_ref_for_task", tick_start)
     tick_body = text[tick_start:tick_end]
-    acquire = 'state = _write_queue_exact(state, acquired, reason="acquire")'
-    before, after = tick_body.split(acquire, 1)
+    cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
+    before, after = tick_body.split(cas, 1)
 
     assert "_target_pr_candidate(" in before
     assert "_assert_public_target_repository(" in before
-    assert "safe_work_capsule(" in after
+    assert "safe_work_capsule(" in before
     assert "_target_pr_candidate(" not in after
     assert "_assert_public_target_repository(" not in after
+    assert "safe_work_capsule(" not in after
+    assert "return state, work_result" in after
     assert "reconcile_review_candidate_drift_v4(" not in tick_body
 
 
