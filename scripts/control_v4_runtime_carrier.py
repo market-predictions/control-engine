@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,8 +58,6 @@ RUNNER_CONFIG_PATH = "control/CONTROL_RUNNER_V4.json"
 PROMPT_PATH = "control/CONTROL_RUNNER_V4_PROMPT.md"
 MISSION_DIR = "control/missions"
 REPOSITORY_AUTHORITY_DIR = "control/repository-authority"
-REF_READBACK_ATTEMPTS = 6
-REF_READBACK_DELAY_SECONDS = 0.5
 API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
 
@@ -184,25 +181,6 @@ def _branch_head(branch: str) -> str:
     if not isinstance(sha, str) or len(sha) != 40:
         raise CarrierError("private branch identity invalid")
     return sha
-
-
-def _git_ref_head(branch: str) -> str:
-    result = _private_get(f"repos/{PRIVATE_REPOSITORY}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
-    if not isinstance(result, Mapping):
-        raise CarrierError("private Git ref response invalid")
-    sha = ((result.get("object") or {}).get("sha"))
-    if not isinstance(sha, str) or len(sha) != 40:
-        raise CarrierError("private Git ref identity invalid")
-    return sha
-
-
-def _await_git_ref_head(branch: str, expected_sha: str) -> None:
-    for attempt in range(REF_READBACK_ATTEMPTS):
-        if _git_ref_head(branch) == expected_sha:
-            return
-        if attempt < REF_READBACK_ATTEMPTS - 1:
-            time.sleep(REF_READBACK_DELAY_SECONDS)
-    raise CarrierError(f"mandatory private {branch} ref readback failed")
 
 
 def _load_authority_bundle(main_sha: str) -> V4AuthorityBundle:
@@ -394,7 +372,9 @@ def _update_refs_exact(
 ) -> None:
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
-      updateRefs(input: $input) { clientMutationId }
+      updateRefs(input: $input) {
+        clientMutationId
+      }
     }
     """
     _assert_current_command_fresh_at_ref_cas(source_queue)
@@ -406,8 +386,8 @@ def _update_refs_exact(
             "query": mutation,
             "variables": {
                 "input": {
-                    "repositoryId": repository_node_id,
                     "clientMutationId": client_id,
+                    "repositoryId": repository_node_id,
                     "refUpdates": [
                         {
                             "name": "refs/heads/main",
@@ -492,14 +472,10 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
         source_queue=state["queue"],
     )
-    _await_git_ref_head(RUNTIME_BRANCH, new_commit)
-    if _git_ref_head("main") != state["main_sha"]:
-        raise CarrierError("private authority moved during runtime write")
-    readback, readback_blob = _json_file(QUEUE_PATH, new_commit)
-    if readback_blob != new_blob or readback != queue:
-        raise CarrierError("mandatory private queue readback failed")
-    validate_queue_v4(readback)
-    return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": readback}
+    # A successful exact updateRefs response is the commit boundary. Do not perform
+    # fallible post-CAS reads that can convert a durable success into an ERROR.
+    # The next command always reloads and validates canonical private state.
+    return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": dict(queue)}
 
 
 def _assert_public_target_repository(repository: str) -> None:
@@ -578,52 +554,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         state = _write_queue_exact(state, acquired, reason="acquire")
         queue = state["queue"]
 
-    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
-    candidate = task.get("candidate")
-    live_candidate = None
-    try:
-        if isinstance(candidate, Mapping):
-            live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
-        else:
-            _assert_public_target_repository(task["repository"])
-    except RuntimeProtocolError:
-        blocked = block_holder_v4(
-            queue,
-            task_id=task_id,
-            run_id=command["run_id"],
-            blocker="TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1",
-            now=now,
-        )
-        state = _write_queue_exact(state, blocked, reason="unsupported-target-block")
-        return state, {
-            "protocol": RESULT_PROTOCOL_ID,
-            "result": "BLOCKED",
-            "code": "TARGET_NOT_PUBLICLY_READABLE",
-            "run_id": command["run_id"],
-        }
-
-    if task.get("phase") == "REVIEW" and isinstance(candidate, Mapping) and live_candidate is not None:
-        reconciled, drifted = reconcile_review_candidate_drift_v4(
-            queue,
-            task_id=task_id,
-            run_id=command["run_id"],
-            live_candidate=live_candidate,
-            now=now,
-        )
-        if drifted:
-            state = _write_queue_exact(state, reconciled, reason="candidate-drift-to-repair")
-            return state, safe_work_capsule(
-                state["queue"],
-                task_id=task_id,
-                run_id=command["run_id"],
-                live_candidate=live_candidate,
-            )
-
+    # TICK is intentionally only acquire -> WORK. Target/candidate network
+    # verification belongs at semantic EVENT boundaries where it can affect a
+    # transition, not after durable ownership has already been acquired.
     return state, safe_work_capsule(
         state["queue"],
         task_id=task_id,
         run_id=command["run_id"],
-        live_candidate=live_candidate if task.get("phase") == "REPAIR" else None,
     )
 
 
