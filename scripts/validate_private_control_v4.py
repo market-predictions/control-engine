@@ -47,7 +47,6 @@ NORMATIVE_DOCTRINE_PATHS = {
 HISTORICAL_AUDIT_PATHS = {COHERENCE_REPAIR_PATH}
 CURRENT_SURFACE_PATHS = NORMATIVE_DOCTRINE_PATHS | HISTORICAL_AUDIT_PATHS
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-V4_40_FROZEN_AUTHORITY_COMMIT = "3c314362341570349c15de00156dd6f5ab037fbe"
 REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = CANONICAL_RUNNER_PROMPT_BLOB_SHA
 OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
@@ -303,10 +302,6 @@ def validate_changed_surface(candidate_entries, base_entries) -> set[str]:
     if disallowed:
         raise ValidationError("private V4 candidate changes non-declarative authority surface")
     return changed
-
-
-def load_frozen_v4_40_authority(base_root: Path):
-    return load_v4_authority_from_git(Path(base_root), commit_sha=V4_40_FROZEN_AUTHORITY_COMMIT)
 
 
 def validate_authority_evolution(candidate_bundle, base_bundle) -> None:
