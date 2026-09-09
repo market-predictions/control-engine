@@ -25,12 +25,13 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "419afc91bc4b1f3fa7f1d624d713077452a3d7ee"
+    assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
 
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=dcd5dd2495113a68" in markers
+    assert "runner_command_generation=c81e7a4f2d1b9306" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert any("command_comment_id" in marker for marker in markers)
     assert "no later same-`run_id` Control command" in markers
@@ -62,6 +63,22 @@ def test_holder_closeout_markers_are_part_of_current_prompt_trust():
     assert any("YIELD" in marker for marker in markers)
     assert any("normal invocation exit" in marker for marker in markers)
     assert any("missing or ambiguous EVENT" in marker for marker in markers)
+
+
+def test_complete_compact_prompt_marker_surface_is_accepted_and_obsolete_surface_absent():
+    prompt = "\n".join(
+        (
+            *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS,
+            *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS,
+            *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS,
+            *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS,
+            *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
+            *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
+            *validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS,
+        )
+    )
+    assert not any(marker in prompt for marker in validator.OBSOLETE_TRANSPORT_RECOVERY_MARKERS)
+    validator._validate_prompt_trust(prompt, validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA)
 
 
 @pytest.mark.parametrize("obsolete_hash", sorted(validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS))
