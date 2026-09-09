@@ -20,7 +20,7 @@ def _trusted_prompt() -> str:
 
 
 def test_stateless_runner_prompt_has_exact_public_trust_anchor() -> None:
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "419afc91bc4b1f3fa7f1d624d713077452a3d7ee"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2d686b2271a9ff5cde931109d7a8078c8a2154d5"
     validator._validate_prompt_trust(
         _trusted_prompt(),
         validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
