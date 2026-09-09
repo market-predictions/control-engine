@@ -119,7 +119,7 @@ POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS = (
     "one fresh same-`run_id` acquisition TICK with the unchanged yielded-token set",
     "Wait/release EVENTs `YIELD` and `REVIEW_UNAVAILABLE`",
     "`EXTERNAL_REQUESTED` is also a wait boundary",
-    "add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
+    "Add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
     "This is a new current-state acquisition query, not a replay of an earlier command.",
     "Never carry yielded tokens into another Scheduled invocation.",
     "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth",
