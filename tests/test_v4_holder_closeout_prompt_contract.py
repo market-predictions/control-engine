@@ -4,9 +4,9 @@ from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 import scripts.validate_private_control_v4 as private_v4
 
 
-GENERATION = "965d03fc71359d0e"
-PROMPT_SHA = "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
-PREDECESSOR_PROMPT_SHA = "e100b7655dd1596f0562820e55a8da2a3358a6a8"
+GENERATION = "dcd5dd2495113a68"
+PROMPT_SHA = "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242"
+PREDECESSOR_PROMPT_SHA = "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
 
 
 def test_holder_closeout_generation_and_hash_are_single_current_trust_identity():
@@ -19,22 +19,31 @@ def test_holder_closeout_generation_and_hash_are_single_current_trust_identity()
     assert f":{GENERATION}:[0-9a-f]{{32}}$" in workflow
     assert f"runner_command_generation={GENERATION}" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
     assert f"v4:6a9a7e0b18b08191876c134d83cfbba2:{GENERATION}:<32-lowercase-hex-random>" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "9510d79361e01a74" not in workflow
-    assert "9510d79361e01a74" not in validator
+    assert "965d03fc71359d0e" not in workflow
 
 
-def test_reviewed_private_prompt_must_encode_complete_holder_closeout_obligation():
+def test_reviewed_private_prompt_must_encode_atomic_event_holder_boundary():
     required = set(private_v4.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS)
 
     assert "HOLDER CLOSEOUT OBLIGATION" in required
-    assert "### Holder closeout after WORK" in required
-    assert "If an EVENT returns `WORK`, the holder remains live" in required
-    assert "Candidate drift in a REPAIR WORK capsule is not a terminal or fail-closed reason to silently stop." in required
-    assert "Send exactly one `CANDIDATE_READY` EVENT using the exact `live_candidate` fields" in required
-    assert "send exactly one `YIELD` EVENT while the current holder remains valid" in required
-    assert "before any normal invocation exit after obtaining `WORK`" in required
+    assert "### Holder closeout after WORK — atomic EVENT boundary" in required
+    assert "Every accepted semantic EVENT is an **ATOMIC HOLDER BOUNDARY**" in required
+    assert "the event transition and release of that exact holder are committed in the same private queue mutation/CAS" in required
+    assert "Under the current contract an accepted EVENT must never return `WORK`." in required
+    assert "`READY` means the task reached READY with no holder; `YIELDED` means the EVENT transition completed and the holder was atomically released." in required
+    assert "No normal invocation is required to retain a private holder across semantic phases." in required
     assert "A missing or ambiguous EVENT result remains exceptional fail-closed transport ambiguity" in required
     assert "never infer private holder state from public history" in required
+
+
+def test_progress_and_wait_boundaries_are_explicitly_distinguished():
+    required = set(private_v4.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS)
+    assert "### Progress EVENT versus wait EVENT continuation" in required
+    assert "Progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, and `EXTERNAL_FINDING`" in required
+    assert "**do not** add that task token to `yielded_task_tokens`" in required
+    assert "Wait/release EVENTs `YIELD` and `REVIEW_UNAVAILABLE`" in required
+    assert "`EXTERNAL_REQUESTED` is also a wait boundary" in required
+    assert "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth" in required
 
 
 def test_closeout_contract_reuses_existing_events_instead_of_new_runtime_state():
@@ -45,6 +54,7 @@ def test_closeout_contract_reuses_existing_events_instead_of_new_runtime_state()
     assert '"YIELD"' in protocol
     assert "candidate_ready_v4" in carrier
     assert "yield_holder_v4" in carrier
+    assert "_release_event_holder_boundary" in carrier
     assert "lease renewal" not in protocol.lower()
     assert "recovery ledger" not in protocol.lower()
     assert "cancellation protocol" not in protocol.lower()

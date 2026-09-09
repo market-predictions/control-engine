@@ -118,8 +118,8 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0"
-    assert "e100b7655dd1596f0562820e55a8da2a3358a6a8" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242"
+    assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8aae3b78782933b51a97f4132580de71893de7f"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
@@ -224,7 +224,7 @@ def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(mo
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=965d03fc71359d0e" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
+    assert "runner_command_generation=dcd5dd2495113a68" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
 
 
 def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
@@ -235,8 +235,9 @@ def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
 def test_holder_closeout_markers_cover_normal_exit_and_drift_paths():
     markers = validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS
     assert "HOLDER CLOSEOUT OBLIGATION" in markers
-    assert "### Holder closeout after WORK" in markers
-    assert any("EVENT returns `WORK`" in marker for marker in markers)
+    assert "### Holder closeout after WORK — atomic EVENT boundary" in markers
+    assert any("must never return `WORK`" in marker for marker in markers)
+    assert any("atomically released" in marker for marker in markers)
     assert any("CANDIDATE_READY" in marker for marker in markers)
     assert any("YIELD" in marker for marker in markers)
     assert any("normal invocation exit" in marker for marker in markers)

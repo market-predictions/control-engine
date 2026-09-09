@@ -27,7 +27,7 @@ def _event_body() -> str:
     )
 
 
-def _invoke_update_refs(monkeypatch, *, body: str, created_at: str, events: list[str]) -> None:
+def _invoke_update_refs(monkeypatch, *, body: str, created_at: str, events: list[str], source_queue=None) -> None:
     monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", body)
     monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND_ID", "123")
     monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND_CREATED_AT", created_at)
@@ -48,6 +48,7 @@ def _invoke_update_refs(monkeypatch, *, body: str, created_at: str, events: list
         runtime_before_oid="2" * 40,
         runtime_after_oid="3" * 40,
         client_id="test-cas-freshness",
+        source_queue={} if source_queue is None else source_queue,
     )
 
 
@@ -79,25 +80,29 @@ def test_stale_tick_cannot_reach_durable_ref_cas(monkeypatch) -> None:
     assert events == []
 
 
-def test_event_ref_cas_is_not_subject_to_tick_age_fence(monkeypatch) -> None:
+def test_event_ref_cas_uses_event_identity_fence_not_tick_age_fence(monkeypatch) -> None:
     events: list[str] = []
 
     def unexpected_tick_check(*, now):
         raise AssertionError("EVENT ref CAS must not execute the TICK freshness guard")
 
     monkeypatch.setattr(carrier, "_assert_tick_fresh", unexpected_tick_check)
+    monkeypatch.setattr(carrier, "bind_public_event_to_holder", lambda queue, command: {**command, "task_id": "T"})
+    monkeypatch.setattr(carrier, "assert_event_identity", lambda queue, command, *, now: events.append("event-freshness"))
     _invoke_update_refs(
         monkeypatch,
         body=_event_body(),
         created_at="2000-01-01T00:00:00Z",
         events=events,
+        source_queue={"source": "holder-bearing"},
     )
 
-    assert events == ["cas"]
+    assert events == ["event-freshness", "cas"]
 
 
 def test_ref_cas_guard_is_centralized_before_graphql_mutation() -> None:
     source = open(carrier.__file__, encoding="utf-8").read()
     section = source.split("def _update_refs_exact", 1)[1].split("def _serialize_queue", 1)[0]
-    assert "_assert_current_tick_fresh_at_ref_cas()" in section
-    assert section.index("_assert_current_tick_fresh_at_ref_cas()") < section.index("result = _request_json(")
+    guard = "_assert_current_command_fresh_at_ref_cas(source_queue)"
+    assert guard in section
+    assert section.index(guard) < section.index("result = _request_json(")

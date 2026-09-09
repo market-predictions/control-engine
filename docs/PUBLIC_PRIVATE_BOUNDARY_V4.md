@@ -32,7 +32,7 @@ Public issue comments are transport/audit evidence only. They never become queue
 
 A Scheduled invocation must not obtain acquisition authority merely because it contains text that resembles the Runner prompt. Before the invocation posts its first TICK, the canonical Runner prompt requires a read-only scheduler readback of the exact reviewed automation object, exact `:30` schedule, enabled state, current prompt identity/generation, and absence of a second enabled Control V4 Runner. Failure means zero public command writes.
 
-The current command generation is `965d03fc71359d0e`. Predecessor generation `9510d79361e01a74` is historical only. A generation is not a reusable descriptive label: any canonical Runner prompt change that can alter command authority, acquisition, command correlation, holder-closeout or target-effect behavior requires a new previously unused generation before adoption.
+The current candidate command generation is `dcd5dd2495113a68`. Predecessor generation `965d03fc71359d0e` is historical-only once this candidate is adopted. A generation is not a reusable descriptive label: any canonical Runner prompt change that can alter command authority, acquisition, command correlation, holder-closeout or target-effect behavior requires a new previously unused generation before adoption.
 
 This platform readback is an **operational generation/binding fence**, not a new source of Control runtime authority and not a cryptographic per-invocation credential: the platform exposes no stable Scheduled credential identifier that can be committed as authority. The complete boundary therefore remains fail-closed and layered:
 
@@ -82,7 +82,7 @@ exact private old-ref/blob CAS + readback
 
 That ordering closes the carrier-side time and concurrency races without a transport state machine: a release that landed before the snapshot is visible as a later command and supersedes the old TICK; a release that occurs after the snapshot leaves the loaded queue holding the same run and therefore the old TICK does not perform a fresh acquisition; a command that ages out during private reads or Git-object preparation is rejected before durable mutation; any concurrent private write that invalidates the snapshot is rejected by the existing exact CAS.
 
-The matching Runner-side liveness rule closes the remaining queued-workflow/result-publication race. After posting **any acquisition-capable TICK**—initial acquisition, post-yield acquisition, or same-run pre-effect revalidation—the Scheduled invocation remains responsible for that exact immutable command until either:
+The matching Runner-side liveness rule closes the remaining queued-workflow/result-publication race. After posting **any acquisition-capable TICK**—initial acquisition, post-event/post-yield acquisition, or same-run pre-effect revalidation—the Scheduled invocation remains responsible for that exact immutable command until either:
 
 1. a trusted terminal result with the exact triggering `command_comment_id` is observed and consumed; or
 2. all no-result facts are proven in order:
@@ -101,15 +101,19 @@ Current V4 therefore has no startup scan of public issue history to decide forwa
 
 A lost transport response is not evidence about whether a private transition landed. For TICK, only after the exact correlated carrier run is terminal and the post-terminal final exact-command read still finds no result may that invocation classify the result missing; a later invocation then asks current canonical private state again rather than replaying transport history.
 
-### Holder closeout after WORK
+### Holder closeout after WORK — atomic EVENT boundary
 
 A trusted `WORK` result creates an invocation-local **holder-closeout obligation**. The Runner must not normally end while that exact acquired holder is still live merely because reasoning, target facts, candidate drift, time pressure, or a safe target effect cannot proceed.
 
-After WORK, the Runner consumes correlated semantic EVENT results until that holder is released or the lifecycle transitions. If an EVENT returns `WORK`, it is not closeout: the holder remains live and same-holder processing continues.
+Every accepted semantic EVENT is an **atomic holder boundary**. The semantic transition and release of the exact current holder are part of the same next queue image and therefore land in the same exact private queue CAS. The carrier never returns a new `WORK` capsule directly from an accepted EVENT. It returns `READY` when that EVENT made the task READY, otherwise `YIELDED`, and both results imply that the holder is absent in the mandatory private readback.
 
-For REPAIR candidate drift, the Runner first performs bounded read-only target reconciliation. A safely reviewable already-published candidate on the same governed PR, head branch and base context is reconciled with exactly one existing `CANDIDATE_READY` EVENT populated from the exact `live_candidate` fields; no duplicate target write is required. Ambiguous, out-of-scope, wrong-identity or otherwise unreconcilable drift is closed out with exactly one existing `YIELD` EVENT while the holder remains valid. More generally, before any normal exit after WORK, a still-live holder with no safe semantic progress EVENT must be YIELDed and the correlated result consumed.
+This removes the architectural dependency on one Scheduled ChatGPT invocation surviving across a semantic phase boundary. Further work after a progress EVENT is reacquired only through a fresh same-`run_id` TICK, which asks current canonical private state again. `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR` and `EXTERNAL_FINDING` are progress boundaries: their task token is not added to the invocation-local yielded set, so the next fresh TICK may reacquire the same task in its new phase. `YIELD`, `REVIEW_UNAVAILABLE` and `EXTERNAL_REQUESTED` are wait/release boundaries: their task token is added when the invocation continues so unrelated eligible work can proceed without immediate same-task reacquisition.
 
-A missing or ambiguous EVENT result remains fail-closed transport ambiguity. The Runner never blind-replays that EVENT and never fabricates holder-closeout evidence. This obligation is invocation-local and derives only from the trusted WORK and exact correlated EVENT results; it never reconstructs private holder state from public history. The rule reuses existing transitions and adds no scheduler, queue, state plane, recovery ledger, cancellation protocol, lease renewal or carrier semantic authority.
+For REPAIR candidate drift, the Runner first performs bounded read-only target reconciliation. A safely reviewable already-published candidate on the same governed PR, head branch and base context is reconciled with exactly one existing `CANDIDATE_READY` EVENT populated from the exact `live_candidate` fields; no duplicate target write is required. Its correlated `YIELDED` proves the REPAIR holder was atomically released, and REVIEW is reacquired only with a fresh TICK. Ambiguous, out-of-scope, wrong-identity or otherwise unreconcilable drift is closed out with exactly one existing `YIELD` EVENT while the holder remains valid.
+
+Candidate drift detected while an incoming REVIEW EVENT is being revalidated follows the same invariant: the deterministic REVIEW→REPAIR reconciliation and holder release are written together in one queue CAS, and the EVENT returns `YIELDED`, never `WORK`.
+
+A missing or ambiguous EVENT result remains fail-closed transport ambiguity. The Runner never blind-replays that EVENT and never fabricates holder-release evidence. This obligation is invocation-local and derives only from the trusted WORK and exact correlated EVENT result; it never reconstructs private holder state from public history. The rule reuses existing transitions and adds no scheduler, queue, state plane, recovery ledger, cancellation protocol, lease renewal or carrier semantic authority.
 
 ### Maintenance-fenced prompt generation changes
 
@@ -142,7 +146,7 @@ The V3.1 GitHub Actions semantic runtime writer remains retired. No V3.1 claim/r
 
 ## Consequential target effects
 
-Transport success does not authorize a target mutation. Any non-transport target/review write additionally requires fresh acquisition in the current Scheduled invocation, exact same-run pre-effect revalidation, bounded freshness/time windows, current target identity, sufficient remaining private lease, and mandatory exact effect readback. The second same-run TICK is revalidation only and never renews the fixed private lease. It must itself pass all TICK age boundaries and remains subject to the same live-TICK responsibility window; its result must carry the exact triggering `command_comment_id`, so a stale or late result from an older same-run TICK cannot satisfy the pre-effect fence.
+Transport success does not authorize a target mutation. Any non-transport target/review write additionally requires fresh acquisition in the current Scheduled invocation, exact same-run pre-effect revalidation, bounded freshness/time windows, current target identity, sufficient remaining private lease, and mandatory exact effect readback. The second same-run TICK is revalidation only and never renews the fixed private lease. It must itself pass all TICK age boundaries and remains subject to the same live-TICK responsibility window; its result must carry the exact triggering `command_comment_id`, so a stale or late result from an older same-run TICK cannot satisfy the pre-effect fence. A fresh phase reacquisition creates a fresh acquisition identity for any subsequent target effect.
 
 Lost, timed-out or ambiguous side effects are reconciled fact-first and never blindly retried.
 
@@ -184,7 +188,7 @@ Normal V4 engineering uses one ChatGPT Runner with BUILD, REVIEW and REPAIR phas
 
 External review is candidate evidence only when Mission policy requires it. Provider/quota/transport unavailability is retryable review unavailability: the carrier records `INDETERMINATE` and releases/yields the lock, but it can never manufacture an external PASS. Across later acquisition cycles, such a retryable `ACTIVE/REVIEW/EXTERNAL` item is deliberately considered only **after** ordinary productive ACTIVE work, integration-authorized READY work when integration is enabled, and eligible QUEUED work. It remains selectable when no higher-value work is available. No cooldown database, retry queue, retry counter, or second state plane is introduced.
 
-Candidate/head/base drift is deterministic GitHub evidence and does not require Codex. When a held REVIEW candidate no longer matches the live public PR identity, the carrier returns the same stable private task to REPAIR without issuing a duplicate external review request. The carrier re-reads the live public PR identity immediately before applying any REVIEW event that can alter review state (`INTERNAL_PASS`, `INTERNAL_REPAIR`, `EXTERNAL_REQUESTED`, `EXTERNAL_FINDING`, `EXTERNAL_PASS`, or `REVIEW_UNAVAILABLE`); drift wins over the incoming event and deterministically returns the task to REPAIR.
+Candidate/head/base drift is deterministic GitHub evidence and does not require Codex. When a held REVIEW candidate no longer matches the live public PR identity, the carrier returns the same stable private task to REPAIR without issuing a duplicate external review request. The carrier re-reads the live public PR identity immediately before applying any REVIEW event that can alter review state (`INTERNAL_PASS`, `INTERNAL_REPAIR`, `EXTERNAL_REQUESTED`, `EXTERNAL_FINDING`, `EXTERNAL_PASS`, or `REVIEW_UNAVAILABLE`); drift wins over the incoming event, atomically returns the task to REPAIR and releases the holder in that same EVENT queue CAS.
 
 ## Consequential authority
 
