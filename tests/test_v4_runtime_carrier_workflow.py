@@ -214,7 +214,7 @@ def test_candidate_less_build_proves_public_target_before_acquire_and_work_capsu
     assert public_check in tick
     assert result_build in tick
     assert cas in tick
-    assert tick.index(public_check) < tick.index(result_build) < tick.index(cas)
+    assert tick.index(public_check) < tick.rindex(result_build) < tick.index(cas)
     assert 'return state, work_result' in tick.split(cas, 1)[1]
     assert 'reconcile_review_candidate_drift_v4(' not in tick
 
