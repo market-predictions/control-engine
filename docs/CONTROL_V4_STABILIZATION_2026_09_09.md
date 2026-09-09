@@ -4,53 +4,92 @@
 document_id=CONTROL_V4_STABILIZATION_2026_09_09
 status=CURRENT_STABILIZATION_RECORD
 source_of_truth=GITHUB
-scope=RUNTIME_READ_AFTER_WRITE_RELIABILITY_ONLY
+scope=RUNTIME_TRANSACTION_SIMPLIFICATION
 ```
 
 ## Objective
 
-Restore deterministic correspondence between a successful durable private queue mutation and the carrier result without reopening Control V4 architecture.
+Restore one-to-one correspondence between a successful durable private queue mutation and the carrier result while reducing the runtime to the smallest sound transaction model.
 
-The observed failure was narrow: the GraphQL `updateRefs` mutation successfully advanced `control-runtime-state`, while the immediately following higher-level `/branches/...` readback briefly returned the previous ref. The carrier therefore published `FAIL_CLOSED` even though the durable acquire had landed.
+Two live failures proved the prior model was wrong at the boundary: the exact private `updateRefs` compare-and-swap successfully advanced `control-runtime-state`, but fallible verification performed after that durable mutation could still produce `FAIL_CLOSED`. This created the invalid observable combination `durable success + public ERROR` and left a holder that the Runner believed had not been acquired.
 
-## Fix
+## Current design
 
-The runtime carrier now:
+The runtime follows two deliberately small rules:
 
-1. preserves the existing exact-old-ref atomic `updateRefs` CAS, including the no-op private `main` authority fence;
-2. verifies the changed runtime head through the direct Git ref endpoint rather than the higher-level branch projection;
-3. allows only six bounded observations with 0.5-second sleeps between attempts;
-4. fails closed when the exact expected ref still cannot be observed inside that bounded window;
-5. keeps exact queue-content/blob readback against the new commit mandatory;
-6. performs no retry of the semantic runtime command and introduces no durable retry state.
+```text
+TICK  = acquire -> WORK
+EVENT = verify -> transition + release
+```
 
-This is a readback reliability change only. It does not change task selection, lease duration, holder semantics, EVENT boundaries, authority, scheduler topology, queue topology, integration authority, command generation or target-effect rules.
+### Atomic CAS is the commit boundary
 
-## Cleanup
+Before a queue write the carrier verifies current private authority, runtime ref, queue blob and command freshness. The GraphQL `updateRefs` mutation atomically:
 
-The public private-authority validator no longer retains the unused `V4_40_FROZEN_AUTHORITY_COMMIT` / `load_frozen_v4_40_authority` code path. Post-live Mission evolution is the current validated model; Git history is the record of the former rollback-window implementation.
+1. fences private `main` at the exact expected authority SHA with a no-op before/after OID;
+2. advances `control-runtime-state` only from the exact expected old SHA to the newly created queue commit.
+
+A successful `updateRefs` response is the definitive commit acknowledgement. The carrier performs no Git-ref polling, branch-projection readback or queue reread after that acknowledgement. Such reads cannot strengthen the atomic transaction and can introduce a false negative after durable success. Every subsequent command reloads and validates canonical private state afresh.
+
+### TICK is acquisition only
+
+A TICK may recover an expired holder, select one eligible task, acquire it through the same exact CAS, and return a bounded public-safe WORK capsule. It performs no target-repository or pull-request read after durable ownership has been acquired.
+
+Target/candidate verification remains on semantic EVENT boundaries such as candidate-ready and review transitions, where current target identity can legitimately decide whether a transition is accepted, reconciled or rejected.
+
+## Preserved invariants
+
+This simplification does not alter:
+
+- the single canonical ChatGPT Scheduled Runner;
+- the single mutable private V4 queue;
+- private control-plane Mission/runtime authority;
+- public issue transport-only semantics;
+- TICK admission, supersession and freshness fences;
+- exact old-ref CAS and private-main authority fence;
+- EVENT holder/token/candidate identity checks;
+- atomic semantic EVENT transition plus holder release;
+- fixed non-renewable lease semantics;
+- `integration_enabled=false` and no merge authority;
+- `principal_manual_relay_count=0`;
+- fail-closed handling before a durable commit boundary.
+
+## Removed obsolete complexity
+
+The following mechanisms are retired from current runtime code and documentation:
+
+- post-CAS Git-ref polling/retry;
+- post-CAS private-main reread;
+- post-CAS queue/blob reread;
+- any claim that a successful atomic CAS still requires a second network observation to become committed;
+- TICK-side target/PR verification after acquisition;
+- unsupported-target blocking performed only after ownership had already been persisted.
+
+Git history remains the audit history for these retired mechanisms; they are not retained as parallel current code paths.
 
 ## Explicitly out of scope
 
-The following are not part of this stabilization change:
+This stabilization does not add:
 
 - generic Mission-to-queue root-work materialization;
-- executable candidate-less BUILD;
+- candidate-less BUILD execution;
 - special OVERIGE runtime logic;
-- a second queue, scheduler, task type, intake engine or state plane;
-- changes to the canonical Runner prompt or `runner_command_generation`;
-- enabling integration.
+- another queue, scheduler, task type, inbox, retry ledger or state plane;
+- integration/merge authority;
+- a new Runner prompt/generation.
 
-`market-predictions/overige` and its inert Mission registration may remain present, but `[control] task overige: ...` is not considered end-to-end supported until a separate, explicitly approved feature decision closes the root-work intake gap.
+`market-predictions/overige` may remain registered inertly, but `[control] task overige: ...` is not end-to-end supported until the separate root-work intake gap is explicitly implemented.
 
 ## Definition of done
 
-Stabilization is DONE only when all are true:
+This stabilization is DONE only when all are true:
 
-- focused propagation/readback regression tests pass;
-- full exact-head Control Engine CI passes;
-- one fresh behavior-first exact-head review finds no concrete executable/authority/liveness material defect;
-- the reviewed PR is merged with exact-head protection;
-- one subsequent normal scheduled `:30` cycle reconciles the pre-existing expired holder from canonical private state and completes without a false-negative readback or ghost holder;
-- current documentation states the bounded direct-ref behavior and does not claim generic OVERIGE/root-work intake is implemented;
-- stale conflicting current code/doc statements found in this stabilization scope are removed or corrected.
+- focused tests prove no post-CAS failure path remains in `_write_queue_exact`;
+- focused tests prove TICK contains no post-acquire target-network dependency;
+- existing stale/read/EVENT/CAS safety regressions remain green;
+- full exact-head Control Engine CI succeeds;
+- a fresh behavior-first exact-head review finds no concrete correctness, authority, security or liveness defect;
+- reviewed code is merged with exact-head protection;
+- a subsequent normal scheduled cycle recovers any pre-existing expired holder and completes acquire/WORK/EVENT/release without `durable success + ERROR`;
+- current public and private documentation describes the simplified boundary;
+- stale/conflicting runtime code, tests, helpers, stabilization claims and superseded PR surfaces found in scope are removed or closed.
