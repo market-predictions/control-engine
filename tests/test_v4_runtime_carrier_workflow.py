@@ -194,9 +194,11 @@ def test_carrier_is_activation_bounded_and_private_targets_fail_closed_before_ac
     assert 'target repository is not publicly readable by carrier V1' in script
 
     tick = script.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
-    acquire = 'state = _write_queue_exact(state, acquired, reason="acquire")'
-    assert '_assert_public_target_repository(task["repository"])' in tick
-    assert tick.index('_assert_public_target_repository(task["repository"])') < tick.index(acquire)
+    public_check = '_assert_public_target_repository(task["repository"])'
+    cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
+    assert public_check in tick
+    assert cas in tick
+    assert tick.index(public_check) < tick.index(cas)
     assert 'unsupported-target-block' not in tick
     assert 'TARGET_REPOSITORY_NOT_PUBLICLY_READABLE_BY_CARRIER_V1' not in tick
 
@@ -207,9 +209,13 @@ def test_candidate_less_build_proves_public_target_before_acquire_and_work_capsu
     assert '_assert_public_target_repository(repository)' in text.split('def _target_pr_candidate', 1)[1].split('def _tick', 1)[0]
     tick = text.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
     public_check = '_assert_public_target_repository(task["repository"])'
-    acquire = 'state = _write_queue_exact(state, acquired, reason="acquire")'
+    cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
+    result_build = 'work_result = safe_work_capsule('
     assert public_check in tick
-    assert tick.index(public_check) < tick.index(acquire) < tick.rindex('safe_work_capsule(')
+    assert result_build in tick
+    assert cas in tick
+    assert tick.index(public_check) < tick.index(result_build) < tick.index(cas)
+    assert 'return state, work_result' in tick.split(cas, 1)[1]
     assert 'reconcile_review_candidate_drift_v4(' not in tick
 
 
