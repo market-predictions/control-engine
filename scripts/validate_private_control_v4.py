@@ -66,6 +66,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0",
         "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242",
         "419afc91bc4b1f3fa7f1d624d713077452a3d7ee",
+        "2d686b2271a9ff5cde931109d7a8078c8a2154d5",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
@@ -88,7 +89,7 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=83ee437c017961ce",
+    "runner_command_generation=bdabf8391bbd1a6c",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
@@ -100,9 +101,10 @@ COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
     "source_of_truth=GITHUB",
     "principal_manual_relay_target=0",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:83ee437c017961ce:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
+    "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
     "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
     "no later same-`run_id` Control command",
     "a TICK older than 120 seconds at transition time is rejected before `_tick()` can acquire or mutate private runtime state.",
