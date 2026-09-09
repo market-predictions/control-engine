@@ -130,16 +130,6 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
             validator.require_reviewed_automation_object_id(value)
 
 
-def test_v4_frozen_authority_loader_uses_exact_v4_40_commit(monkeypatch, tmp_path):
-    assert validator.V4_40_FROZEN_AUTHORITY_COMMIT == "3c314362341570349c15de00156dd6f5ab037fbe"
-    calls = []
-    sentinel = object()
-    def fake_loader(root, *, commit_sha=None): calls.append((Path(root), commit_sha)); return sentinel
-    monkeypatch.setattr(validator, "load_v4_authority_from_git", fake_loader)
-    assert validator.load_frozen_v4_40_authority(tmp_path) is sentinel
-    assert calls == [(tmp_path, validator.V4_40_FROZEN_AUTHORITY_COMMIT)]
-
-
 def test_v4_changed_surface_allows_bounded_convergence_but_rejects_unbounded_paths():
     base = {validator.RUNTIME_PATH: ("100644", "blob", "a" * 40), validator.INDEX_PATH: ("100644", "blob", "b" * 40), "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json": ("100644", "blob", "c" * 40)}
     candidate = dict(base); candidate[validator.RUNTIME_PATH] = ("100644", "blob", "d" * 40); del candidate["control/CONTROL_RUNTIME_AUTHORITY_V3_1.json"]

@@ -30,7 +30,7 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
 
 
 def test_strict_parser_accepts_canonical_multiline_tick_and_event_and_existing_space_framing() -> None:
-    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:9510d79361e01a74:0123456789abcdef0123456789abcdef'
+    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:0123456789abcdef0123456789abcdef'
     tick_json = '{"run_id":"' + run_id + '","yielded_task_tokens":[]}'
     event_json = (
         '{"run_id":"' + run_id + '","task_token":"' + ('a' * 64)
@@ -117,7 +117,10 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_mandatory_read
     assert '"base_tree": parent_tree' in text
     assert '"path": QUEUE_PATH' in text
     assert '"parents": [state["runtime_sha"]]' in text
-    assert 'mandatory private runtime ref readback failed' in text
+    assert '_await_git_ref_head(RUNTIME_BRANCH, new_commit)' in text
+    assert 'git/ref/heads/' in text
+    assert 'REF_READBACK_ATTEMPTS = 6' in text
+    assert 'REF_READBACK_DELAY_SECONDS = 0.5' in text
     assert 'mandatory private queue readback failed' in text
 
 
