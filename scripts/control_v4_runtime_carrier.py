@@ -471,9 +471,8 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
         source_queue=state["queue"],
     )
-    # A successful exact updateRefs response is the commit boundary. Do not perform
-    # fallible post-CAS reads that can convert a durable success into an ERROR.
-    # The next command always reloads and validates canonical private state.
+    # Successful updateRefs is the commit boundary. Everything that can reject
+    # this transition has already run; later commands reload canonical truth.
     return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": dict(queue)}
 
 
@@ -520,14 +519,14 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
 
     queue = state["queue"]
     lock = queue.get("execution_lock")
+    recovery_pending = False
     if isinstance(lock, Mapping) and datetime.fromisoformat(lock["expires_at"].replace("Z", "+00:00")) <= now:
         recovered, changed = recover_expired_lock_v4(queue, now=now)
         if changed:
-            state = _write_queue_exact(state, recovered, reason="expired-lock-recovery")
-            queue = state["queue"]
+            queue = recovered
             lock = None
+            recovery_pending = True
 
-    live_candidate = None
     if isinstance(lock, Mapping):
         if lock.get("run_id") != command["run_id"]:
             return state, {"protocol": RESULT_PROTOCOL_ID, "result": "BUSY", "run_id": command["run_id"]}
@@ -536,49 +535,60 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             raise CarrierError("current private lock task invalid")
         task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
         candidate = task.get("candidate")
+        live_candidate = None
         if task.get("phase") == "REPAIR" and isinstance(candidate, Mapping):
-            # This command performs no holder write. The read keeps the existing
-            # REPAIR WORK compatibility hint without creating a post-write failure path.
+            # Same-run revalidation has no holder write, so refreshing this
+            # read-only compatibility hint cannot create a write/result mismatch.
             live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
-    else:
-        task_id = select_task_id_v4(
-            queue,
-            run_id=command["run_id"],
-            yielded_task_tokens=command.get("yielded_task_tokens", []),
-            integration_enabled=False,
-        )
-        if task_id is None:
-            return state, {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
-
-        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
-        candidate = task.get("candidate")
-        # Any target read needed for the public WORK projection happens before
-        # durable ownership. Semantic candidate verification remains an EVENT concern.
-        if isinstance(candidate, Mapping):
-            live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
-        else:
-            _assert_public_target_repository(task["repository"])
-
-        acquired = acquire_task_v4(
+        work_result = safe_work_capsule(
             queue,
             task_id=task_id,
             run_id=command["run_id"],
-            now=now,
-            control_runtime_enabled=True,
-            integration_enabled=False,
+            live_candidate=live_candidate,
         )
-        state = _write_queue_exact(state, acquired, reason="acquire")
-        queue = state["queue"]
-        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+        return state, work_result
 
-    # After a holder CAS succeeds there is no fallible network I/O in this TICK.
-    # REVIEW/candidate drift is reconciled only at an EVENT boundary.
-    return state, safe_work_capsule(
-        state["queue"],
+    task_id = select_task_id_v4(
+        queue,
+        run_id=command["run_id"],
+        yielded_task_tokens=command.get("yielded_task_tokens", []),
+        integration_enabled=False,
+    )
+    if task_id is None:
+        result = {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
+        if recovery_pending:
+            state = _write_queue_exact(state, queue, reason="expired-lock-recovery")
+        return state, result
+
+    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+    candidate = task.get("candidate")
+    live_candidate = None
+    # All target I/O required for a new public WORK projection occurs before
+    # durable ownership. Semantic candidate-drift reconciliation is EVENT-side.
+    if isinstance(candidate, Mapping):
+        observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
+        if task.get("phase") == "REPAIR":
+            live_candidate = observed
+    else:
+        _assert_public_target_repository(task["repository"])
+
+    acquired = acquire_task_v4(
+        queue,
         task_id=task_id,
         run_id=command["run_id"],
-        live_candidate=live_candidate if task.get("phase") == "REPAIR" else None,
+        now=now,
+        control_runtime_enabled=True,
+        integration_enabled=False,
     )
+    work_result = safe_work_capsule(
+        acquired,
+        task_id=task_id,
+        run_id=command["run_id"],
+        live_candidate=live_candidate,
+    )
+    reason = "expired-lock-recovery-acquire" if recovery_pending else "acquire"
+    state = _write_queue_exact(state, acquired, reason=reason)
+    return state, work_result
 
 
 def _validate_public_ref_for_task(task: Mapping[str, Any], value: str) -> None:
@@ -605,9 +615,9 @@ def _release_event_holder_boundary(queue: Mapping[str, Any], command: Mapping[st
     return released
 
 
-def _event_result(state: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
-    current = next(item for item in state["queue"]["tasks"] if item["task_id"] == command["task_id"])
-    if state["queue"].get("execution_lock") is not None:
+def _event_result(queue: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
+    current = next(item for item in queue["tasks"] if item["task_id"] == command["task_id"])
+    if queue.get("execution_lock") is not None:
         raise RuntimeProtocolError("accepted EVENT retained execution lock")
     return {
         "protocol": RESULT_PROTOCOL_ID,
@@ -651,8 +661,9 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
         )
         if drifted:
             next_queue = _release_event_holder_boundary(reconciled, command)
+            result = _event_result(next_queue, command)
             state = _write_queue_exact(state, next_queue, reason="candidate-drift-to-repair")
-            return state, _event_result(state, command)
+            return state, result
 
     if event == "YIELD":
         next_queue = yield_holder_v4(queue, command, now=now)
@@ -687,9 +698,10 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
         raise RuntimeProtocolError("unsupported event")
 
     next_queue = _release_event_holder_boundary(next_queue, command)
+    result = _event_result(next_queue, command)
     if next_queue != queue:
         state = _write_queue_exact(state, next_queue, reason=event.lower().replace("_", "-"))
-    return state, _event_result(state, command)
+    return state, result
 
 
 def _set_outputs(result: Mapping[str, Any], *, ok: bool) -> None:
