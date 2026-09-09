@@ -27,10 +27,12 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" not in text
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" not in text
+    assert 'f7beb2a3571eae1f' in text
+    assert 'bdabf8391bbd1a6c' not in text
 
 
 def test_strict_parser_accepts_canonical_multiline_tick_and_event_and_existing_space_framing() -> None:
-    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:0123456789abcdef0123456789abcdef'
+    run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:f7beb2a3571eae1f:0123456789abcdef0123456789abcdef'
     tick_json = '{"run_id":"' + run_id + '","yielded_task_tokens":[]}'
     event_json = (
         '{"run_id":"' + run_id + '","task_token":"' + ('a' * 64)

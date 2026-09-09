@@ -66,9 +66,10 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242",
         "419afc91bc4b1f3fa7f1d624d713077452a3d7ee",
         "2d686b2271a9ff5cde931109d7a8078c8a2154d5",
+        "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0",
     }
 )
-REVIEWED_SYSTEM_INDEX_BLOB_SHA = "e8aae3b78782933b51a97f4132580de71893de7f"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "91c52738a4c7a700a2cccdede5157ac017dd78c4"
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
@@ -88,7 +89,7 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=bdabf8391bbd1a6c",
+    "runner_command_generation=f7beb2a3571eae1f",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
@@ -100,7 +101,7 @@ COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
     "source_of_truth=GITHUB",
     "principal_manual_relay_target=0",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:f7beb2a3571eae1f:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
