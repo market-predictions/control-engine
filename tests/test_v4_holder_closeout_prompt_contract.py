@@ -4,9 +4,9 @@ from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 import scripts.validate_private_control_v4 as private_v4
 
 
-GENERATION = "c81e7a4f2d1b9306"
-PROMPT_SHA = "419afc91bc4b1f3fa7f1d624d713077452a3d7ee"
-PREDECESSOR_PROMPT_SHA = "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242"
+GENERATION = "83ee437c017961ce"
+PROMPT_SHA = "2d686b2271a9ff5cde931109d7a8078c8a2154d5"
+PREDECESSOR_PROMPT_SHA = "419afc91bc4b1f3fa7f1d624d713077452a3d7ee"
 
 
 def test_holder_closeout_generation_and_hash_are_single_current_trust_identity():
@@ -19,7 +19,7 @@ def test_holder_closeout_generation_and_hash_are_single_current_trust_identity()
     assert f":{GENERATION}:[0-9a-f]{{32}}$" in workflow
     assert f"runner_command_generation={GENERATION}" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
     assert f"v4:6a9a7e0b18b08191876c134d83cfbba2:{GENERATION}:<32-lowercase-hex-random>" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "dcd5dd2495113a68" not in workflow
+    assert "c81e7a4f2d1b9306" not in workflow
 
 
 def test_reviewed_private_prompt_must_encode_atomic_event_holder_boundary():
