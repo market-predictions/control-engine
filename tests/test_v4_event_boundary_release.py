@@ -235,10 +235,12 @@ def test_review_candidate_drift_during_event_is_atomic_repair_release(monkeypatc
     assert "live_candidate" not in result
 
 
-def test_carrier_event_source_has_no_work_return_path_after_transition() -> None:
+def test_carrier_event_source_prepares_result_before_transition_cas() -> None:
     source = open(carrier.__file__, encoding="utf-8").read().split("def _event(", 1)[1].split("def _set_outputs", 1)[0]
     assert "return state, safe_work_capsule" not in source
-    assert "return state, _event_result(state, command)" in source
+    assert "return state, _event_result" not in source
+    assert "result = _event_result(next_queue, command)" in source
+    assert "return state, result" in source
 
 
 def test_event_expiring_before_ref_cas_is_rejected_without_graphql_mutation(monkeypatch) -> None:
