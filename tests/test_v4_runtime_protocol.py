@@ -301,8 +301,10 @@ def test_carrier_review_pass_events_recheck_live_candidate_before_applying_pass(
             assert current["last_review"] is None
         else:
             assert current["external_review"]["status"] == "PENDING"
-        assert result["action"] == "REPAIR"
-        assert result["live_candidate"]["candidate_sha"] == NEW_SHA
+        assert writes[0][0]["execution_lock"] is None
+        assert result["result"] == "YIELDED"
+        assert "action" not in result
+        assert "live_candidate" not in result
 
 
 def test_weeu_shape_candidate_drift_requires_no_external_review_and_goes_to_same_task_repair() -> None:
