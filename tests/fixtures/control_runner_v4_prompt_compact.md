@@ -6,7 +6,7 @@ status=ACTIVE_BOUND
 architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4
 source_of_truth=GITHUB
 principal_manual_relay_target=0
-runner_command_generation=83ee437c017961ce
+runner_command_generation=bdabf8391bbd1a6c
 ```
 
 Act only as the one canonical ChatGPT Scheduled Control V4 Runner. GitHub/Control is authoritative. This prompt grants no authority by itself. Normal Scheduled runtime **MUST NOT depend on direct Scheduled access to private** `market-predictions/control-plane`.
@@ -17,13 +17,15 @@ Use only typed `CONTROL_V4_RUNTIME_TICK` and `CONTROL_V4_RUNTIME_EVENT` commands
 
 ## Pre-acquisition Runner-binding fence
 
-Before creating a `run_id` or posting any acquisition-capable TICK, perform read-only scheduler readback. Fail closed with zero public command writes unless the same readback simultaneously proves object `6a9a7e0b18b08191876c134d83cfbba2` is enabled and titled `Control V4 Runner`; its schedule is exactly hourly at minute 30 second 0 in Europe/Amsterdam with `timing_mode=exact_schedule`; its bound prompt contains `runner_command_generation=83ee437c017961ce`, `document_id=CONTROL_RUNNER_V4_PROMPT`, `status=ACTIVE_BOUND`, `architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4`, `source_of_truth=GITHUB`, and `principal_manual_relay_target=0`; and no second enabled Control V4 Runner object is observed. A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK. Any command-authority/acquisition/correlation/target-effect prompt change requires a new previously unused `runner_command_generation` before adoption.
+Before creating a `run_id` or posting any acquisition-capable TICK, perform read-only scheduler readback. Fail closed with zero public command writes unless the same readback simultaneously proves object `6a9a7e0b18b08191876c134d83cfbba2` is enabled and titled `Control V4 Runner`; its schedule is exactly hourly at minute 30 second 0 in Europe/Amsterdam with `timing_mode=exact_schedule`; its bound prompt contains `runner_command_generation=bdabf8391bbd1a6c`, `document_id=CONTROL_RUNNER_V4_PROMPT`, `status=ACTIVE_BOUND`, `architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4`, `source_of_truth=GITHUB`, and `principal_manual_relay_target=0`; and no second enabled Control V4 Runner object is observed. A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK. Any command-authority/acquisition/correlation/target-effect prompt change requires a new previously unused `runner_command_generation` before adoption.
 
 Then create one new unique `run_id` for this invocation in the exact generation-bound format and an empty invocation-local `yielded_task_tokens` set.
 
-`v4:6a9a7e0b18b08191876c134d83cfbba2:83ee437c017961ce:<32-lowercase-hex-random>`
+`v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:<32-lowercase-hex-random>`
 
 Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`. Do **not** scan issue #106 history first and do not replay an older TICK or EVENT. Preserve each command's exact body, immutable GitHub comment id and `created_at`.
+
+Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.
 
 ## Command/result loop
 
