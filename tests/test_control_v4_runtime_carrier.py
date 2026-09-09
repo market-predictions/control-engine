@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from control_engine.v4_runtime_protocol import parse_public_command
 from scripts import control_v4_runtime_carrier as carrier
 
@@ -58,15 +56,19 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_atomic_cas_as_
     assert "private authority moved during runtime write" not in write_body
 
 
-def test_tick_has_no_post_acquire_target_network_dependency() -> None:
+def test_new_acquire_has_no_post_cas_target_network_dependency() -> None:
     text = _source()
     tick_start = text.index("def _tick(")
     tick_end = text.index("\ndef _validate_public_ref_for_task", tick_start)
     tick_body = text[tick_start:tick_end]
-    assert 'state = _write_queue_exact(state, acquired, reason="acquire")' in tick_body
-    assert "safe_work_capsule(" in tick_body
-    assert "_target_pr_candidate(" not in tick_body
-    assert "_assert_public_target_repository(" not in tick_body
+    acquire = 'state = _write_queue_exact(state, acquired, reason="acquire")'
+    before, after = tick_body.split(acquire, 1)
+
+    assert "_target_pr_candidate(" in before
+    assert "_assert_public_target_repository(" in before
+    assert "safe_work_capsule(" in after
+    assert "_target_pr_candidate(" not in after
+    assert "_assert_public_target_repository(" not in after
     assert "reconcile_review_candidate_drift_v4(" not in tick_body
 
 
