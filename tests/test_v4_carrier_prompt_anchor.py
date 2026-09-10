@@ -38,7 +38,8 @@ def _git_blob_sha(text: str) -> str:
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4033ae0034711634d8a63efacf6c5cc2b7c90570"
+    assert "6cd83f6c687ae2b8cf437add85c798bfb95f28f3" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
@@ -47,7 +48,7 @@ def test_current_state_first_transport_markers_are_the_canonical_prompt_contract
 
 def test_command_binding_markers_cover_generation_object_identity_exact_schedule_and_pre_private_admission():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=f7beb2a3571eae1f" in markers
+    assert "runner_command_generation=93d60fe2e37d9dca" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert "timing_mode=exact_schedule" in markers
     for marker in (
@@ -93,6 +94,15 @@ def test_holder_closeout_markers_are_part_of_current_prompt_trust():
     assert any("missing or ambiguous EVENT" in marker for marker in markers)
 
 
+def test_complexity_brake_markers_are_part_of_current_prompt_trust():
+    markers = validator.COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS
+    assert "## Complexity brake — mandatory blocker admission" in markers
+    assert any("explicit current Mission acceptance criterion" in marker for marker in markers)
+    assert any("Pre-existing debt" in marker for marker in markers)
+    assert any("smallest complete root-cause fix" in marker for marker in markers)
+    assert any("Reviewer observations do not automatically become roadmap work" in marker for marker in markers)
+
+
 def test_exact_repaired_compact_prompt_fixture_is_current_trusted_surface():
     prompt = _prompt_fixture()
     assert _git_blob_sha(prompt) == validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA
@@ -106,6 +116,7 @@ def test_exact_repaired_compact_prompt_fixture_is_current_trusted_surface():
         "timing_mode=exact_schedule",
         "no additional reasoning, waiting, or unrelated work is allowed before effect start",
         "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
+        "Reviewer observations do not automatically become roadmap work.",
     ),
 )
 def test_repaired_fail_closed_predicates_are_required_by_real_prompt(removed_marker):
