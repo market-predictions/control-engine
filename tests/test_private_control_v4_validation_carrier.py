@@ -118,7 +118,8 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4033ae0034711634d8a63efacf6c5cc2b7c90570"
+    assert "6cd83f6c687ae2b8cf437add85c798bfb95f28f3" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
@@ -191,7 +192,7 @@ def _commit_fixture(root: Path, message: str = "fixture") -> dict[str, tuple[str
     _git(root, "add", "."); _git(root, "commit", "-qm", message); return validator.committed_tree(root)
 
 def _canonical_prompt_fixture_text() -> str:
-    return "\n".join(("status=ACTIVE_BOUND", *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, *validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS, ""))
+    return "\n".join(("status=ACTIVE_BOUND", *validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, *validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, *validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, *validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, *validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS, *validator.COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS, ""))
 
 def _write_real_runner_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], str]:
     _init_git_fixture(root)
@@ -218,7 +219,7 @@ def test_non_anchor_runner_prompt_blob_is_behaviorally_rejected_from_real_git(mo
 
 def test_command_binding_markers_cover_generation_object_and_exact_comment_correlation():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=f7beb2a3571eae1f" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert "timing_mode=exact_schedule" in markers; assert any("Before any private capability is created" in marker for marker in markers); assert any("inclusive `0..120` second admission window" in marker for marker in markers); assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
+    assert "runner_command_generation=93d60fe2e37d9dca" in markers; assert "6a9a7e0b18b08191876c134d83cfbba2" in markers; assert "timing_mode=exact_schedule" in markers; assert any("Before any private capability is created" in marker for marker in markers); assert any("inclusive `0..120` second admission window" in marker for marker in markers); assert any("command_comment_id" in marker for marker in markers); assert "no later same-`run_id` Control command" in markers; assert any("previously unused" in marker for marker in markers); assert any("transition time" in marker for marker in markers); assert "persists no transport cursor or ledger" in markers
 
 
 def test_live_tick_responsibility_markers_cover_no_abandoned_fresh_tick():
