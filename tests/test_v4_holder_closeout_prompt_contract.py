@@ -4,9 +4,9 @@ from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 import scripts.validate_private_control_v4 as private_v4
 
 
-GENERATION = "f7beb2a3571eae1f"
-PROMPT_SHA = "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
-PREDECESSOR_PROMPT_SHA = "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0"
+GENERATION = "93d60fe2e37d9dca"
+PROMPT_SHA = "4033ae0034711634d8a63efacf6c5cc2b7c90570"
+PREDECESSOR_PROMPT_SHA = "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
 
 
 def test_holder_closeout_generation_and_hash_are_single_current_trust_identity():
