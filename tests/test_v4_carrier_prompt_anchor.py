@@ -38,7 +38,7 @@ def _git_blob_sha(text: str) -> str:
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4033ae0034711634d8a63efacf6c5cc2b7c90570"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "6628a9e4c47234bd1e58611225c6fa3f236051f4"
     assert "6cd83f6c687ae2b8cf437add85c798bfb95f28f3" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
