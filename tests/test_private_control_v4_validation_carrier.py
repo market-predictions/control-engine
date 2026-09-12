@@ -118,7 +118,7 @@ def test_v4_runtime_switches_and_relay_are_type_strict():
 
 def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert validator.REVIEWED_AUTOMATION_OBJECT_ID == "6a9a7e0b18b08191876c134d83cfbba2"
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "4033ae0034711634d8a63efacf6c5cc2b7c90570"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "6628a9e4c47234bd1e58611225c6fa3f236051f4"
     assert "6cd83f6c687ae2b8cf437add85c798bfb95f28f3" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
