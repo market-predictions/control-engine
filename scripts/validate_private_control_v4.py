@@ -69,7 +69,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0",
     }
 )
-REVIEWED_SYSTEM_INDEX_BLOB_SHA = "91c52738a4c7a700a2cccdede5157ac017dd78c4"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "fbcac57961c6aad2e29f276b11200445c82fbcc2"
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
@@ -456,9 +456,20 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
         "fresh live projection",
         "STATUS_OBSERVABILITY_INCOMPLETE",
+        "### Canonical status dashboard presentation contract",
+        "Workstream | State | Current truth | Complexity risk | Autonomous? | Autonomous ETA | Waiting on | Stalled since | Next action",
+        "`State` and `Complexity risk` are independent dimensions.",
+        "no material progress for more than 24 hours MUST be shown as stalled",
+        "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",
+        "status_dashboard_contract=CANONICAL_V1",
+        "status_dashboard_requires_complexity_risk=true",
+        "status_dashboard_requires_autonomous_eta=true",
+        "status_dashboard_requires_waiting_on=true",
+        "status_dashboard_requires_stalled_since=true",
+        "status_dashboard_preserves_active_green_workstreams=true",
     }
     if any(marker not in text for marker in required):
-        raise ValidationError("SYSTEM_INDEX lacks current V4 live-first authority markers")
+        raise ValidationError("SYSTEM_INDEX lacks current V4 live-first/status-dashboard authority markers")
 
     for stale in ("# Control — Canonical System Index V3.1", "Control Autonomy V3.1 supersedes conflicting", "Until cutover, V3.1 above is current truth."):
         if stale in text:
