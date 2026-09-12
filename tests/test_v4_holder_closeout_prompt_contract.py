@@ -6,7 +6,7 @@ import scripts.validate_private_control_v4 as private_v4
 
 GENERATION = "93d60fe2e37d9dca"
 PROMPT_SHA = "6628a9e4c47234bd1e58611225c6fa3f236051f4"
-PREDECESSOR_PROMPT_SHA = "4033ae0034711634d8a63efacf6c5cc2b7c90570"
+PREDECESSOR_PROMPT_SHA = "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
 
 
 def test_holder_closeout_generation_and_hash_are_single_current_trust_identity():
@@ -15,7 +15,7 @@ def test_holder_closeout_generation_and_hash_are_single_current_trust_identity()
 
     assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == PROMPT_SHA
     assert private_v4.REVIEWED_RUNNER_PROMPT_BLOB_SHA == PROMPT_SHA
-    assert PREDECESSOR_PROMPT_SHA != PROMPT_SHA
+    assert PREDECESSOR_PROMPT_SHA in private_v4.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert f":{GENERATION}:[0-9a-f]{{32}}$" in workflow
     assert f"runner_command_generation={GENERATION}" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
     assert f"v4:6a9a7e0b18b08191876c134d83cfbba2:{GENERATION}:<32-lowercase-hex-random>" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
