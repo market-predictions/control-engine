@@ -129,11 +129,13 @@ def validate_public_target(command: Mapping[str, Any], target: Mapping[str, Any]
         raise OwnerAdminError("target repository drifted")
     if target.get("head_sha") != exact["candidate_sha"] or target.get("head_branch") != exact["candidate_head_branch"]:
         raise OwnerAdminError("target candidate head drifted")
-    if target.get("base_branch") != exact["expected_base_branch"] or target.get("base_sha") != exact["expected_base_sha"]:
-        raise OwnerAdminError("target candidate base drifted")
+    if target.get("base_branch") != exact["expected_base_branch"]:
+        raise OwnerAdminError("target candidate base branch drifted")
 
     operation = command["operation"]
     if operation == "ACTIVATE_ROOT_CANDIDATE":
+        if target.get("base_sha") != exact["expected_base_sha"]:
+            raise OwnerAdminError("target candidate base drifted")
         if target.get("state") != "open" or target.get("merged") is not False:
             raise OwnerAdminError("activation candidate is not open/unmerged")
         if target.get("mergeable") is not True:
@@ -156,6 +158,15 @@ def validate_public_target(command: Mapping[str, Any], target: Mapping[str, Any]
 
 def _task_candidate_matches(task: Mapping[str, Any], command: Mapping[str, Any]) -> bool:
     return task.get("repository") == command["repository"] and task.get("candidate") == candidate_identity(command)
+
+
+def _task_public_pr_matches(task: Mapping[str, Any], command: Mapping[str, Any]) -> bool:
+    candidate = task.get("candidate")
+    return (
+        task.get("repository") == command["repository"]
+        and isinstance(candidate, Mapping)
+        and candidate.get("candidate_pr_number") == command["candidate_pr_number"]
+    )
 
 
 def finalize_integrated_v4(
@@ -226,8 +237,8 @@ def activate_root_candidate_v4(
     assert_v4_queue_bound_to_authority(queue, bundle)
     if queue.get("execution_lock") is not None:
         raise OwnerAdminError("owner-admin mutation requires no execution lock")
-    if any(_task_candidate_matches(task, command) for task in queue["tasks"]):
-        raise OwnerAdminError("candidate is already materialized")
+    if any(_task_public_pr_matches(task, command) for task in queue["tasks"]):
+        raise OwnerAdminError("candidate PR is already materialized")
 
     mission, gap = _dependency_free_unmaterialized_gap(queue, bundle, command["repository"])
     repo_key = command["repository"].lower()
