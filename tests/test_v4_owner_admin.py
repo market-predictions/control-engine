@@ -149,6 +149,32 @@ def test_activation_fails_closed_on_ambiguity_or_lock():
         activate_root_candidate_v4(empty_queue(), ambiguous, command("ACTIVATE_ROOT_CANDIDATE"), now=NOW)
 
 
+def test_activation_rejects_same_public_pr_after_base_drift():
+    q = activated_queue()
+    two = mission()
+    two["gaps"].append({
+        "gap_id": "OTHER-ROOT",
+        "gap_state": "OPEN",
+        "depends_on": [],
+        "repository": REPO,
+        "acceptance": ["Other root."],
+        "integration_policy": "HOLD_AFTER_PASS",
+        "review_policy": "INTERNAL",
+    })
+    b = bundle()
+    two_root_bundle = V4AuthorityBundle(
+        missions=(two,),
+        authorities=b.authorities,
+        mission_blob_shas=b.mission_blob_shas,
+        authority_blob_shas=b.authority_blob_shas,
+    )
+    drifted = command("ACTIVATE_ROOT_CANDIDATE")
+    drifted["expected_base_sha"] = "e" * 40
+
+    with pytest.raises(OwnerAdminError, match="candidate PR is already materialized"):
+        activate_root_candidate_v4(q, two_root_bundle, drifted, now=NOW)
+
+
 def test_finalize_requires_exact_ready_pass_and_preserves_review_evidence():
     q = activated_queue()
     task = q["tasks"][0]
@@ -197,11 +223,17 @@ def test_public_target_rules_distinguish_activation_from_finalization():
     }
     validate_public_target(activate, open_target)
 
+    drifted_open_target = dict(open_target)
+    drifted_open_target["base_sha"] = "e" * 40
+    with pytest.raises(OwnerAdminError, match="base drifted"):
+        validate_public_target(activate, drifted_open_target)
+
     finalize = command("FINALIZE_INTEGRATED")
     merged_target = dict(open_target)
     merged_target.update(
         state="closed",
         merged=True,
+        base_sha="e" * 40,
         current_base_sha="e" * 40,
         candidate_in_current_base=True,
     )
