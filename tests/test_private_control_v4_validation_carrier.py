@@ -125,7 +125,7 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
-    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "6f853df81a8b39be725f4e1180e75ab7ecd557af"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "f295be49f6c689a1f7b41e632623f501a2099c91"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):
@@ -250,17 +250,27 @@ def _valid_system_index() -> bytes:
         "Current status is a fresh live projection, not a documentation lookup.",
         "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
         "### Canonical status dashboard presentation contract",
-        "Workstream | State | Current truth | Complexity risk | Autonomous? | Autonomous ETA | Waiting on | Stalled since | Next action",
+        "Workstream | State | Current truth | Complexity risk | Autonomous? | Autonomous ETA | Waiting on | Approval needed | Stalled since | Next action",
         "`State` and `Complexity risk` are independent dimensions.",
+        "`Approval needed` is `—` unless further useful progress on that workstream requires a principal authority decision.",
+        "### Principal approval handshake",
+        "Control works autonomously inside already-governed authority.",
+        "APPROVAL NEEDED — A1 — <workstream>",
+        "Approval is one-shot and action-scoped.",
+        "The conversation is an approval interaction surface, not persistent semantic authority.",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
         "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",
-        "status_dashboard_contract=CANONICAL_V1",
+        "status_dashboard_contract=CANONICAL_V2",
         "status_dashboard_requires_complexity_risk=true",
         "status_dashboard_requires_autonomous_eta=true",
         "status_dashboard_requires_waiting_on=true",
+        "status_dashboard_requires_approval_needed=true",
         "status_dashboard_requires_stalled_since=true",
         "status_dashboard_preserves_active_green_workstreams=true",
+        "status_dashboard_owner_approval_handshake=CONTROL_INITIATED",
+        "owner_approval_is_action_scoped=true",
+        "owner_approval_is_persistent_semantic_authority=false",
     )).encode("utf-8")
 
 def _write_real_system_index_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
