@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from control_engine.v4_authority_io import V4AuthorityBundle
+from scripts import control_v4_owner_admin as owner_admin
 from scripts.control_v4_owner_admin import (
     OwnerAdminError,
     activate_root_candidate_v4,
@@ -242,6 +243,77 @@ def test_public_target_rules_distinguish_activation_from_finalization():
     merged_target["candidate_in_current_base"] = False
     with pytest.raises(OwnerAdminError):
         validate_public_target(finalize, merged_target)
+
+
+def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(monkeypatch):
+    q = activated_queue()
+    b = bundle()
+    main_sha = "1" * 40
+    runtime_sha = "2" * 40
+    events = []
+    state = {
+        "repository_node_id": "repo-node",
+        "main_sha": main_sha,
+        "runtime_sha": runtime_sha,
+        "queue": q,
+        "bundle": b,
+    }
+
+    monkeypatch.setattr(
+        owner_admin,
+        "_branch_head",
+        lambda repository, branch, private: main_sha if branch == "main" else runtime_sha,
+    )
+    monkeypatch.setattr(
+        owner_admin,
+        "_private_get",
+        lambda path: {"tree": {"sha": "6" * 40}},
+    )
+
+    def private_post(path, payload):
+        if path.endswith("/git/blobs"):
+            return {"sha": "3" * 40}
+        if path.endswith("/git/trees"):
+            return {"sha": "4" * 40}
+        if path.endswith("/git/commits"):
+            events.append("commit")
+            return {"sha": "5" * 40}
+        raise AssertionError(path)
+
+    open_target = {
+        "repository": REPO,
+        "state": "open",
+        "merged": False,
+        "mergeable": True,
+        "head_sha": CANDIDATE,
+        "head_branch": "bootstrap/agent-r1-gap-01",
+        "base_branch": "main",
+        "base_sha": BASE,
+        "current_base_sha": BASE,
+        "candidate_in_current_base": False,
+    }
+
+    def public_target(cmd):
+        events.append("public_target")
+        return open_target
+
+    def request_json(url, **kwargs):
+        events.append("graphql")
+        return {"data": {"updateRefs": {"clientMutationId": "ok"}}}
+
+    monkeypatch.setattr(owner_admin, "_private_post", private_post)
+    monkeypatch.setattr(owner_admin, "_public_target", public_target)
+    monkeypatch.setattr(owner_admin, "_private_headers", lambda: {})
+    monkeypatch.setattr(owner_admin, "_request_json", request_json)
+
+    result = owner_admin._write_queue_exact(
+        state,
+        q,
+        command("ACTIVATE_ROOT_CANDIDATE"),
+    )
+
+    assert result == "5" * 40
+    assert events == ["commit", "public_target", "graphql"]
 
 
 def test_existing_adoption_workflow_keeps_admin_and_adoption_commands_separate():
