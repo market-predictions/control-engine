@@ -480,7 +480,12 @@ def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], operation: str) -> str:
+def _write_queue_exact(
+    state: Mapping[str, Any],
+    queue: Mapping[str, Any],
+    command: Mapping[str, Any],
+) -> str:
+    operation = command["operation"]
     validate_queue_v4(queue)
     assert_v4_queue_bound_to_authority(queue, state["bundle"])
     if _branch_head(PRIVATE_REPOSITORY, "main", private=True) != state["main_sha"]:
@@ -511,6 +516,11 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], opera
         },
     )
     new_commit = _sha(commit.get("sha") if isinstance(commit, Mapping) else None)
+
+    # Public target facts cannot participate in the private-repository CAS. Re-read
+    # them after commit preparation and validate them as close as possible to the
+    # atomic private authority/runtime ref update.
+    validate_public_target(command, _public_target(command))
 
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
@@ -548,7 +558,7 @@ def main() -> int:
             target,
             now=datetime.now(timezone.utc),
         )
-        runtime_commit = _write_queue_exact(state, next_queue, command["operation"])
+        runtime_commit = _write_queue_exact(state, next_queue, command)
         print(f"CONTROL_V4_OWNER_ADMIN={command['operation']}:PASS")
         print(f"TARGET={command['repository']}#{command['candidate_pr_number']}@{command['candidate_sha']}")
         print(f"RUNTIME_COMMIT={runtime_commit}")
