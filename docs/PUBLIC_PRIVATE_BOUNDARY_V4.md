@@ -99,6 +99,30 @@ The Runner remains responsible for an acquisition-capable TICK until it receives
 
 Transport success does not authorize arbitrary target mutation. Consequential target/review writes remain governed by current Runner instructions, fresh holder identity, target identity, lease sufficiency and exact effect readback. The second same-run TICK remains revalidation only and never renews the private lease.
 
+## Owner-approved bounded administration
+
+A principal approval in the canonical dashboard handshake may authorize one exact action without enabling standing integration authority. The existing public V4 administration gate therefore accepts one additional typed audit command on issue #106:
+
+`CONTROL_V4_OWNER_ADMIN {...}`
+
+This is **outside normal Runner runtime** and supports only two present requirements:
+
+1. `FINALIZE_INTEGRATED`: after the principal approved one exact merge and the target PR is already merged, reconcile the matching exact `READY/PASS` queue task to `DONE`;
+2. `ACTIVATE_ROOT_CANDIDATE`: after the principal explicitly activates a project, bind one already-existing public PR candidate to the exactly-one dependency-free, unmaterialized OPEN root gap for that repository and enter `ACTIVE/REVIEW`.
+
+The public command carries only public target identity: repository, PR number, candidate SHA/head branch and expected base branch/SHA. It does not carry or expose private Mission ids, gap ids, acceptance criteria, task ids or queue content. The private gate resolves those values from current private authority and fails closed unless the resolution is exact.
+
+Both operations require no current execution lock, current private Mission/repository authority, an exact current queue blob and exact public target identity. The resulting queue is validated against current private authority before mutation. The write uses the **same atomic authority fence** as normal runtime:
+
+```text
+private main:           expected SHA -> same SHA
+control-runtime-state: expected SHA -> new queue commit
+```
+
+No REST ref write, force update, second queue, approval database, scheduler, service or standing integration switch is introduced. `integration_enabled=false` remains unchanged. Owner approval remains one-shot and action-scoped; it cannot be generalized from one command to later PRs or later gaps.
+
+This bounded path is deliberately **not** a generic Mission materializer. It cannot create candidate-less BUILD work, select among multiple eligible roots, activate dependent gaps, merge a target PR, send a report, deploy, or grant production/business-final-decision authority.
+
 ## Activation limits
 
 The current carrier is bounded to `integration_enabled=false`. It provides acquisition, review, repair and wait-state transport only; it has no merge/integration authority.
@@ -118,13 +142,13 @@ Current V4 does **not** use:
 - a second scheduler or semantic worker;
 - a second queue or public runtime-state mirror;
 - a retry ledger, cursor, heartbeat, lease renewal or cancellation state plane;
-- generic Mission-to-queue root-work materialization;
+- automatic/generic Mission-to-queue root-work materialization by normal Runner runtime;
 - candidate-less BUILD execution;
 - special `OVERIGE` runtime semantics;
-- integration authority.
+- standing integration authority.
 
 Retired mechanisms remain only in Git history, not as competing current code or normative documentation.
 
 ## Current product boundary
 
-`market-predictions/overige` may be registered as an inert governed Mission/repository. `[control] task overige: ...` is **not** end-to-end executable until generic root-work materialization and initial BUILD execution are separately justified and implemented. That future feature must reuse the same Runner and canonical queue rather than create another intake/runtime system.
+`market-predictions/overige` may be registered as an inert governed Mission/repository. `[control] task overige: ...` is **not** end-to-end executable until generic root-work materialization and initial BUILD execution are separately justified and implemented. The bounded owner-admin activation above is not a substitute: it requires an already-existing exact public candidate and exactly one unambiguous dependency-free OPEN root. Any future generic feature must reuse the same Runner and canonical queue rather than create another intake/runtime system.
