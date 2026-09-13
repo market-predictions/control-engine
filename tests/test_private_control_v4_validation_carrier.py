@@ -125,7 +125,7 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
-    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "91c52738a4c7a700a2cccdede5157ac017dd78c4"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "6f853df81a8b39be725f4e1180e75ab7ecd557af"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):
@@ -240,7 +240,28 @@ def test_holder_closeout_markers_cover_normal_exit_and_drift_paths():
 
 
 def _valid_system_index() -> bytes:
-    return "\n".join(("# Control — Canonical System Index V4","architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md","runtime=control-runtime-state:control/DISPATCH_QUEUE.json","global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json","runner_config=control/CONTROL_RUNNER_V4.json","runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md","Current status is a fresh live projection, not a documentation lookup.","Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.")).encode("utf-8")
+    return "\n".join((
+        "# Control — Canonical System Index V4",
+        "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
+        "runtime=control-runtime-state:control/DISPATCH_QUEUE.json",
+        "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
+        "runner_config=control/CONTROL_RUNNER_V4.json",
+        "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
+        "Current status is a fresh live projection, not a documentation lookup.",
+        "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
+        "### Canonical status dashboard presentation contract",
+        "Workstream | State | Current truth | Complexity risk | Autonomous? | Autonomous ETA | Waiting on | Stalled since | Next action",
+        "`State` and `Complexity risk` are independent dimensions.",
+        "no material progress for more than 24 hours MUST be shown as stalled",
+        "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
+        "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",
+        "status_dashboard_contract=CANONICAL_V1",
+        "status_dashboard_requires_complexity_risk=true",
+        "status_dashboard_requires_autonomous_eta=true",
+        "status_dashboard_requires_waiting_on=true",
+        "status_dashboard_requires_stalled_since=true",
+        "status_dashboard_preserves_active_green_workstreams=true",
+    )).encode("utf-8")
 
 def _write_real_system_index_fixture(root: Path) -> tuple[dict[str, tuple[str, str, str]], bytes, str]:
     _init_git_fixture(root); index_path = root / validator.INDEX_PATH; index_path.write_bytes(_valid_system_index()); entries = _commit_fixture(root); raw, oid = validator._blob(root, entries, validator.INDEX_PATH); assert raw == _valid_system_index(); return entries, raw, oid
