@@ -67,6 +67,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "419afc91bc4b1f3fa7f1d624d713077452a3d7ee",
         "2d686b2271a9ff5cde931109d7a8078c8a2154d5",
         "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0",
+        "6cd83f6c687ae2b8cf437add85c798bfb95f28f3",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "91c52738a4c7a700a2cccdede5157ac017dd78c4"
@@ -89,7 +90,7 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=f7beb2a3571eae1f",
+    "runner_command_generation=93d60fe2e37d9dca",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
@@ -101,7 +102,7 @@ COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
     "source_of_truth=GITHUB",
     "principal_manual_relay_target=0",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:f7beb2a3571eae1f:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:93d60fe2e37d9dca:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
@@ -171,6 +172,16 @@ HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS = (
     "before any normal invocation exit after obtaining `WORK`",
     "A missing or ambiguous EVENT result remains exceptional fail-closed transport ambiguity",
     "never infer private holder state from public history",
+)
+COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS = (
+    "## Complexity brake — mandatory blocker admission",
+    "violates an explicit current Mission acceptance criterion",
+    "Pre-existing debt on the current base is non-blocking",
+    "Speculative hardening, future extensibility/generalization",
+    "Every repair must be the smallest complete root-cause fix.",
+    "Do not add a service, state plane, queue, scheduler, protocol, framework, or general abstraction unless a concrete current requirement cannot be met otherwise.",
+    "post-repair review is bounded to the admitted finding(s), regressions introduced by that repair, and the existing acceptance criteria",
+    "Reviewer observations do not automatically become roadmap work.",
 )
 OBSOLETE_TRANSPORT_RECOVERY_MARKERS = (
     "read only the bounded issue-#106 history",
@@ -382,6 +393,8 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
         raise ValidationError("current Runner prompt lacks canonical EVENT/fairness markers")
     if any(marker not in prompt_text for marker in HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks holder-closeout markers")
+    if any(marker not in prompt_text for marker in COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks mandatory complexity-brake markers")
     if any(marker in prompt_text for marker in OBSOLETE_TRANSPORT_RECOVERY_MARKERS):
         raise ValidationError("current Runner prompt retains obsolete public-history recovery semantics")
 

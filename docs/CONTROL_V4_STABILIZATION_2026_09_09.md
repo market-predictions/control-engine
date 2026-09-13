@@ -80,7 +80,7 @@ This stabilization does not add:
 - integration/merge authority;
 - a second Runner or scheduler object.
 
-The same canonical Runner is intentionally rebound to reviewed generation `f7beb2a3571eae1f` because its command-authority contract changed; that trust-anchor rotation is part of this stabilization, not new runtime architecture.
+The same canonical Runner is current on reviewed candidate generation `93d60fe2e37d9dca`. The predecessor `f7beb2a3571eae1f` was the stabilization generation and remains historical; current generation rotation is governed by the existing exact public/private trust path and does not add runtime architecture.
 
 `market-predictions/overige` may remain registered inertly, but `[control] task overige: ...` is not end-to-end supported until the separate root-work intake gap is explicitly implemented.
 
