@@ -58,18 +58,18 @@ jobs:
           PY
       - name: Compile retained engine and trusted validators/carriers
         run: |
-          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py control_engine/v4_contracts.py control_engine/v4_safety.py control_engine/v4_authority_io.py control_engine/v4_runtime_protocol.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py scripts/validate_private_control_v4.py scripts/control_v4_runtime_carrier.py
+          python -m py_compile control_engine/__init__.py control_engine/timeline.py control_engine/bundle.py control_engine/kernel_v31.py control_engine/migration_v31.py control_engine/v4_contracts.py control_engine/v4_safety.py control_engine/v4_authority_io.py control_engine/v4_runtime_protocol.py scripts/control_kernel_v31.py scripts/validate_private_control_v31.py scripts/validate_private_control_v4.py scripts/control_v4_runtime_carrier.py scripts/control_v4_owner_admin.py
           bash -n scripts/github_app_preflight.sh
       - name: Verify immutable consumer bundle
         run: python -m control_engine.bundle ENGINE_BUNDLE_V1.json
       - name: Run regressions
         run: python -m pytest -q
-      - name: Prove V4 surface with bounded deterministic private-state carriers and no semantic runtime writer
+      - name: Prove V4 surface with bounded deterministic private-state carriers and no public semantic authority
         run: |
           set -euo pipefail
           test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort)" = $'ci.yml\ncontrol-v4-authority-adoption.yml\ncontrol-v4-runtime-carrier.yml\nprivate-control-v3-1-validation.yml'
           test "$(find control_engine -maxdepth 1 -type f -name '*.py' -printf '%f\n' | sort)" = $'__init__.py\nbundle.py\nkernel_v31.py\nmigration_v31.py\ntimeline.py\nv4_authority_io.py\nv4_contracts.py\nv4_runtime_protocol.py\nv4_safety.py'
-          test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ncontrol_v4_runtime_carrier.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py\nvalidate_private_control_v4.py'
+          test "$(find scripts -maxdepth 1 -type f -printf '%f\n' | sort)" = $'control_kernel_v31.py\ncontrol_v4_owner_admin.py\ncontrol_v4_runtime_carrier.py\ngithub_app_preflight.sh\nvalidate_private_control_v31.py\nvalidate_private_control_v4.py'
           grep -q '"semantic_runtime_authority": false' ENGINE_MANIFEST.json
           ! grep -q '"control_runtime"' ENGINE_MANIFEST.json
           ! test -e .github/workflows/control-kernel-v3-1.yml
@@ -83,11 +83,17 @@ jobs:
           ! grep -q 'workflow_dispatch:' .github/workflows/control-v4-runtime-carrier.yml
           ! grep -q '^  schedule:' .github/workflows/control-v4-runtime-carrier.yml
           ! grep -q 'PATCH_QUEUE' .github/workflows/control-v4-runtime-carrier.yml
+          grep -q "startsWith(github.event.comment.body, 'CONTROL_V4_OWNER_ADMIN ')" .github/workflows/control-v4-authority-adoption.yml
+          grep -q 'python scripts/control_v4_owner_admin.py' .github/workflows/control-v4-authority-adoption.yml
+          grep -q 'main.*beforeOid' scripts/control_v4_owner_admin.py || grep -q '"refs/heads/main"' scripts/control_v4_owner_admin.py
+          grep -q 'control-runtime-state' scripts/control_v4_owner_admin.py
+          ! grep -q '^  schedule:' .github/workflows/control-v4-authority-adoption.yml
           forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' -o -iname '*assurance_capsule*' \) -print)"
           test -z "$forbidden"
           echo 'CONTROL_ENGINE_V4_SURFACE=PASS'
           echo 'CONTROL_V4_AUTHORITY_CARRIER_PRESENT=true'
           echo 'CONTROL_V4_DETERMINISTIC_RUNTIME_CARRIER_PRESENT=true'
+          echo 'CONTROL_V4_OWNER_ADMIN_PRESENT=true'
           echo 'CONTROL_V4_SEMANTIC_RUNTIME_AUTHORITY=false'
           echo 'CONTROL_PRIVATE_V4_VALIDATOR_PRESENT=true'
       - name: Synthetic engine smoke
