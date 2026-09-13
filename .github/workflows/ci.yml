@@ -86,7 +86,7 @@ jobs:
           grep -q "startsWith(github.event.comment.body, 'CONTROL_V4_OWNER_ADMIN ')" .github/workflows/control-v4-authority-adoption.yml
           grep -q 'python scripts/control_v4_owner_admin.py' .github/workflows/control-v4-authority-adoption.yml
           grep -q 'main.*beforeOid' scripts/control_v4_owner_admin.py || grep -q '"refs/heads/main"' scripts/control_v4_owner_admin.py
-          grep -q 'control-runtime-state' scripts/control_v4_owner_admin.py
+          grep -q 'RUNTIME_BRANCH' scripts/control_v4_owner_admin.py
           ! grep -q '^  schedule:' .github/workflows/control-v4-authority-adoption.yml
           forbidden="$(find control_engine scripts .github/workflows -type f \( -iname '*cloudflare*' -o -iname '*groq*' -o -iname '*scheduled_worker*' -o -iname '*minimal_core*' -o -iname '*project_integration*' -o -iname '*assurance_capsule*' \) -print)"
           test -z "$forbidden"
