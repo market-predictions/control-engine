@@ -6,8 +6,17 @@ This is an outside-Runner governance path for two concrete actions only:
 
 - finalize one exact READY/PASS task after its exact target PR was owner-approved
   and is already merged into the target base branch;
-- activate one exact existing public candidate for the single unmaterialized,
-  dependency-free OPEN Mission gap of its repository.
+- activate one exact existing public candidate for one currently eligible,
+  unmaterialized OPEN Mission gap selected by an opaque authority-bound key.
+
+A principal may authorize a project-level replenishment cycle once. That approval
+is frozen as one owner-authored audit comment containing only the exact opaque
+activation keys eligible in that approved snapshot. Every activation binds the
+exact approval body by SHA-256; the comment must still be the original unedited
+owner comment when first consumed and is revalidated immediately before the
+private CAS. Each activation must remain a member of the frozen key set and still
+be currently eligible. A gap that becomes eligible only later therefore cannot
+borrow authority from the older approval.
 
 It never grants standing integration authority, never changes private main, and
 never creates a second queue/state plane. Every queue mutation uses the same
@@ -18,6 +27,7 @@ normal V4 carrier.
 import base64
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import re
@@ -31,13 +41,17 @@ from control_engine.v4_contracts import (
     V4ValidationError,
     v4_root_task_id,
     validate_authority_set,
+    validate_carry_forward_evidence,
     validate_queue_v4,
 )
 from control_engine.v4_runtime_protocol import strict_json_object
 
 
 PREFIX = "CONTROL_V4_OWNER_ADMIN "
+REPLENISH_APPROVAL_PREFIX = "CONTROL_V4_REPLENISH_APPROVAL "
 PRIVATE_REPOSITORY = "market-predictions/control-plane"
+PUBLIC_REPOSITORY = "market-predictions/control-engine"
+PUBLIC_AUDIT_ISSUE = 106
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 MISSION_DIR = "control/missions"
@@ -45,11 +59,11 @@ AUTHORITY_DIR = "control/repository-authority"
 API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+OPAQUE_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 OPERATIONS = {"FINALIZE_INTEGRATED", "ACTIVATE_ROOT_CANDIDATE"}
-COMMAND_KEYS = {
-    "operation",
+TARGET_KEYS = {
     "repository",
     "candidate_pr_number",
     "candidate_sha",
@@ -57,6 +71,15 @@ COMMAND_KEYS = {
     "expected_base_branch",
     "expected_base_sha",
 }
+FINALIZE_COMMAND_KEYS = {"operation", *TARGET_KEYS}
+ACTIVATE_COMMAND_KEYS = {
+    "operation",
+    "approval_comment_id",
+    "approval_body_sha256",
+    "activation_key",
+    *TARGET_KEYS,
+}
+APPROVAL_KEYS = {"repository", "authority_key", "eligible_activation_keys"}
 
 
 class OwnerAdminError(RuntimeError):
@@ -70,6 +93,18 @@ class StaleWriteError(OwnerAdminError):
 def _sha(value: object) -> str:
     if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
         raise OwnerAdminError("SHA identity invalid")
+    return value
+
+
+def _opaque_key(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or OPAQUE_KEY_RE.fullmatch(value) is None:
+        raise OwnerAdminError(f"{label} invalid")
+    return value
+
+
+def _positive_int(value: object, *, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise OwnerAdminError(f"{label} invalid")
     return value
 
 
@@ -92,19 +127,50 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
         payload = strict_json_object(raw[len(PREFIX):])
     except Exception as exc:
         raise OwnerAdminError("owner-admin JSON invalid") from exc
-    if set(payload) != COMMAND_KEYS:
-        raise OwnerAdminError("owner-admin command fields invalid")
-    if payload.get("operation") not in OPERATIONS:
+    operation = payload.get("operation")
+    if operation not in OPERATIONS:
         raise OwnerAdminError("owner-admin operation unsupported")
+    expected_keys = ACTIVATE_COMMAND_KEYS if operation == "ACTIVATE_ROOT_CANDIDATE" else FINALIZE_COMMAND_KEYS
+    if set(payload) != expected_keys:
+        raise OwnerAdminError("owner-admin command fields invalid")
     payload["repository"] = _repository(payload["repository"])
-    number = payload["candidate_pr_number"]
-    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
-        raise OwnerAdminError("candidate PR number invalid")
+    payload["candidate_pr_number"] = _positive_int(payload["candidate_pr_number"], label="candidate PR number")
     payload["candidate_sha"] = _sha(payload["candidate_sha"])
     payload["candidate_head_branch"] = _branch(payload["candidate_head_branch"])
     payload["expected_base_branch"] = _branch(payload["expected_base_branch"])
     payload["expected_base_sha"] = _sha(payload["expected_base_sha"])
+    if operation == "ACTIVATE_ROOT_CANDIDATE":
+        payload["approval_comment_id"] = _positive_int(payload["approval_comment_id"], label="approval comment id")
+        payload["approval_body_sha256"] = _opaque_key(payload["approval_body_sha256"], label="approval body SHA-256")
+        payload["activation_key"] = _opaque_key(payload["activation_key"], label="activation key")
     return payload
+
+
+def parse_replenishment_approval(raw: str) -> dict[str, Any]:
+    if not isinstance(raw, str) or not raw.startswith(REPLENISH_APPROVAL_PREFIX):
+        raise OwnerAdminError("replenishment approval prefix invalid")
+    try:
+        payload = strict_json_object(raw[len(REPLENISH_APPROVAL_PREFIX):])
+    except Exception as exc:
+        raise OwnerAdminError("replenishment approval JSON invalid") from exc
+    if set(payload) != APPROVAL_KEYS:
+        raise OwnerAdminError("replenishment approval fields invalid")
+    payload["repository"] = _repository(payload["repository"])
+    payload["authority_key"] = _opaque_key(payload["authority_key"], label="authority key")
+    keys = payload["eligible_activation_keys"]
+    if not isinstance(keys, list) or not (1 <= len(keys) <= 100):
+        raise OwnerAdminError("replenishment approval eligible key set invalid")
+    clean = [_opaque_key(item, label="eligible activation key") for item in keys]
+    if len(clean) != len(set(clean)) or clean != sorted(clean):
+        raise OwnerAdminError("replenishment approval eligible key set must be unique and sorted")
+    payload["eligible_activation_keys"] = clean
+    return payload
+
+
+def replenishment_approval_body_sha256(raw: str) -> str:
+    if not isinstance(raw, str):
+        raise OwnerAdminError("replenishment approval body unavailable")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def candidate_identity(command: Mapping[str, Any]) -> dict[str, Any]:
@@ -115,6 +181,38 @@ def candidate_identity(command: Mapping[str, Any]) -> dict[str, Any]:
         "expected_base_branch": command["expected_base_branch"],
         "expected_base_sha": command["expected_base_sha"],
     }
+
+
+def authority_key_v4(mission: Mapping[str, Any], bundle: V4AuthorityBundle) -> str:
+    mission_id = mission.get("mission_id")
+    revision = mission.get("mission_revision")
+    repository = mission.get("repository")
+    if not all(isinstance(value, str) and value for value in (mission_id, revision, repository)):
+        raise OwnerAdminError("authority identity invalid")
+    mission_blob = bundle.mission_blob_shas.get(mission_id)
+    authority_blob = bundle.authority_blob_shas.get(repository.lower())
+    if not isinstance(mission_blob, str) or SHA_RE.fullmatch(mission_blob) is None:
+        raise OwnerAdminError("authority Mission blob invalid")
+    if not isinstance(authority_blob, str) or SHA_RE.fullmatch(authority_blob) is None:
+        raise OwnerAdminError("authority repository-authority blob invalid")
+    material = "\0".join((mission_id, revision, repository.lower(), mission_blob, authority_blob)).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
+def activation_key_v4(
+    mission: Mapping[str, Any],
+    gap: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+) -> str:
+    mission_id = mission.get("mission_id")
+    revision = mission.get("mission_revision")
+    gap_id = gap.get("gap_id")
+    repository = gap.get("repository")
+    if not all(isinstance(value, str) and value for value in (mission_id, revision, gap_id, repository)):
+        raise OwnerAdminError("activation identity invalid")
+    authority_key = authority_key_v4(mission, bundle)
+    material = "\0".join((mission_id, revision, gap_id, repository.lower(), authority_key)).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 def _ts(now: datetime) -> str:
@@ -199,37 +297,123 @@ def finalize_integrated_v4(
     return result
 
 
-def _dependency_free_unmaterialized_gap(
+def _dependency_is_satisfied(
+    queue: Mapping[str, Any],
+    mission: Mapping[str, Any],
+    gap_by_id: Mapping[str, Mapping[str, Any]],
+    dependency_id: str,
+) -> bool:
+    dependency = gap_by_id[dependency_id]
+    if dependency.get("gap_state") == "RETIRED":
+        return any(
+            item.get("target_gap_id") == dependency_id
+            for item in mission.get("done_carry_forward", [])
+        )
+    matches = [
+        task for task in queue["tasks"]
+        if task.get("mission_id") == mission.get("mission_id")
+        and task.get("mission_revision") == mission.get("mission_revision")
+        and task.get("gap_id") == dependency_id
+    ]
+    return len(matches) == 1 and matches[0].get("status") == "DONE"
+
+
+def eligible_unmaterialized_gaps_v4(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
     repository: str,
-) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    validate_queue_v4(queue)
+    assert_v4_queue_bound_to_authority(queue, bundle)
     missions = [mission for mission in bundle.missions if mission.get("repository") == repository]
     if len(missions) != 1:
         raise OwnerAdminError("repository does not resolve to exactly one current Mission")
     mission = missions[0]
+    validate_carry_forward_evidence(mission, queue)
     existing = {
         (task["mission_id"], task["mission_revision"], task["gap_id"])
         for task in queue["tasks"]
     }
-    candidates = []
+    gap_by_id = {gap["gap_id"]: gap for gap in mission["gaps"]}
+    eligible: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for gap in mission["gaps"]:
         logical = (mission["mission_id"], mission["mission_revision"], gap["gap_id"])
-        if (
-            gap.get("gap_state") == "OPEN"
-            and gap.get("depends_on") == []
-            and logical not in existing
+        if gap.get("gap_state") != "OPEN" or logical in existing:
+            continue
+        if all(
+            _dependency_is_satisfied(queue, mission, gap_by_id, dependency_id)
+            for dependency_id in gap.get("depends_on", [])
         ):
-            candidates.append(gap)
-    if len(candidates) != 1:
-        raise OwnerAdminError("owner activation requires exactly one dependency-free unmaterialized OPEN gap")
-    return mission, candidates[0]
+            eligible.append((mission, gap))
+    return eligible
+
+
+def replenishment_approval_payload_v4(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    repository: str,
+) -> dict[str, Any]:
+    eligible = eligible_unmaterialized_gaps_v4(queue, bundle, repository)
+    if not eligible:
+        raise OwnerAdminError("project has no currently eligible unmaterialized OPEN gaps")
+    missions = {mission["mission_id"]: mission for mission, _gap in eligible}
+    if len(missions) != 1:
+        raise OwnerAdminError("replenishment project does not resolve to exactly one Mission")
+    mission = next(iter(missions.values()))
+    return {
+        "repository": repository,
+        "authority_key": authority_key_v4(mission, bundle),
+        "eligible_activation_keys": sorted(activation_key_v4(mission, gap, bundle) for _mission, gap in eligible),
+    }
+
+
+def format_replenishment_approval_v4(payload: Mapping[str, Any]) -> str:
+    normalized = parse_replenishment_approval(
+        REPLENISH_APPROVAL_PREFIX + json.dumps(dict(payload), separators=(",", ":"), sort_keys=True)
+    )
+    return REPLENISH_APPROVAL_PREFIX + json.dumps(normalized, separators=(",", ":"), sort_keys=True)
+
+
+def validate_replenishment_approval_v4(
+    approval: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    command: Mapping[str, Any],
+) -> None:
+    if approval.get("repository") != command.get("repository"):
+        raise OwnerAdminError("replenishment approval repository mismatch")
+    missions = [mission for mission in bundle.missions if mission.get("repository") == command["repository"]]
+    if len(missions) != 1:
+        raise OwnerAdminError("repository does not resolve to exactly one current Mission")
+    mission = missions[0]
+    if approval.get("authority_key") != authority_key_v4(mission, bundle):
+        raise OwnerAdminError("replenishment approval authority is stale")
+    if command.get("activation_key") not in approval.get("eligible_activation_keys", []):
+        raise OwnerAdminError("activation key was not in the owner-approved replenishment snapshot")
+
+
+def _eligible_gap_by_activation_key(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    command: Mapping[str, Any],
+    approval: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    validate_replenishment_approval_v4(approval, bundle, command)
+    requested = _opaque_key(command.get("activation_key"), label="activation key")
+    matches = [
+        (mission, gap)
+        for mission, gap in eligible_unmaterialized_gaps_v4(queue, bundle, command["repository"])
+        if activation_key_v4(mission, gap, bundle) == requested
+    ]
+    if len(matches) != 1:
+        raise OwnerAdminError("activation key does not resolve to exactly one currently eligible unmaterialized OPEN gap")
+    return matches[0]
 
 
 def activate_root_candidate_v4(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
     command: Mapping[str, Any],
+    approval: Mapping[str, Any],
     *,
     now: datetime,
 ) -> dict[str, Any]:
@@ -240,7 +424,7 @@ def activate_root_candidate_v4(
     if any(_task_public_pr_matches(task, command) for task in queue["tasks"]):
         raise OwnerAdminError("candidate PR is already materialized")
 
-    mission, gap = _dependency_free_unmaterialized_gap(queue, bundle, command["repository"])
+    mission, gap = _eligible_gap_by_activation_key(queue, bundle, command, approval)
     repo_key = command["repository"].lower()
     created = _ts(now)
     task = {
@@ -278,12 +462,15 @@ def plan_owner_admin_transition(
     target: Mapping[str, Any],
     *,
     now: datetime,
+    approval: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_public_target(command, target)
     if command["operation"] == "FINALIZE_INTEGRATED":
         return finalize_integrated_v4(queue, bundle, command, now=now)
     if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
-        return activate_root_candidate_v4(queue, bundle, command, now=now)
+        if approval is None:
+            raise OwnerAdminError("activation requires exact replenishment approval evidence")
+        return activate_root_candidate_v4(queue, bundle, command, approval, now=now)
     raise OwnerAdminError("owner-admin operation unsupported")
 
 
@@ -443,6 +630,29 @@ def _load_private_state() -> dict[str, Any]:
     }
 
 
+def _public_replenishment_approval(comment_id: int, expected_body_sha256: str) -> dict[str, Any]:
+    comment = _public_get(f"repos/{PUBLIC_REPOSITORY}/issues/comments/{comment_id}")
+    if not isinstance(comment, Mapping):
+        raise OwnerAdminError("replenishment approval comment unavailable")
+    expected_issue_url = f"{API}/repos/{PUBLIC_REPOSITORY}/issues/{PUBLIC_AUDIT_ISSUE}"
+    if comment.get("issue_url") != expected_issue_url:
+        raise OwnerAdminError("replenishment approval is not bound to canonical audit issue")
+    user = comment.get("user") or {}
+    if user.get("login") != "market-predictions" or comment.get("author_association") != "OWNER":
+        raise OwnerAdminError("replenishment approval is not owner-authored")
+    created_at = comment.get("created_at")
+    updated_at = comment.get("updated_at")
+    if not isinstance(created_at, str) or not created_at or updated_at != created_at:
+        raise OwnerAdminError("replenishment approval comment was edited")
+    body = comment.get("body")
+    if not isinstance(body, str):
+        raise OwnerAdminError("replenishment approval body unavailable")
+    expected = _opaque_key(expected_body_sha256, label="approval body SHA-256")
+    if replenishment_approval_body_sha256(body) != expected:
+        raise OwnerAdminError("replenishment approval body digest mismatch")
+    return parse_replenishment_approval(body)
+
+
 def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     repository = command["repository"]
     repo = _public_get(f"repos/{repository}")
@@ -522,6 +732,15 @@ def _write_queue_exact(
     # atomic private authority/runtime ref update.
     validate_public_target(command, _public_target(command))
 
+    # Activation authority is bound to the exact approval body digest copied into
+    # the owner-admin command. Re-read the canonical owner comment immediately
+    # before CAS so an edit/deletion cannot silently replace the approved set.
+    if operation == "ACTIVATE_ROOT_CANDIDATE":
+        _public_replenishment_approval(
+            command["approval_comment_id"],
+            command["approval_body_sha256"],
+        )
+
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
       updateRefs(input: $input) { clientMutationId }
@@ -551,12 +770,19 @@ def main() -> int:
         command = parse_owner_admin_command(os.environ.get("CONTROL_V4_OWNER_COMMAND", ""))
         state = _load_private_state()
         target = _public_target(command)
+        approval = None
+        if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
+            approval = _public_replenishment_approval(
+                command["approval_comment_id"],
+                command["approval_body_sha256"],
+            )
         next_queue = plan_owner_admin_transition(
             state["queue"],
             state["bundle"],
             command,
             target,
             now=datetime.now(timezone.utc),
+            approval=approval,
         )
         runtime_commit = _write_queue_exact(state, next_queue, command)
         print(f"CONTROL_V4_OWNER_ADMIN={command['operation']}:PASS")

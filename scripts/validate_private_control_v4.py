@@ -70,7 +70,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "6cd83f6c687ae2b8cf437add85c798bfb95f28f3",
     }
 )
-REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f295be49f6c689a1f7b41e632623f501a2099c91"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f0ea82e863bd18170158286c92370bcf7761b374"
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
@@ -478,6 +478,10 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         "APPROVAL NEEDED — A1 — <workstream>",
         "Approval is one-shot and action-scoped.",
         "The conversation is an approval interaction surface, not persistent semantic authority.",
+        "Queue replenishment needed",
+        "project_replenishment_approval_scope=CURRENT_ELIGIBLE_SNAPSHOT",
+        "project_replenishment_task_by_task_approval=false",
+        "project_replenishment_future_authority=false",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
         "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",

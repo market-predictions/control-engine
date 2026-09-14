@@ -20,7 +20,7 @@ Git history is the mutation audit trail. There is no second queue, database, ret
 
 ## One Runner, bounded transport
 
-The one recurring ChatGPT `Control V4 Runner` is the semantic executor. It emits owner-bound typed TICK/EVENT commands through public issue #106. Public comments are transport/audit evidence only; they never become queue, Mission, holder, lease, status or authority state.
+The one recurring ChatGPT `Control V4 Runner` is the semantic executor. It emits owner-bound typed TICK/EVENT commands through public issue #106. Public comments are transport/audit evidence only; they never become queue, Mission, holder, lease, status or runtime state.
 
 The trusted public carrier obtains only the scoped private capability required to apply deterministic queue transitions. Public results contain only a bounded safe projection and opaque task token; private Mission/acceptance/authority/queue/lock content is not mirrored publicly.
 
@@ -101,27 +101,74 @@ Transport success does not authorize arbitrary target mutation. Consequential ta
 
 ## Owner-approved bounded administration
 
-A principal approval in the canonical dashboard handshake may authorize one exact action without enabling standing integration authority. The existing public V4 administration gate therefore accepts one additional typed audit command on issue #106:
+A principal approval in the canonical dashboard handshake may authorize one exact action without enabling standing integration authority. The existing public V4 administration gate accepts typed owner-admin commands on issue #106:
 
 `CONTROL_V4_OWNER_ADMIN {...}`
 
 This is **outside normal Runner runtime** and supports only two present requirements:
 
 1. `FINALIZE_INTEGRATED`: after the principal approved one exact merge and the target PR is already merged, reconcile the matching exact `READY/PASS` queue task to `DONE`;
-2. `ACTIVATE_ROOT_CANDIDATE`: after the principal explicitly activates a project, bind one already-existing public PR candidate to the exactly-one dependency-free, unmaterialized OPEN root gap for that repository and enter `ACTIVE/REVIEW`.
+2. `ACTIVATE_ROOT_CANDIDATE`: after the principal approved a project-level replenishment cycle, bind one already-existing public PR candidate to one exact gap in the approved eligible set, require that gap to remain currently eligible, and enter `ACTIVE/REVIEW`.
 
-The public command carries only public target identity: repository, PR number, candidate SHA/head branch and expected base branch/SHA. It does not carry or expose private Mission ids, gap ids, acceptance criteria, task ids or queue content. The private gate resolves those values from current private authority and fails closed unless the resolution is exact.
+### Project-level replenishment authority
 
-Both operations require no current execution lock, current private Mission/repository authority, an exact current queue blob and exact public target identity. The resulting queue is validated against current private authority before mutation. The write uses the **same atomic authority fence** as normal runtime:
+The human approval is intentionally project-scoped, not task-by-task. One approval such as `Replenish Solid Privacy from its current Mission` authorizes Control to process **all gaps that are already eligible in that project's one fresh replenishment snapshot**. It does not authorize future gaps that become eligible later, a Mission revision, new scope, integration, deployment, publication or any unrelated project.
+
+Immediately after that owner decision, Control freezes the approved eligible set as one owner-authored audit comment on canonical issue #106:
+
+`CONTROL_V4_REPLENISH_APPROVAL {...}`
+
+That audit comment contains only:
+
+- the public repository name;
+- one opaque `authority_key` bound to the exact current private Mission id/revision/repository plus Mission and repository-authority blob identities;
+- the sorted unique set of opaque `eligible_activation_keys` for exactly the gaps eligible in that approved snapshot.
+
+It contains no private Mission id, revision, gap id, acceptance criteria, task id, queue content or private Git ref. The comment itself is **not** treated as immutable state. Instead its exact UTF-8 body is SHA-256 hashed when the snapshot is created. Every activation command carries that exact `approval_body_sha256` together with the approval-comment id. The gate accepts the evidence only when the comment is still the original owner-authored comment on canonical issue #106, `updated_at` still equals `created_at`, and the current body hashes to the exact digest carried by the activation command.
+
+Control creates each bounded candidate separately and activates each candidate separately. Every activation command references the exact approval-comment id, exact approval-body digest, candidate's opaque activation key and exact public target identity. The private gate requires all of the following:
+
+- the referenced approval comment is on canonical issue #106 and is owner-authored;
+- the comment has never been edited when consumed;
+- its exact body SHA-256 equals the digest frozen in the activation command;
+- its repository equals the activation repository;
+- its opaque authority key still matches exact current Mission/repository authority;
+- the requested activation key is a member of the digest-bound owner-approved key set;
+- that same key still resolves to exactly one **currently** eligible unmaterialized OPEN gap;
+- the candidate remains exact and valid.
+
+After preparing the private queue commit and revalidating the exact public target, the gate re-reads the same approval comment and rechecks the same digest immediately before the atomic private CAS. Editing the comment cannot expand an already-issued activation because the activation command is permanently bound to the original digest; editing it also causes subsequent activations from that cycle to fail closed because `updated_at != created_at` and the body digest no longer matches. No approval database, mutable approval record or second state plane is introduced.
+
+This two-sided check closes both directions of drift: work that becomes eligible only **after** approval is absent from the digest-bound key set and cannot borrow older authority; work from the approved set that becomes stale/ineligible before activation also fails current eligibility.
+
+The activation key itself is derived from exact private Mission id/revision/gap id plus the exact current Mission/repository authority fingerprint. It remains opaque on the public surface and is never stored in the queue.
+
+A gap is currently activation-eligible only when private authority proves all of the following:
+
+- the exact current Mission and repository authority validate;
+- the gap is `OPEN`;
+- no current queue task already exists for the same `(mission_id, mission_revision, gap_id)`;
+- every dependency is canonically satisfied either by a current-revision `DONE` task with valid review evidence or by valid exact `DONE_CARRY_FORWARD` evidence for a RETIRED dependency;
+- the candidate PR is still open, unmerged, mergeable, exact-head bound and based on the exact current expected base SHA.
+
+The resulting task is materialized directly as ordinary `ACTIVE/REVIEW` with the exact candidate. Candidate-less `BUILD` is not introduced.
+
+Both owner-admin operations require no current execution lock, current private Mission/repository authority, an exact current queue blob and exact public target identity. The resulting queue is validated against current private authority before mutation. The write uses the **same atomic authority fence** as normal runtime:
 
 ```text
 private main:           expected SHA -> same SHA
 control-runtime-state: expected SHA -> new queue commit
 ```
 
-No REST ref write, force update, second queue, approval database, scheduler, service or standing integration switch is introduced. `integration_enabled=false` remains unchanged. Owner approval remains one-shot and action-scoped; it cannot be generalized from one command to later PRs or later gaps.
+No REST ref write, force update, second queue, approval database, scheduler, service or standing integration switch is introduced. `integration_enabled=false` remains unchanged.
 
-This bounded path is deliberately **not** a generic Mission materializer. It cannot create candidate-less BUILD work, select among multiple eligible roots, activate dependent gaps, merge a target PR, send a report, deploy, or grant production/business-final-decision authority.
+This bounded path is deliberately **not** generic autonomous Mission replenishment by the Scheduled Runner. It cannot create candidate-less BUILD work, infer new Mission scope, merge a target PR, send a report, deploy, or grant production/business-final-decision authority.
+
+## Reversibility
+
+This change does not modify the Scheduled Runner command/acquisition/effect contract, the queue schema, scheduler binding or global integration authority. Therefore it requires no Runner-generation rotation.
+
+Rollback is a normal Git revert/adoption of the owner-admin/dashboard-governance change. Already activated tasks remain ordinary current-schema `ACTIVE/REVIEW`, `READY` or `DONE` tasks understood by the predecessor Runner; no queue rewind or compatibility state plane is required. Pre-activation candidate PRs can simply remain unmerged or be closed. Historical approval audit comments remain inert audit history and grant no authority once the reverted gate no longer accepts them. Git history is the rollback record.
 
 ## Activation limits
 
@@ -144,6 +191,8 @@ Current V4 does **not** use:
 - a retry ledger, cursor, heartbeat, lease renewal or cancellation state plane;
 - automatic/generic Mission-to-queue root-work materialization by normal Runner runtime;
 - candidate-less BUILD execution;
+- task-by-task principal approval for one project replenishment snapshot;
+- activation of later-eligible work from an older replenishment approval;
 - special `OVERIGE` runtime semantics;
 - standing integration authority.
 
@@ -151,4 +200,6 @@ Retired mechanisms remain only in Git history, not as competing current code or 
 
 ## Current product boundary
 
-`market-predictions/overige` may be registered as an inert governed Mission/repository. `[control] task overige: ...` is **not** end-to-end executable until generic root-work materialization and initial BUILD execution are separately justified and implemented. The bounded owner-admin activation above is not a substitute: it requires an already-existing exact public candidate and exactly one unambiguous dependency-free OPEN root. Any future generic feature must reuse the same Runner and canonical queue rather than create another intake/runtime system.
+A governed project may request replenishment only from already-committed current Mission scope. Project-level approval does not create future standing authority: when later dependencies complete and additional gaps become eligible, a later dashboard projection must surface a new replenishment need and produce a new digest-bound approval snapshot.
+
+`market-predictions/overige` may be registered as an inert governed Mission/repository. `[control] task overige: ...` is not end-to-end executable unless current Mission authority contains an eligible gap and a bounded exact candidate can be created under an owner-approved project replenishment cycle. The bounded owner-admin path is not a generic project planner and never invents Mission scope.
