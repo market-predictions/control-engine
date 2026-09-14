@@ -125,7 +125,7 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
-    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "f295be49f6c689a1f7b41e632623f501a2099c91"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "f0ea82e863bd18170158286c92370bcf7761b374"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):
@@ -258,6 +258,10 @@ def _valid_system_index() -> bytes:
         "APPROVAL NEEDED — A1 — <workstream>",
         "Approval is one-shot and action-scoped.",
         "The conversation is an approval interaction surface, not persistent semantic authority.",
+        "Queue replenishment needed",
+        "project_replenishment_approval_scope=CURRENT_ELIGIBLE_SNAPSHOT",
+        "project_replenishment_task_by_task_approval=false",
+        "project_replenishment_future_authority=false",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
         "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",
