@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 from control_engine.v4_contracts import (
     V4ValidationError,
+    canonical_task_sha256,
     derive_rollback_v31,
     forward_transform_v31_to_v4,
     v4_root_task_id,
@@ -212,11 +213,29 @@ def _require_frozen_v4_mission_set(
         raise V4ValidationError("trusted V4 Mission blob set drifted from frozen cutover Git authority")
 
 
+def _is_exact_historical_done_carry_forward(
+    task: Mapping[str, Any],
+    mission: Mapping[str, Any],
+) -> bool:
+    """Allow old-revision DONE evidence only when current Mission binds it exactly."""
+    if task.get("status") != "DONE" or task.get("repository", "").lower() != mission.get("repository", "").lower():
+        return False
+    digest = canonical_task_sha256(task)
+    return any(
+        item.get("source_fact_kind") == "V4_DONE"
+        and item.get("source_mission_revision") == task.get("mission_revision")
+        and item.get("source_gap_id") == task.get("gap_id")
+        and item.get("source_fact_ref") == task.get("task_id")
+        and item.get("source_task_sha256") == digest
+        for item in mission.get("done_carry_forward", [])
+    )
+
+
 def assert_v4_queue_bound_to_authority(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
 ) -> None:
-    """Prove every Mission-derived runtime field binds exact committed authority."""
+    """Prove current tasks and explicitly carried historical DONE evidence bind authority."""
     validate_queue_v4(queue)
     mission_by_id = {mission["mission_id"]: mission for mission in bundle.missions}
 
@@ -225,6 +244,8 @@ def assert_v4_queue_bound_to_authority(
         if mission is None:
             raise V4ValidationError("V4 task Mission missing from trusted authority")
         if task["mission_revision"] != mission["mission_revision"]:
+            if _is_exact_historical_done_carry_forward(task, mission):
+                continue
             raise V4ValidationError("V4 task Mission revision differs from trusted authority")
         if task["mission_contract_blob_sha"] != bundle.mission_blob_shas[task["mission_id"]]:
             raise V4ValidationError("V4 task Mission blob SHA differs from trusted Git authority")
