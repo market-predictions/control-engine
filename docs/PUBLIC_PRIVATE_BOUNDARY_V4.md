@@ -108,13 +108,13 @@ A principal approval in the canonical dashboard handshake may authorize one exac
 This is **outside normal Runner runtime** and supports only two present requirements:
 
 1. `FINALIZE_INTEGRATED`: after the principal approved one exact merge and the target PR is already merged, reconcile the matching exact `READY/PASS` queue task to `DONE`;
-2. `ACTIVATE_ROOT_CANDIDATE`: after the principal approved a project-level replenishment cycle, bind one already-existing public PR candidate to one exact gap in the immutable approved eligible set, require that gap to remain currently eligible, and enter `ACTIVE/REVIEW`.
+2. `ACTIVATE_ROOT_CANDIDATE`: after the principal approved a project-level replenishment cycle, bind one already-existing public PR candidate to one exact gap in the approved eligible set, require that gap to remain currently eligible, and enter `ACTIVE/REVIEW`.
 
 ### Project-level replenishment authority
 
 The human approval is intentionally project-scoped, not task-by-task. One approval such as `Replenish Solid Privacy from its current Mission` authorizes Control to process **all gaps that are already eligible in that project's one fresh replenishment snapshot**. It does not authorize future gaps that become eligible later, a Mission revision, new scope, integration, deployment, publication or any unrelated project.
 
-Immediately after that owner decision, Control freezes the approved eligible set as one immutable owner-authored audit comment on canonical issue #106:
+Immediately after that owner decision, Control freezes the approved eligible set as one owner-authored audit comment on canonical issue #106:
 
 `CONTROL_V4_REPLENISH_APPROVAL {...}`
 
@@ -124,18 +124,22 @@ That audit comment contains only:
 - one opaque `authority_key` bound to the exact current private Mission id/revision/repository plus Mission and repository-authority blob identities;
 - the sorted unique set of opaque `eligible_activation_keys` for exactly the gaps eligible in that approved snapshot.
 
-It contains no private Mission id, revision, gap id, acceptance criteria, task id, queue content or private Git ref. It is immutable approval evidence on the existing audit surface, not a mutable queue/state plane.
+It contains no private Mission id, revision, gap id, acceptance criteria, task id, queue content or private Git ref. The comment itself is **not** treated as immutable state. Instead its exact UTF-8 body is SHA-256 hashed when the snapshot is created. Every activation command carries that exact `approval_body_sha256` together with the approval-comment id. The gate accepts the evidence only when the comment is still the original owner-authored comment on canonical issue #106, `updated_at` still equals `created_at`, and the current body hashes to the exact digest carried by the activation command.
 
-Control creates each bounded candidate separately and activates each candidate separately. Every activation command references the exact approval-comment id plus the candidate's opaque activation key and exact public target identity. The private gate requires all of the following:
+Control creates each bounded candidate separately and activates each candidate separately. Every activation command references the exact approval-comment id, exact approval-body digest, candidate's opaque activation key and exact public target identity. The private gate requires all of the following:
 
 - the referenced approval comment is on canonical issue #106 and is owner-authored;
+- the comment has never been edited when consumed;
+- its exact body SHA-256 equals the digest frozen in the activation command;
 - its repository equals the activation repository;
 - its opaque authority key still matches exact current Mission/repository authority;
-- the requested activation key is a member of the immutable owner-approved key set;
+- the requested activation key is a member of the digest-bound owner-approved key set;
 - that same key still resolves to exactly one **currently** eligible unmaterialized OPEN gap;
 - the candidate remains exact and valid.
 
-This two-sided check closes both directions of drift: work that becomes eligible only **after** approval is absent from the frozen key set and cannot borrow older authority; work from the approved set that becomes stale/ineligible before activation also fails current eligibility.
+After preparing the private queue commit and revalidating the exact public target, the gate re-reads the same approval comment and rechecks the same digest immediately before the atomic private CAS. Editing the comment cannot expand an already-issued activation because the activation command is permanently bound to the original digest; editing it also causes subsequent activations from that cycle to fail closed because `updated_at != created_at` and the body digest no longer matches. No approval database, mutable approval record or second state plane is introduced.
+
+This two-sided check closes both directions of drift: work that becomes eligible only **after** approval is absent from the digest-bound key set and cannot borrow older authority; work from the approved set that becomes stale/ineligible before activation also fails current eligibility.
 
 The activation key itself is derived from exact private Mission id/revision/gap id plus the exact current Mission/repository authority fingerprint. It remains opaque on the public surface and is never stored in the queue.
 
@@ -196,6 +200,6 @@ Retired mechanisms remain only in Git history, not as competing current code or 
 
 ## Current product boundary
 
-A governed project may request replenishment only from already-committed current Mission scope. Project-level approval does not create future standing authority: when later dependencies complete and additional gaps become eligible, a later dashboard projection must surface a new replenishment need and produce a new immutable approval snapshot.
+A governed project may request replenishment only from already-committed current Mission scope. Project-level approval does not create future standing authority: when later dependencies complete and additional gaps become eligible, a later dashboard projection must surface a new replenishment need and produce a new digest-bound approval snapshot.
 
 `market-predictions/overige` may be registered as an inert governed Mission/repository. `[control] task overige: ...` is not end-to-end executable unless current Mission authority contains an eligible gap and a bounded exact candidate can be created under an owner-approved project replenishment cycle. The bounded owner-admin path is not a generic project planner and never invents Mission scope.
