@@ -11,7 +11,10 @@ from scripts.control_v4_owner_admin import (
     activation_key_v4,
     eligible_unmaterialized_gaps_v4,
     finalize_integrated_v4,
+    format_replenishment_approval_v4,
     parse_owner_admin_command,
+    parse_replenishment_approval,
+    replenishment_approval_payload_v4,
     validate_public_target,
 )
 
@@ -21,6 +24,7 @@ MISSION_SHA = "a" * 40
 AUTHORITY_SHA = "b" * 40
 CANDIDATE = "c" * 40
 BASE = "d" * 40
+APPROVAL_COMMENT_ID = 123456
 NOW = datetime(2026, 9, 14, 20, 40, tzinfo=timezone.utc)
 
 
@@ -112,12 +116,19 @@ def reviewed_done_task(gap_id):
     }
 
 
-def activation_command(bundle_value=None, gap_value=None):
+def approval(queue_value=None, bundle_value=None):
+    q = queue_value or empty_queue()
+    b = bundle_value or bundle()
+    return replenishment_approval_payload_v4(q, b, REPO)
+
+
+def activation_command(bundle_value=None, gap_value=None, *, approval_comment_id=APPROVAL_COMMENT_ID):
     b = bundle_value or bundle()
     m = b.missions[0]
     g = gap_value or m["gaps"][0]
     return {
         "operation": "ACTIVATE_ROOT_CANDIDATE",
+        "approval_comment_id": approval_comment_id,
         "activation_key": activation_key_v4(m, g, b),
         "repository": REPO,
         "candidate_pr_number": 1,
@@ -142,10 +153,11 @@ def finalize_command():
 
 def activated_queue():
     b = bundle()
-    return activate_root_candidate_v4(empty_queue(), b, activation_command(b), now=NOW)
+    q = empty_queue()
+    return activate_root_candidate_v4(q, b, activation_command(b), approval(q, b), now=NOW)
 
 
-def test_activation_command_uses_opaque_key_and_rejects_private_identity_fields():
+def test_activation_command_uses_opaque_key_and_approval_comment_without_private_identity_fields():
     cmd = activation_command()
     raw = "CONTROL_V4_OWNER_ADMIN " + owner_admin.json.dumps(cmd, separators=(",", ":"))
     assert parse_owner_admin_command(raw) == cmd
@@ -160,8 +172,26 @@ def test_activation_command_uses_opaque_key_and_rejects_private_identity_fields(
     with pytest.raises(OwnerAdminError, match="activation key invalid"):
         parse_owner_admin_command(raw.replace(cmd["activation_key"], "not-a-key"))
 
+    with pytest.raises(OwnerAdminError, match="approval comment id invalid"):
+        parse_owner_admin_command(raw.replace(str(APPROVAL_COMMENT_ID), "0", 1))
 
-def test_finalize_command_remains_backward_compatible_without_activation_key():
+
+def test_replenishment_approval_is_exact_sorted_opaque_current_eligible_set():
+    m = mission(gaps=[gap("GAP-B"), gap("GAP-A")])
+    b = bundle(mission_value=m)
+    payload = replenishment_approval_payload_v4(empty_queue(), b, REPO)
+    assert payload["repository"] == REPO
+    assert len(payload["authority_key"]) == 64
+    assert payload["eligible_activation_keys"] == sorted(payload["eligible_activation_keys"])
+    assert set(payload["eligible_activation_keys"]) == {
+        activation_key_v4(m, m["gaps"][0], b),
+        activation_key_v4(m, m["gaps"][1], b),
+    }
+    body = format_replenishment_approval_v4(payload)
+    assert parse_replenishment_approval(body) == payload
+
+
+def test_finalize_command_remains_backward_compatible_without_replenishment_fields():
     cmd = finalize_command()
     raw = "CONTROL_V4_OWNER_ADMIN " + owner_admin.json.dumps(cmd, separators=(",", ":"))
     assert parse_owner_admin_command(raw) == cmd
@@ -180,47 +210,73 @@ def test_activation_materializes_exact_candidate_directly_to_review():
     assert task["candidate"]["candidate_sha"] == CANDIDATE
 
 
-def test_multiple_currently_eligible_gaps_are_selected_exactly_by_activation_key():
+def test_multiple_eligible_gaps_are_selected_exactly_by_approved_activation_key():
     m = mission(gaps=[gap("GAP-A"), gap("GAP-B")])
     b = bundle(mission_value=m)
-    eligible = eligible_unmaterialized_gaps_v4(empty_queue(), b, REPO)
+    q = empty_queue()
+    approved = approval(q, b)
+    eligible = eligible_unmaterialized_gaps_v4(q, b, REPO)
     assert [g["gap_id"] for _, g in eligible] == ["GAP-A", "GAP-B"]
 
     cmd = activation_command(b, m["gaps"][1])
-    result = activate_root_candidate_v4(empty_queue(), b, cmd, now=NOW)
+    result = activate_root_candidate_v4(q, b, cmd, approved, now=NOW)
     assert len(result["tasks"]) == 1
     assert result["tasks"][0]["gap_id"] == "GAP-B"
 
 
-def test_dependent_gap_becomes_eligible_only_after_dependency_is_done():
+def test_later_eligible_gap_cannot_borrow_older_project_approval_snapshot():
     m = mission(gaps=[gap("GAP-A"), gap("GAP-B", depends_on=["GAP-A"])])
     b = bundle(mission_value=m)
-    assert [g["gap_id"] for _, g in eligible_unmaterialized_gaps_v4(empty_queue(), b, REPO)] == ["GAP-A"]
+    before = empty_queue()
+    approved_before = approval(before, b)
+    assert approved_before["eligible_activation_keys"] == [activation_key_v4(m, m["gaps"][0], b)]
 
-    q = empty_queue()
-    q["tasks"].append(reviewed_done_task("GAP-A"))
-    assert [g["gap_id"] for _, g in eligible_unmaterialized_gaps_v4(q, b, REPO)] == ["GAP-B"]
+    after = empty_queue()
+    after["tasks"].append(reviewed_done_task("GAP-A"))
+    assert [g["gap_id"] for _, g in eligible_unmaterialized_gaps_v4(after, b, REPO)] == ["GAP-B"]
 
-    cmd = activation_command(b, m["gaps"][1])
-    result = activate_root_candidate_v4(q, b, cmd, now=NOW)
+    later_gap_command = activation_command(b, m["gaps"][1])
+    with pytest.raises(OwnerAdminError, match="not in the owner-approved replenishment snapshot"):
+        activate_root_candidate_v4(after, b, later_gap_command, approved_before, now=NOW)
+
+    approved_after = approval(after, b)
+    result = activate_root_candidate_v4(after, b, later_gap_command, approved_after, now=NOW)
     assert result["tasks"][-1]["gap_id"] == "GAP-B"
-    assert result["tasks"][-1]["status"] == "ACTIVE"
-    assert result["tasks"][-1]["phase"] == "REVIEW"
 
 
-def test_activation_key_is_authority_bound_and_stale_key_fails_closed():
+def test_activation_key_and_approval_are_authority_bound_and_stale_authority_fails_closed():
     old = bundle()
+    q = empty_queue()
     cmd = activation_command(old)
+    approved = approval(q, old)
     changed = bundle(mission_sha="e" * 40)
-    with pytest.raises(OwnerAdminError, match="activation key does not resolve"):
-        activate_root_candidate_v4(empty_queue(), changed, cmd, now=NOW)
+    with pytest.raises(OwnerAdminError, match="approval authority is stale"):
+        activate_root_candidate_v4(q, changed, cmd, approved, now=NOW)
+
+
+def test_activation_requires_no_live_execution_lock():
+    b = bundle()
+    q = empty_queue()
+    # A schema-valid lock needs one ACTIVE holder, so first activate then add its lock.
+    q = activate_root_candidate_v4(q, b, activation_command(b), approval(q, b), now=NOW)
+    task = q["tasks"][0]
+    task["status"] = "ACTIVE"
+    task["phase"] = "REVIEW"
+    q["execution_lock"] = {
+        "run_id": "v4:test",
+        "task_id": task["task_id"],
+        "started_at": "2026-09-14T20:00:00Z",
+        "expires_at": "2026-09-14T21:30:00Z",
+    }
+    with pytest.raises(OwnerAdminError, match="requires no execution lock"):
+        activate_root_candidate_v4(q, b, activation_command(b), approval(empty_queue(), b), now=NOW)
 
 
 def test_activation_rejects_existing_logical_task_and_reused_public_pr():
     b = bundle()
     q = activated_queue()
     with pytest.raises(OwnerAdminError, match="candidate PR is already materialized"):
-        activate_root_candidate_v4(q, b, activation_command(b), now=NOW)
+        activate_root_candidate_v4(q, b, activation_command(b), approval(empty_queue(), b), now=NOW)
 
 
 def test_finalize_requires_exact_ready_pass_and_preserves_review_evidence():
@@ -241,6 +297,36 @@ def test_finalize_requires_exact_ready_pass_and_preserves_review_evidence():
     assert finished["status"] == "DONE"
     assert finished["phase"] is None
     assert finished["last_review"] == before_review
+
+
+def test_public_owner_replenishment_approval_comment_is_exactly_bound(monkeypatch):
+    b = bundle()
+    payload = approval(empty_queue(), b)
+    body = format_replenishment_approval_v4(payload)
+    monkeypatch.setattr(
+        owner_admin,
+        "_public_get",
+        lambda path: {
+            "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
+            "user": {"login": "market-predictions"},
+            "author_association": "OWNER",
+            "body": body,
+        },
+    )
+    assert owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID) == payload
+
+    monkeypatch.setattr(
+        owner_admin,
+        "_public_get",
+        lambda path: {
+            "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
+            "user": {"login": "someone-else"},
+            "author_association": "NONE",
+            "body": body,
+        },
+    )
+    with pytest.raises(OwnerAdminError, match="not owner-authored"):
+        owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID)
 
 
 def test_public_target_rules_distinguish_activation_from_finalization():
