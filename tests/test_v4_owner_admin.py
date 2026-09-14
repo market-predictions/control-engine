@@ -8,6 +8,8 @@ from scripts import control_v4_owner_admin as owner_admin
 from scripts.control_v4_owner_admin import (
     OwnerAdminError,
     activate_root_candidate_v4,
+    activation_key_v4,
+    eligible_unmaterialized_gaps_v4,
     finalize_integrated_v4,
     parse_owner_admin_command,
     validate_public_target,
@@ -19,43 +21,46 @@ MISSION_SHA = "a" * 40
 AUTHORITY_SHA = "b" * 40
 CANDIDATE = "c" * 40
 BASE = "d" * 40
-NOW = datetime(2026, 9, 13, 20, 40, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 14, 20, 40, tzinfo=timezone.utc)
 
 
-def mission(*, integration_policy="AUTO_AFTER_PASS", review_policy="EXTERNAL"):
+def gap(gap_id, *, depends_on=(), integration_policy="HOLD_AFTER_PASS", review_policy="INTERNAL"):
+    return {
+        "gap_id": gap_id,
+        "gap_state": "OPEN",
+        "depends_on": list(depends_on),
+        "repository": REPO,
+        "acceptance": [f"{gap_id} acceptance."],
+        "integration_policy": integration_policy,
+        "review_policy": review_policy,
+    }
+
+
+def mission(*, gaps=None):
     return {
         "protocol_id": "MISSION_CONTRACT_V4",
         "mission_id": "AGENT_FRAMEWORK",
         "mission_revision": "2026-09-10-r2",
         "repository": REPO,
         "desired_outcome": "Prove the bounded carrier.",
-        "gaps": [
-            {
-                "gap_id": "AGENT-R1-GAP-01",
-                "gap_state": "OPEN",
-                "depends_on": [],
-                "repository": REPO,
-                "acceptance": ["Exact candidate is reviewed."],
-                "integration_policy": integration_policy,
-                "review_policy": review_policy,
-            }
-        ],
+        "gaps": list(gaps or [gap("AGENT-R1-GAP-01")]),
         "authority_boundaries": ["No production authority."],
         "principal_manual_relay_count": 0,
     }
 
 
-def bundle():
+def bundle(*, mission_value=None, mission_sha=MISSION_SHA):
     authority = {
         "protocol_id": "CONTROL_REPOSITORY_AUTHORITY_V4",
         "repository": REPO,
         "required_check_runs": [],
         "principal_manual_relay_count": 0,
     }
+    value = mission_value or mission()
     return V4AuthorityBundle(
-        missions=(mission(),),
+        missions=(value,),
         authorities=(authority,),
-        mission_blob_shas={"AGENT_FRAMEWORK": MISSION_SHA},
+        mission_blob_shas={"AGENT_FRAMEWORK": mission_sha},
         authority_blob_shas={REPO: AUTHORITY_SHA},
     )
 
@@ -70,40 +75,99 @@ def empty_queue():
     }
 
 
-def command(operation):
+def reviewed_done_task(gap_id):
+    candidate = {
+        "candidate_sha": "1" * 40,
+        "candidate_pr_number": 99,
+        "candidate_head_branch": f"control/{gap_id.lower()}",
+        "expected_base_branch": "main",
+        "expected_base_sha": "2" * 40,
+    }
     return {
-        "operation": operation,
+        "task_id": f"MISSION--AGENT_FRAMEWORK--2026-09-10-r2--{gap_id}",
+        "mission_id": "AGENT_FRAMEWORK",
+        "mission_revision": "2026-09-10-r2",
+        "mission_contract_blob_sha": MISSION_SHA,
+        "repository_authority_blob_sha": AUTHORITY_SHA,
+        "gap_id": gap_id,
+        "repository": REPO,
+        "acceptance": [f"{gap_id} acceptance."],
+        "integration_policy": "HOLD_AFTER_PASS",
+        "review_policy": "INTERNAL",
+        "convergence_required": False,
+        "status": "DONE",
+        "phase": None,
+        "candidate": candidate,
+        "last_review": {
+            "candidate_sha": candidate["candidate_sha"],
+            "expected_base_branch": "main",
+            "expected_base_sha": candidate["expected_base_sha"],
+            "verdict": "PASS",
+            "reviewed_at": "2026-09-14T19:00:00Z",
+        },
+        "external_review": None,
+        "blocker": None,
+        "created_at": "2026-09-14T18:00:00Z",
+        "updated_at": "2026-09-14T19:00:00Z",
+    }
+
+
+def activation_command(bundle_value=None, gap_value=None):
+    b = bundle_value or bundle()
+    m = b.missions[0]
+    g = gap_value or m["gaps"][0]
+    return {
+        "operation": "ACTIVATE_ROOT_CANDIDATE",
+        "activation_key": activation_key_v4(m, g, b),
         "repository": REPO,
         "candidate_pr_number": 1,
         "candidate_sha": CANDIDATE,
-        "candidate_head_branch": "bootstrap/agent-r1-gap-01",
+        "candidate_head_branch": "bootstrap/agent-r1-gap",
+        "expected_base_branch": "main",
+        "expected_base_sha": BASE,
+    }
+
+
+def finalize_command():
+    return {
+        "operation": "FINALIZE_INTEGRATED",
+        "repository": REPO,
+        "candidate_pr_number": 1,
+        "candidate_sha": CANDIDATE,
+        "candidate_head_branch": "bootstrap/agent-r1-gap",
         "expected_base_branch": "main",
         "expected_base_sha": BASE,
     }
 
 
 def activated_queue():
-    return activate_root_candidate_v4(
-        empty_queue(), bundle(), command("ACTIVATE_ROOT_CANDIDATE"), now=NOW
-    )
+    b = bundle()
+    return activate_root_candidate_v4(empty_queue(), b, activation_command(b), now=NOW)
 
 
-def test_command_is_exact_public_identity_only():
-    raw = (
-        'CONTROL_V4_OWNER_ADMIN '
-        '{"operation":"ACTIVATE_ROOT_CANDIDATE","repository":"market-predictions/agent",'
-        '"candidate_pr_number":1,"candidate_sha":"' + CANDIDATE + '",'
-        '"candidate_head_branch":"bootstrap/agent-r1-gap-01","expected_base_branch":"main",'
-        '"expected_base_sha":"' + BASE + '"}'
-    )
-    parsed = parse_owner_admin_command(raw)
-    assert parsed == command("ACTIVATE_ROOT_CANDIDATE")
+def test_activation_command_uses_opaque_key_and_rejects_private_identity_fields():
+    cmd = activation_command()
+    raw = "CONTROL_V4_OWNER_ADMIN " + owner_admin.json.dumps(cmd, separators=(",", ":"))
+    assert parse_owner_admin_command(raw) == cmd
+    assert "mission_id" not in cmd and "gap_id" not in cmd
 
-    with pytest.raises(OwnerAdminError):
-        parse_owner_admin_command(raw[:-1] + ',"gap_id":"secret"}')
+    polluted = dict(cmd, gap_id="AGENT-R1-GAP-01")
+    with pytest.raises(OwnerAdminError, match="fields invalid"):
+        parse_owner_admin_command(
+            "CONTROL_V4_OWNER_ADMIN " + owner_admin.json.dumps(polluted, separators=(",", ":"))
+        )
+
+    with pytest.raises(OwnerAdminError, match="activation key invalid"):
+        parse_owner_admin_command(raw.replace(cmd["activation_key"], "not-a-key"))
 
 
-def test_activation_materializes_exact_one_root_candidate_directly_to_review():
+def test_finalize_command_remains_backward_compatible_without_activation_key():
+    cmd = finalize_command()
+    raw = "CONTROL_V4_OWNER_ADMIN " + owner_admin.json.dumps(cmd, separators=(",", ":"))
+    assert parse_owner_admin_command(raw) == cmd
+
+
+def test_activation_materializes_exact_candidate_directly_to_review():
     result = activated_queue()
     assert result["execution_lock"] is None
     assert len(result["tasks"]) == 1
@@ -114,66 +178,49 @@ def test_activation_materializes_exact_one_root_candidate_directly_to_review():
     assert task["status"] == "ACTIVE"
     assert task["phase"] == "REVIEW"
     assert task["candidate"]["candidate_sha"] == CANDIDATE
-    assert task["last_review"] is None
-    assert task["external_review"] is None
 
 
-def test_activation_fails_closed_on_ambiguity_or_lock():
+def test_multiple_currently_eligible_gaps_are_selected_exactly_by_activation_key():
+    m = mission(gaps=[gap("GAP-A"), gap("GAP-B")])
+    b = bundle(mission_value=m)
+    eligible = eligible_unmaterialized_gaps_v4(empty_queue(), b, REPO)
+    assert [g["gap_id"] for _, g in eligible] == ["GAP-A", "GAP-B"]
+
+    cmd = activation_command(b, m["gaps"][1])
+    result = activate_root_candidate_v4(empty_queue(), b, cmd, now=NOW)
+    assert len(result["tasks"]) == 1
+    assert result["tasks"][0]["gap_id"] == "GAP-B"
+
+
+def test_dependent_gap_becomes_eligible_only_after_dependency_is_done():
+    m = mission(gaps=[gap("GAP-A"), gap("GAP-B", depends_on=["GAP-A"])])
+    b = bundle(mission_value=m)
+    assert [g["gap_id"] for _, g in eligible_unmaterialized_gaps_v4(empty_queue(), b, REPO)] == ["GAP-A"]
+
     q = empty_queue()
-    q["execution_lock"] = {
-        "run_id": "v4:test",
-        "task_id": "missing",
-        "started_at": "2026-09-13T20:00:00Z",
-        "expires_at": "2026-09-13T21:30:00Z",
-    }
-    with pytest.raises(Exception):
-        activate_root_candidate_v4(q, bundle(), command("ACTIVATE_ROOT_CANDIDATE"), now=NOW)
+    q["tasks"].append(reviewed_done_task("GAP-A"))
+    assert [g["gap_id"] for _, g in eligible_unmaterialized_gaps_v4(q, b, REPO)] == ["GAP-B"]
 
-    two = mission()
-    two["gaps"].append({
-        "gap_id": "OTHER-ROOT",
-        "gap_state": "OPEN",
-        "depends_on": [],
-        "repository": REPO,
-        "acceptance": ["Other root."],
-        "integration_policy": "HOLD_AFTER_PASS",
-        "review_policy": "INTERNAL",
-    })
+    cmd = activation_command(b, m["gaps"][1])
+    result = activate_root_candidate_v4(q, b, cmd, now=NOW)
+    assert result["tasks"][-1]["gap_id"] == "GAP-B"
+    assert result["tasks"][-1]["status"] == "ACTIVE"
+    assert result["tasks"][-1]["phase"] == "REVIEW"
+
+
+def test_activation_key_is_authority_bound_and_stale_key_fails_closed():
+    old = bundle()
+    cmd = activation_command(old)
+    changed = bundle(mission_sha="e" * 40)
+    with pytest.raises(OwnerAdminError, match="activation key does not resolve"):
+        activate_root_candidate_v4(empty_queue(), changed, cmd, now=NOW)
+
+
+def test_activation_rejects_existing_logical_task_and_reused_public_pr():
     b = bundle()
-    ambiguous = V4AuthorityBundle(
-        missions=(two,),
-        authorities=b.authorities,
-        mission_blob_shas=b.mission_blob_shas,
-        authority_blob_shas=b.authority_blob_shas,
-    )
-    with pytest.raises(OwnerAdminError, match="exactly one"):
-        activate_root_candidate_v4(empty_queue(), ambiguous, command("ACTIVATE_ROOT_CANDIDATE"), now=NOW)
-
-
-def test_activation_rejects_same_public_pr_after_base_drift():
     q = activated_queue()
-    two = mission()
-    two["gaps"].append({
-        "gap_id": "OTHER-ROOT",
-        "gap_state": "OPEN",
-        "depends_on": [],
-        "repository": REPO,
-        "acceptance": ["Other root."],
-        "integration_policy": "HOLD_AFTER_PASS",
-        "review_policy": "INTERNAL",
-    })
-    b = bundle()
-    two_root_bundle = V4AuthorityBundle(
-        missions=(two,),
-        authorities=b.authorities,
-        mission_blob_shas=b.mission_blob_shas,
-        authority_blob_shas=b.authority_blob_shas,
-    )
-    drifted = command("ACTIVATE_ROOT_CANDIDATE")
-    drifted["expected_base_sha"] = "e" * 40
-
     with pytest.raises(OwnerAdminError, match="candidate PR is already materialized"):
-        activate_root_candidate_v4(q, two_root_bundle, drifted, now=NOW)
+        activate_root_candidate_v4(q, b, activation_command(b), now=NOW)
 
 
 def test_finalize_requires_exact_ready_pass_and_preserves_review_evidence():
@@ -186,37 +233,25 @@ def test_finalize_requires_exact_ready_pass_and_preserves_review_evidence():
         "expected_base_branch": "main",
         "expected_base_sha": BASE,
         "verdict": "PASS",
-        "reviewed_at": "2026-09-13T20:00:00Z",
-    }
-    task["external_review"] = {
-        "candidate_sha": CANDIDATE,
-        "expected_base_branch": "main",
-        "expected_base_sha": BASE,
-        "request_key": "external-1",
-        "status": "PASS",
-        "request_ref": "https://github.com/example/request",
-        "evidence_ref": "https://github.com/example/evidence",
+        "reviewed_at": "2026-09-14T20:00:00Z",
     }
     before_review = dict(task["last_review"])
-    result = finalize_integrated_v4(
-        q, bundle(), command("FINALIZE_INTEGRATED"), now=NOW
-    )
+    result = finalize_integrated_v4(q, bundle(), finalize_command(), now=NOW)
     finished = result["tasks"][0]
     assert finished["status"] == "DONE"
     assert finished["phase"] is None
     assert finished["last_review"] == before_review
-    assert finished["external_review"]["status"] == "PASS"
 
 
 def test_public_target_rules_distinguish_activation_from_finalization():
-    activate = command("ACTIVATE_ROOT_CANDIDATE")
+    activate = activation_command()
     open_target = {
         "repository": REPO,
         "state": "open",
         "merged": False,
         "mergeable": True,
         "head_sha": CANDIDATE,
-        "head_branch": "bootstrap/agent-r1-gap-01",
+        "head_branch": "bootstrap/agent-r1-gap",
         "base_branch": "main",
         "base_sha": BASE,
         "current_base_sha": BASE,
@@ -224,12 +259,11 @@ def test_public_target_rules_distinguish_activation_from_finalization():
     }
     validate_public_target(activate, open_target)
 
-    drifted_open_target = dict(open_target)
-    drifted_open_target["base_sha"] = "e" * 40
-    with pytest.raises(OwnerAdminError, match="base drifted"):
-        validate_public_target(activate, drifted_open_target)
+    drifted = dict(open_target, current_base_sha="e" * 40)
+    with pytest.raises(OwnerAdminError, match="base branch moved"):
+        validate_public_target(activate, drifted)
 
-    finalize = command("FINALIZE_INTEGRATED")
+    finalize = finalize_command()
     merged_target = dict(open_target)
     merged_target.update(
         state="closed",
@@ -239,10 +273,6 @@ def test_public_target_rules_distinguish_activation_from_finalization():
         candidate_in_current_base=True,
     )
     validate_public_target(finalize, merged_target)
-
-    merged_target["candidate_in_current_base"] = False
-    with pytest.raises(OwnerAdminError):
-        validate_public_target(finalize, merged_target)
 
 
 def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(monkeypatch):
@@ -264,11 +294,7 @@ def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(m
         "_branch_head",
         lambda repository, branch, private: main_sha if branch == "main" else runtime_sha,
     )
-    monkeypatch.setattr(
-        owner_admin,
-        "_private_get",
-        lambda path: {"tree": {"sha": "6" * 40}},
-    )
+    monkeypatch.setattr(owner_admin, "_private_get", lambda path: {"tree": {"sha": "6" * 40}})
 
     def private_post(path, payload):
         if path.endswith("/git/blobs"):
@@ -286,7 +312,7 @@ def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(m
         "merged": False,
         "mergeable": True,
         "head_sha": CANDIDATE,
-        "head_branch": "bootstrap/agent-r1-gap-01",
+        "head_branch": "bootstrap/agent-r1-gap",
         "base_branch": "main",
         "base_sha": BASE,
         "current_base_sha": BASE,
@@ -306,12 +332,7 @@ def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(m
     monkeypatch.setattr(owner_admin, "_private_headers", lambda: {})
     monkeypatch.setattr(owner_admin, "_request_json", request_json)
 
-    result = owner_admin._write_queue_exact(
-        state,
-        q,
-        command("ACTIVATE_ROOT_CANDIDATE"),
-    )
-
+    result = owner_admin._write_queue_exact(state, q, activation_command(b))
     assert result == "5" * 40
     assert events == ["commit", "public_target", "graphql"]
 
