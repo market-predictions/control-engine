@@ -14,6 +14,7 @@ from scripts.control_v4_owner_admin import (
     format_replenishment_approval_v4,
     parse_owner_admin_command,
     parse_replenishment_approval,
+    replenishment_approval_body_sha256,
     replenishment_approval_payload_v4,
     validate_public_target,
 )
@@ -122,13 +123,25 @@ def approval(queue_value=None, bundle_value=None):
     return replenishment_approval_payload_v4(q, b, REPO)
 
 
-def activation_command(bundle_value=None, gap_value=None, *, approval_comment_id=APPROVAL_COMMENT_ID):
+def approval_body(queue_value=None, bundle_value=None):
+    return format_replenishment_approval_v4(approval(queue_value, bundle_value))
+
+
+def activation_command(
+    bundle_value=None,
+    gap_value=None,
+    *,
+    approval_comment_id=APPROVAL_COMMENT_ID,
+    approval_body_value=None,
+):
     b = bundle_value or bundle()
     m = b.missions[0]
     g = gap_value or m["gaps"][0]
+    body = approval_body_value or approval_body(empty_queue(), b)
     return {
         "operation": "ACTIVATE_ROOT_CANDIDATE",
         "approval_comment_id": approval_comment_id,
+        "approval_body_sha256": replenishment_approval_body_sha256(body),
         "activation_key": activation_key_v4(m, g, b),
         "repository": REPO,
         "candidate_pr_number": 1,
@@ -157,7 +170,7 @@ def activated_queue():
     return activate_root_candidate_v4(q, b, activation_command(b), approval(q, b), now=NOW)
 
 
-def test_activation_command_uses_opaque_key_and_approval_comment_without_private_identity_fields():
+def test_activation_command_uses_opaque_key_and_digest_bound_approval_without_private_identity_fields():
     cmd = activation_command()
     raw = "CONTROL_V4_OWNER_ADMIN " + owner_admin.json.dumps(cmd, separators=(",", ":"))
     assert parse_owner_admin_command(raw) == cmd
@@ -175,6 +188,9 @@ def test_activation_command_uses_opaque_key_and_approval_comment_without_private
     with pytest.raises(OwnerAdminError, match="approval comment id invalid"):
         parse_owner_admin_command(raw.replace(str(APPROVAL_COMMENT_ID), "0", 1))
 
+    with pytest.raises(OwnerAdminError, match="approval body SHA-256 invalid"):
+        parse_owner_admin_command(raw.replace(cmd["approval_body_sha256"], "not-a-digest"))
+
 
 def test_replenishment_approval_is_exact_sorted_opaque_current_eligible_set():
     m = mission(gaps=[gap("GAP-B"), gap("GAP-A")])
@@ -189,6 +205,7 @@ def test_replenishment_approval_is_exact_sorted_opaque_current_eligible_set():
     }
     body = format_replenishment_approval_v4(payload)
     assert parse_replenishment_approval(body) == payload
+    assert len(replenishment_approval_body_sha256(body)) == 64
 
 
 def test_finalize_command_remains_backward_compatible_without_replenishment_fields():
@@ -257,7 +274,6 @@ def test_activation_key_and_approval_are_authority_bound_and_stale_authority_fai
 def test_activation_requires_no_live_execution_lock():
     b = bundle()
     q = empty_queue()
-    # A schema-valid lock needs one ACTIVE holder, so first activate then add its lock.
     q = activate_root_candidate_v4(q, b, activation_command(b), approval(q, b), now=NOW)
     task = q["tasks"][0]
     task["status"] = "ACTIVE"
@@ -299,34 +315,36 @@ def test_finalize_requires_exact_ready_pass_and_preserves_review_evidence():
     assert finished["last_review"] == before_review
 
 
-def test_public_owner_replenishment_approval_comment_is_exactly_bound(monkeypatch):
+def test_public_owner_replenishment_approval_comment_is_digest_bound_and_unedited(monkeypatch):
     b = bundle()
     payload = approval(empty_queue(), b)
     body = format_replenishment_approval_v4(payload)
-    monkeypatch.setattr(
-        owner_admin,
-        "_public_get",
-        lambda path: {
-            "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
-            "user": {"login": "market-predictions"},
-            "author_association": "OWNER",
-            "body": body,
-        },
-    )
-    assert owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID) == payload
+    digest = replenishment_approval_body_sha256(body)
+    base_comment = {
+        "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
+        "user": {"login": "market-predictions"},
+        "author_association": "OWNER",
+        "created_at": "2026-09-14T20:00:00Z",
+        "updated_at": "2026-09-14T20:00:00Z",
+        "body": body,
+    }
+    monkeypatch.setattr(owner_admin, "_public_get", lambda path: dict(base_comment))
+    assert owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID, digest) == payload
 
-    monkeypatch.setattr(
-        owner_admin,
-        "_public_get",
-        lambda path: {
-            "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
-            "user": {"login": "someone-else"},
-            "author_association": "NONE",
-            "body": body,
-        },
-    )
+    edited = dict(base_comment, updated_at="2026-09-14T20:01:00Z")
+    monkeypatch.setattr(owner_admin, "_public_get", lambda path: edited)
+    with pytest.raises(OwnerAdminError, match="was edited"):
+        owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID, digest)
+
+    mutated = dict(base_comment, body=body + "\nexpanded")
+    monkeypatch.setattr(owner_admin, "_public_get", lambda path: mutated)
+    with pytest.raises(OwnerAdminError, match="digest mismatch"):
+        owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID, digest)
+
+    wrong_owner = dict(base_comment, user={"login": "someone-else"}, author_association="NONE")
+    monkeypatch.setattr(owner_admin, "_public_get", lambda path: wrong_owner)
     with pytest.raises(OwnerAdminError, match="not owner-authored"):
-        owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID)
+        owner_admin._public_replenishment_approval(APPROVAL_COMMENT_ID, digest)
 
 
 def test_public_target_rules_distinguish_activation_from_finalization():
@@ -361,7 +379,7 @@ def test_public_target_rules_distinguish_activation_from_finalization():
     validate_public_target(finalize, merged_target)
 
 
-def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(monkeypatch):
+def test_queue_write_revalidates_public_target_and_approval_after_commit_before_graphql_cas(monkeypatch):
     q = activated_queue()
     b = bundle()
     main_sha = "1" * 40
@@ -409,18 +427,23 @@ def test_queue_write_revalidates_public_target_after_commit_before_graphql_cas(m
         events.append("public_target")
         return open_target
 
+    def public_approval(comment_id, digest):
+        events.append("approval")
+        return approval(empty_queue(), b)
+
     def request_json(url, **kwargs):
         events.append("graphql")
         return {"data": {"updateRefs": {"clientMutationId": "ok"}}}
 
     monkeypatch.setattr(owner_admin, "_private_post", private_post)
     monkeypatch.setattr(owner_admin, "_public_target", public_target)
+    monkeypatch.setattr(owner_admin, "_public_replenishment_approval", public_approval)
     monkeypatch.setattr(owner_admin, "_private_headers", lambda: {})
     monkeypatch.setattr(owner_admin, "_request_json", request_json)
 
     result = owner_admin._write_queue_exact(state, q, activation_command(b))
     assert result == "5" * 40
-    assert events == ["commit", "public_target", "graphql"]
+    assert events == ["commit", "public_target", "approval", "graphql"]
 
 
 def test_existing_adoption_workflow_keeps_admin_and_adoption_commands_separate():
