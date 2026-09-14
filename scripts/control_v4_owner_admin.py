@@ -6,8 +6,13 @@ This is an outside-Runner governance path for two concrete actions only:
 
 - finalize one exact READY/PASS task after its exact target PR was owner-approved
   and is already merged into the target base branch;
-- activate one exact existing public candidate for the single unmaterialized,
-  dependency-free OPEN Mission gap of its repository.
+- activate one exact existing public candidate for one currently eligible,
+  unmaterialized OPEN Mission gap selected by an opaque authority-bound key.
+
+A principal may authorize a project-level replenishment cycle once. Control may
+then create/activate every gap that is eligible in that fresh project snapshot,
+but each activation still uses its own exact public candidate identity and opaque
+activation key. The command never exposes private Mission/gap identifiers.
 
 It never grants standing integration authority, never changes private main, and
 never creates a second queue/state plane. Every queue mutation uses the same
@@ -18,6 +23,7 @@ normal V4 carrier.
 import base64
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import re
@@ -31,6 +37,7 @@ from control_engine.v4_contracts import (
     V4ValidationError,
     v4_root_task_id,
     validate_authority_set,
+    validate_carry_forward_evidence,
     validate_queue_v4,
 )
 from control_engine.v4_runtime_protocol import strict_json_object
@@ -45,11 +52,11 @@ AUTHORITY_DIR = "control/repository-authority"
 API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+ACTIVATION_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 OPERATIONS = {"FINALIZE_INTEGRATED", "ACTIVATE_ROOT_CANDIDATE"}
-COMMAND_KEYS = {
-    "operation",
+TARGET_KEYS = {
     "repository",
     "candidate_pr_number",
     "candidate_sha",
@@ -57,6 +64,8 @@ COMMAND_KEYS = {
     "expected_base_branch",
     "expected_base_sha",
 }
+FINALIZE_COMMAND_KEYS = {"operation", *TARGET_KEYS}
+ACTIVATE_COMMAND_KEYS = {"operation", "activation_key", *TARGET_KEYS}
 
 
 class OwnerAdminError(RuntimeError):
@@ -70,6 +79,12 @@ class StaleWriteError(OwnerAdminError):
 def _sha(value: object) -> str:
     if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
         raise OwnerAdminError("SHA identity invalid")
+    return value
+
+
+def _activation_key(value: object) -> str:
+    if not isinstance(value, str) or ACTIVATION_KEY_RE.fullmatch(value) is None:
+        raise OwnerAdminError("activation key invalid")
     return value
 
 
@@ -92,10 +107,12 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
         payload = strict_json_object(raw[len(PREFIX):])
     except Exception as exc:
         raise OwnerAdminError("owner-admin JSON invalid") from exc
-    if set(payload) != COMMAND_KEYS:
-        raise OwnerAdminError("owner-admin command fields invalid")
-    if payload.get("operation") not in OPERATIONS:
+    operation = payload.get("operation")
+    if operation not in OPERATIONS:
         raise OwnerAdminError("owner-admin operation unsupported")
+    expected_keys = ACTIVATE_COMMAND_KEYS if operation == "ACTIVATE_ROOT_CANDIDATE" else FINALIZE_COMMAND_KEYS
+    if set(payload) != expected_keys:
+        raise OwnerAdminError("owner-admin command fields invalid")
     payload["repository"] = _repository(payload["repository"])
     number = payload["candidate_pr_number"]
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
@@ -104,6 +121,8 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
     payload["candidate_head_branch"] = _branch(payload["candidate_head_branch"])
     payload["expected_base_branch"] = _branch(payload["expected_base_branch"])
     payload["expected_base_sha"] = _sha(payload["expected_base_sha"])
+    if operation == "ACTIVATE_ROOT_CANDIDATE":
+        payload["activation_key"] = _activation_key(payload["activation_key"])
     return payload
 
 
@@ -115,6 +134,27 @@ def candidate_identity(command: Mapping[str, Any]) -> dict[str, Any]:
         "expected_base_branch": command["expected_base_branch"],
         "expected_base_sha": command["expected_base_sha"],
     }
+
+
+def activation_key_v4(
+    mission: Mapping[str, Any],
+    gap: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+) -> str:
+    mission_id = mission.get("mission_id")
+    revision = mission.get("mission_revision")
+    gap_id = gap.get("gap_id")
+    repository = gap.get("repository")
+    if not all(isinstance(value, str) and value for value in (mission_id, revision, gap_id, repository)):
+        raise OwnerAdminError("activation identity invalid")
+    mission_blob = bundle.mission_blob_shas.get(mission_id)
+    authority_blob = bundle.authority_blob_shas.get(repository.lower())
+    if not isinstance(mission_blob, str) or SHA_RE.fullmatch(mission_blob) is None:
+        raise OwnerAdminError("activation Mission blob invalid")
+    if not isinstance(authority_blob, str) or SHA_RE.fullmatch(authority_blob) is None:
+        raise OwnerAdminError("activation repository-authority blob invalid")
+    material = "\0".join((mission_id, revision, gap_id, repository.lower(), mission_blob, authority_blob)).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 def _ts(now: datetime) -> str:
@@ -199,31 +239,71 @@ def finalize_integrated_v4(
     return result
 
 
-def _dependency_free_unmaterialized_gap(
+def _dependency_is_satisfied(
+    queue: Mapping[str, Any],
+    mission: Mapping[str, Any],
+    gap_by_id: Mapping[str, Mapping[str, Any]],
+    dependency_id: str,
+) -> bool:
+    dependency = gap_by_id[dependency_id]
+    if dependency.get("gap_state") == "RETIRED":
+        return any(
+            item.get("target_gap_id") == dependency_id
+            for item in mission.get("done_carry_forward", [])
+        )
+    matches = [
+        task for task in queue["tasks"]
+        if task.get("mission_id") == mission.get("mission_id")
+        and task.get("mission_revision") == mission.get("mission_revision")
+        and task.get("gap_id") == dependency_id
+    ]
+    return len(matches) == 1 and matches[0].get("status") == "DONE"
+
+
+def eligible_unmaterialized_gaps_v4(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
     repository: str,
-) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    validate_queue_v4(queue)
+    assert_v4_queue_bound_to_authority(queue, bundle)
     missions = [mission for mission in bundle.missions if mission.get("repository") == repository]
     if len(missions) != 1:
         raise OwnerAdminError("repository does not resolve to exactly one current Mission")
     mission = missions[0]
+    validate_carry_forward_evidence(mission, queue)
     existing = {
         (task["mission_id"], task["mission_revision"], task["gap_id"])
         for task in queue["tasks"]
     }
-    candidates = []
+    gap_by_id = {gap["gap_id"]: gap for gap in mission["gaps"]}
+    eligible: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for gap in mission["gaps"]:
         logical = (mission["mission_id"], mission["mission_revision"], gap["gap_id"])
-        if (
-            gap.get("gap_state") == "OPEN"
-            and gap.get("depends_on") == []
-            and logical not in existing
+        if gap.get("gap_state") != "OPEN" or logical in existing:
+            continue
+        if all(
+            _dependency_is_satisfied(queue, mission, gap_by_id, dependency_id)
+            for dependency_id in gap.get("depends_on", [])
         ):
-            candidates.append(gap)
-    if len(candidates) != 1:
-        raise OwnerAdminError("owner activation requires exactly one dependency-free unmaterialized OPEN gap")
-    return mission, candidates[0]
+            eligible.append((mission, gap))
+    return eligible
+
+
+def _eligible_gap_by_activation_key(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    command: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    requested = _activation_key(command.get("activation_key"))
+    matches = [
+        (mission, gap)
+        for mission, gap in eligible_unmaterialized_gaps_v4(queue, bundle, command["repository"])
+        if activation_key_v4(mission, gap, bundle) == requested
+    ]
+    if len(matches) != 1:
+        raise OwnerAdminError("activation key does not resolve to exactly one currently eligible unmaterialized OPEN gap")
+    return matches[0]
 
 
 def activate_root_candidate_v4(
@@ -240,7 +320,7 @@ def activate_root_candidate_v4(
     if any(_task_public_pr_matches(task, command) for task in queue["tasks"]):
         raise OwnerAdminError("candidate PR is already materialized")
 
-    mission, gap = _dependency_free_unmaterialized_gap(queue, bundle, command["repository"])
+    mission, gap = _eligible_gap_by_activation_key(queue, bundle, command)
     repo_key = command["repository"].lower()
     created = _ts(now)
     task = {
