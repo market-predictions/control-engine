@@ -10,11 +10,13 @@ This is an outside-Runner governance path for two concrete actions only:
   unmaterialized OPEN Mission gap selected by an opaque authority-bound key.
 
 A principal may authorize a project-level replenishment cycle once. That approval
-is frozen as one immutable owner-authored audit comment containing only the exact
-opaque activation keys eligible in that approved snapshot. Each later activation
-must reference that approval comment, remain a member of its frozen key set, and
-still be currently eligible. A gap that becomes eligible only later therefore
-cannot borrow authority from the older approval.
+is frozen as one owner-authored audit comment containing only the exact opaque
+activation keys eligible in that approved snapshot. Every activation binds the
+exact approval body by SHA-256; the comment must still be the original unedited
+owner comment when first consumed and is revalidated immediately before the
+private CAS. Each activation must remain a member of the frozen key set and still
+be currently eligible. A gap that becomes eligible only later therefore cannot
+borrow authority from the older approval.
 
 It never grants standing integration authority, never changes private main, and
 never creates a second queue/state plane. Every queue mutation uses the same
@@ -70,7 +72,13 @@ TARGET_KEYS = {
     "expected_base_sha",
 }
 FINALIZE_COMMAND_KEYS = {"operation", *TARGET_KEYS}
-ACTIVATE_COMMAND_KEYS = {"operation", "approval_comment_id", "activation_key", *TARGET_KEYS}
+ACTIVATE_COMMAND_KEYS = {
+    "operation",
+    "approval_comment_id",
+    "approval_body_sha256",
+    "activation_key",
+    *TARGET_KEYS,
+}
 APPROVAL_KEYS = {"repository", "authority_key", "eligible_activation_keys"}
 
 
@@ -133,6 +141,7 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
     payload["expected_base_sha"] = _sha(payload["expected_base_sha"])
     if operation == "ACTIVATE_ROOT_CANDIDATE":
         payload["approval_comment_id"] = _positive_int(payload["approval_comment_id"], label="approval comment id")
+        payload["approval_body_sha256"] = _opaque_key(payload["approval_body_sha256"], label="approval body SHA-256")
         payload["activation_key"] = _opaque_key(payload["activation_key"], label="activation key")
     return payload
 
@@ -156,6 +165,12 @@ def parse_replenishment_approval(raw: str) -> dict[str, Any]:
         raise OwnerAdminError("replenishment approval eligible key set must be unique and sorted")
     payload["eligible_activation_keys"] = clean
     return payload
+
+
+def replenishment_approval_body_sha256(raw: str) -> str:
+    if not isinstance(raw, str):
+        raise OwnerAdminError("replenishment approval body unavailable")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def candidate_identity(command: Mapping[str, Any]) -> dict[str, Any]:
@@ -615,7 +630,7 @@ def _load_private_state() -> dict[str, Any]:
     }
 
 
-def _public_replenishment_approval(comment_id: int) -> dict[str, Any]:
+def _public_replenishment_approval(comment_id: int, expected_body_sha256: str) -> dict[str, Any]:
     comment = _public_get(f"repos/{PUBLIC_REPOSITORY}/issues/comments/{comment_id}")
     if not isinstance(comment, Mapping):
         raise OwnerAdminError("replenishment approval comment unavailable")
@@ -625,9 +640,16 @@ def _public_replenishment_approval(comment_id: int) -> dict[str, Any]:
     user = comment.get("user") or {}
     if user.get("login") != "market-predictions" or comment.get("author_association") != "OWNER":
         raise OwnerAdminError("replenishment approval is not owner-authored")
+    created_at = comment.get("created_at")
+    updated_at = comment.get("updated_at")
+    if not isinstance(created_at, str) or not created_at or updated_at != created_at:
+        raise OwnerAdminError("replenishment approval comment was edited")
     body = comment.get("body")
     if not isinstance(body, str):
         raise OwnerAdminError("replenishment approval body unavailable")
+    expected = _opaque_key(expected_body_sha256, label="approval body SHA-256")
+    if replenishment_approval_body_sha256(body) != expected:
+        raise OwnerAdminError("replenishment approval body digest mismatch")
     return parse_replenishment_approval(body)
 
 
@@ -710,6 +732,15 @@ def _write_queue_exact(
     # atomic private authority/runtime ref update.
     validate_public_target(command, _public_target(command))
 
+    # Activation authority is bound to the exact approval body digest copied into
+    # the owner-admin command. Re-read the canonical owner comment immediately
+    # before CAS so an edit/deletion cannot silently replace the approved set.
+    if operation == "ACTIVATE_ROOT_CANDIDATE":
+        _public_replenishment_approval(
+            command["approval_comment_id"],
+            command["approval_body_sha256"],
+        )
+
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
       updateRefs(input: $input) { clientMutationId }
@@ -741,7 +772,10 @@ def main() -> int:
         target = _public_target(command)
         approval = None
         if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
-            approval = _public_replenishment_approval(command["approval_comment_id"])
+            approval = _public_replenishment_approval(
+                command["approval_comment_id"],
+                command["approval_body_sha256"],
+            )
         next_queue = plan_owner_admin_transition(
             state["queue"],
             state["bundle"],
