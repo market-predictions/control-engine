@@ -53,7 +53,7 @@ def mark_no_progress_recheck_v4(
     run_id: str,
     now: datetime,
 ) -> dict[str, Any]:
-    """Turn a no-op REPAIR into one bounded blocker-admission recheck."""
+    """Turn a no-op REPAIR into one bounded recheck, or park proven external failure."""
     validate_queue_v4(queue)
     _assert_holder(queue, task_id=task_id, run_id=run_id)
     task = _task(queue, task_id)
@@ -62,6 +62,23 @@ def mark_no_progress_recheck_v4(
 
     q = deepcopy(queue)
     changed = next(item for item in q["tasks"] if item["task_id"] == task_id)
+    external = changed.get("external_review")
+    if (
+        changed.get("review_policy") == "EXTERNAL"
+        and isinstance(external, Mapping)
+        and external.get("status") == "FAIL"
+    ):
+        # External review requests already use the canonical blocker-admission
+        # standard. A no-op repair after an admitted external finding is not a
+        # reason to ask the same reviewer forever; park until real PR drift.
+        changed["status"] = "BLOCKED"
+        changed["phase"] = None
+        changed["blocker"] = NO_PROGRESS_BLOCKER
+        changed["updated_at"] = _ts(now)
+        q["execution_lock"] = None
+        validate_queue_v4(q)
+        return q
+
     changed["phase"] = "REVIEW"
     changed["blocker"] = NO_PROGRESS_BLOCKER
     changed["updated_at"] = _ts(now)

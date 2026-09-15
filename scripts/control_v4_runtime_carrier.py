@@ -634,7 +634,8 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
     if no_progress_unblocked:
         reason_parts.append("no-progress-unblock")
     reason_parts.append("acquire")
-    state = _write_queue_exact(state, acquired, reason="-".join(reason_parts))
+    reason = "-".join(reason_parts)
+    state = _write_queue_exact(state, acquired, reason=reason)
     return state, work_result
 
 

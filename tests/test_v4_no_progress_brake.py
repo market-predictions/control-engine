@@ -7,7 +7,7 @@ import json
 import scripts.control_v4_runtime_carrier as carrier
 from control_engine.v4_contracts import acquire_task_v4
 from control_engine.v4_runtime_protocol import parse_public_command, safe_work_capsule
-from control_engine.v4_safety import NO_PROGRESS_BLOCKER
+from control_engine.v4_safety import NO_PROGRESS_BLOCKER, mark_no_progress_recheck_v4
 
 
 NOW = datetime(2026, 9, 15, 18, 30, tzinfo=timezone.utc)
@@ -28,7 +28,14 @@ def candidate(sha: str = OLD_SHA, base_sha: str = BASE_SHA) -> dict:
     }
 
 
-def task(*, status: str = "ACTIVE", phase: str | None = "REPAIR", blocker: str | None = None) -> dict:
+def task(
+    *,
+    status: str = "ACTIVE",
+    phase: str | None = "REPAIR",
+    blocker: str | None = None,
+    review_policy: str = "INTERNAL",
+    external_review: dict | None = None,
+) -> dict:
     return {
         "task_id": "MISSION--M--2026-09-15-r1--G1",
         "mission_id": "M",
@@ -39,7 +46,7 @@ def task(*, status: str = "ACTIVE", phase: str | None = "REPAIR", blocker: str |
         "repository": "example/repo",
         "acceptance": ["candidate must make real repair progress"],
         "integration_policy": "HOLD_AFTER_PASS",
-        "review_policy": "INTERNAL",
+        "review_policy": review_policy,
         "convergence_required": False,
         "status": status,
         "phase": phase,
@@ -48,10 +55,10 @@ def task(*, status: str = "ACTIVE", phase: str | None = "REPAIR", blocker: str |
             "candidate_sha": OLD_SHA,
             "expected_base_branch": "main",
             "expected_base_sha": BASE_SHA,
-            "verdict": "REPAIR_REQUIRED",
+            "verdict": "REPAIR_REQUIRED" if phase == "REPAIR" else "PASS",
             "reviewed_at": "2026-09-15T17:30:00Z",
         },
-        "external_review": None,
+        "external_review": external_review,
         "blocker": blocker,
         "created_at": "2026-09-15T16:00:00Z",
         "updated_at": "2026-09-15T17:30:00Z",
@@ -174,6 +181,34 @@ def test_no_progress_recheck_can_pass_without_candidate_change(monkeypatch) -> N
     assert current["blocker"] is None
     assert current["last_review"]["verdict"] == "PASS"
     assert state["queue"]["execution_lock"] is None
+
+
+def test_noop_repair_after_admitted_external_failure_parks_immediately() -> None:
+    external_fail = {
+        "candidate_sha": OLD_SHA,
+        "expected_base_branch": "main",
+        "expected_base_sha": BASE_SHA,
+        "request_key": f"G1--{OLD_SHA}--main--{BASE_SHA}",
+        "status": "FAIL",
+        "request_ref": "https://github.com/example/repo/pull/125#issuecomment-1",
+        "evidence_ref": "https://github.com/example/repo/pull/125#issuecomment-2",
+    }
+    current = task(review_policy="EXTERNAL", external_review=external_fail)
+    current["last_review"]["verdict"] = "PASS"
+    q = queue(current, run_id="run-external")
+
+    updated = mark_no_progress_recheck_v4(
+        q,
+        task_id=current["task_id"],
+        run_id="run-external",
+        now=NOW,
+    )
+    parked = updated["tasks"][0]
+    assert parked["status"] == "BLOCKED"
+    assert parked["phase"] is None
+    assert parked["blocker"] == NO_PROGRESS_BLOCKER
+    assert parked["external_review"]["status"] == "FAIL"
+    assert updated["execution_lock"] is None
 
 
 def test_blocked_no_progress_task_stays_parked_while_live_identity_is_exact(monkeypatch) -> None:
