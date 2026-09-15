@@ -43,6 +43,13 @@ from control_engine.v4_runtime_protocol import (
     validate_runtime_binding,
     yield_holder_v4,
 )
+from control_engine.v4_safety import (
+    NO_PROGRESS_BLOCKER,
+    block_no_progress_after_recheck_v4,
+    clear_no_progress_recheck_v4,
+    mark_no_progress_recheck_v4,
+    reconcile_no_progress_candidate_drift_v4,
+)
 
 
 PRIVATE_REPOSITORY = "market-predictions/control-plane"
@@ -548,6 +555,33 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         )
         return state, work_result
 
+    no_progress_unblocked = False
+    resumed_live_candidates: dict[str, dict[str, Any]] = {}
+    for blocked in list(queue["tasks"]):
+        candidate = blocked.get("candidate")
+        if (
+            blocked.get("status") != "BLOCKED"
+            or blocked.get("blocker") != NO_PROGRESS_BLOCKER
+            or not isinstance(candidate, Mapping)
+        ):
+            continue
+        try:
+            live_candidate = _target_pr_candidate(blocked["repository"], candidate["candidate_pr_number"])
+        except RuntimeProtocolError:
+            # A parked task must never poison unrelated runnable work. If its PR
+            # is currently unreadable/closed, it remains fail-closed BLOCKED.
+            continue
+        reconciled, changed = reconcile_no_progress_candidate_drift_v4(
+            queue,
+            task_id=blocked["task_id"],
+            live_candidate=live_candidate,
+            now=now,
+        )
+        if changed:
+            queue = reconciled
+            no_progress_unblocked = True
+            resumed_live_candidates[blocked["task_id"]] = live_candidate
+
     task_id = select_task_id_v4(
         queue,
         run_id=command["run_id"],
@@ -556,8 +590,14 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
     )
     if task_id is None:
         result = {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
-        if recovery_pending:
-            state = _write_queue_exact(state, queue, reason="expired-lock-recovery")
+        if recovery_pending or no_progress_unblocked:
+            if recovery_pending and no_progress_unblocked:
+                reason = "expired-lock-recovery-no-progress-unblock"
+            elif recovery_pending:
+                reason = "expired-lock-recovery"
+            else:
+                reason = "no-progress-unblock"
+            state = _write_queue_exact(state, queue, reason=reason)
         return state, result
 
     task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
@@ -566,7 +606,9 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
     # All target I/O required for a new public WORK projection occurs before
     # durable ownership. Semantic candidate-drift reconciliation is EVENT-side.
     if isinstance(candidate, Mapping):
-        observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
+        observed = resumed_live_candidates.get(task_id)
+        if observed is None:
+            observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
         if task.get("phase") == "REPAIR":
             live_candidate = observed
     else:
@@ -586,8 +628,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         run_id=command["run_id"],
         live_candidate=live_candidate,
     )
-    reason = "expired-lock-recovery-acquire" if recovery_pending else "acquire"
-    state = _write_queue_exact(state, acquired, reason=reason)
+    reason_parts: list[str] = []
+    if recovery_pending:
+        reason_parts.append("expired-lock-recovery")
+    if no_progress_unblocked:
+        reason_parts.append("no-progress-unblock")
+    reason_parts.append("acquire")
+    state = _write_queue_exact(state, acquired, reason="-".join(reason_parts))
     return state, work_result
 
 
@@ -669,17 +716,54 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
         next_queue = yield_holder_v4(queue, command, now=now)
     elif event == "CANDIDATE_READY":
         verified = _target_pr_candidate(task["repository"], command["candidate_pr_number"])
-        next_queue = candidate_ready_v4(queue, command, verified_candidate=verified, now=now)
+        expected = {
+            "candidate_sha": command["new_candidate_sha"],
+            "candidate_pr_number": command["candidate_pr_number"],
+            "candidate_head_branch": command["candidate_head_branch"],
+            "expected_base_branch": command["new_expected_base_branch"],
+            "expected_base_sha": command["new_expected_base_sha"],
+        }
+        current_candidate = task.get("candidate")
+        if (
+            task.get("phase") == "REPAIR"
+            and isinstance(current_candidate, Mapping)
+            and dict(current_candidate) == expected
+            and verified == expected
+        ):
+            next_queue = mark_no_progress_recheck_v4(
+                queue,
+                task_id=command["task_id"],
+                run_id=command["run_id"],
+                now=now,
+            )
+        else:
+            next_queue = candidate_ready_v4(queue, command, verified_candidate=verified, now=now)
     elif event == "INTERNAL_PASS":
+        review_queue = queue
+        if task.get("blocker") == NO_PROGRESS_BLOCKER:
+            review_queue = clear_no_progress_recheck_v4(
+                queue,
+                task_id=command["task_id"],
+                run_id=command["run_id"],
+                now=now,
+            )
         next_queue = internal_review_v4(
-            queue, command, verdict="PASS", now=now,
+            review_queue, command, verdict="PASS", now=now,
             control_runtime_enabled=True, integration_enabled=False,
         )
     elif event == "INTERNAL_REPAIR":
-        next_queue = internal_review_v4(
-            queue, command, verdict="REPAIR_REQUIRED", now=now,
-            control_runtime_enabled=True, integration_enabled=False,
-        )
+        if task.get("blocker") == NO_PROGRESS_BLOCKER:
+            next_queue = block_no_progress_after_recheck_v4(
+                queue,
+                task_id=command["task_id"],
+                run_id=command["run_id"],
+                now=now,
+            )
+        else:
+            next_queue = internal_review_v4(
+                queue, command, verdict="REPAIR_REQUIRED", now=now,
+                control_runtime_enabled=True, integration_enabled=False,
+            )
     elif event == "EXTERNAL_REQUESTED":
         _validate_public_ref_for_task(task, command["request_ref"])
         next_queue = external_requested_v4(queue, command, now=now)
