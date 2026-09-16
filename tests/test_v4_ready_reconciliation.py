@@ -29,7 +29,7 @@ REVIEW_COMMENT = 1234
 NOW = datetime(2026, 9, 16, 8, 0, tzinfo=timezone.utc)
 
 
-def bundle():
+def bundle(*, review_policy="INTERNAL"):
     mission = {
         "protocol_id": "MISSION_CONTRACT_V4",
         "mission_id": MISSION_ID,
@@ -44,7 +44,7 @@ def bundle():
                 "repository": REPO,
                 "acceptance": ["Queue truth matches the governed target."],
                 "integration_policy": "HOLD_AFTER_PASS",
-                "review_policy": "INTERNAL",
+                "review_policy": review_policy,
             }
         ],
         "authority_boundaries": ["No production authority."],
@@ -196,7 +196,9 @@ def test_parser_accepts_only_exact_new_operation_fields():
 
 def test_rebind_ready_candidate_clears_all_stale_review_evidence_and_returns_to_review():
     q = queue(review_policy="EXTERNAL")
-    result = rebind_ready_candidate_v4(q, bundle(), rebind_command(), now=NOW)
+    result = rebind_ready_candidate_v4(
+        q, bundle(review_policy="EXTERNAL"), rebind_command(), now=NOW
+    )
     task = result["tasks"][0]
     assert task["status"] == "ACTIVE"
     assert task["phase"] == "REVIEW"
@@ -236,7 +238,11 @@ def test_integrated_reconciliation_rebinds_exact_public_pass_and_records_done():
 def test_integrated_reconciliation_refuses_external_policy_or_mismatched_review():
     with pytest.raises(OwnerAdminError, match="INTERNAL review only"):
         reconcile_integrated_v4(
-            queue(review_policy="EXTERNAL"), bundle(), reconcile_command(), review_evidence(), now=NOW
+            queue(review_policy="EXTERNAL"),
+            bundle(review_policy="EXTERNAL"),
+            reconcile_command(),
+            review_evidence(),
+            now=NOW,
         )
     bad = dict(review_evidence(), candidate_sha=OLD_SHA)
     with pytest.raises(OwnerAdminError, match="review evidence invalid"):
