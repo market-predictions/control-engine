@@ -2,12 +2,17 @@ from __future__ import annotations
 
 """Bounded owner-approved Control V4 runtime administration.
 
-This is an outside-Runner governance path for two concrete actions only:
+This is an outside-Runner governance path for four concrete actions only:
 
 - finalize one exact READY/PASS task after its exact target PR was owner-approved
   and is already merged into the target base branch;
 - activate one exact existing public candidate for one currently eligible,
-  unmaterialized OPEN Mission gap selected by an opaque authority-bound key.
+  unmaterialized OPEN Mission gap selected by an opaque authority-bound key;
+- rebind one stale READY task to the current exact open/unmerged PR identity,
+  clearing stale review evidence and returning it to normal REVIEW;
+- reconcile one stale READY task whose same PR is already integrated, using an
+  exact public INTERNAL PASS comment as the review evidence for the integrated
+  candidate before recording DONE.
 
 A principal may authorize a project-level replenishment cycle once. That approval
 is frozen as one owner-authored audit comment containing only the exact opaque
@@ -62,7 +67,12 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 OPAQUE_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
-OPERATIONS = {"FINALIZE_INTEGRATED", "ACTIVATE_ROOT_CANDIDATE"}
+OPERATIONS = {
+    "FINALIZE_INTEGRATED",
+    "ACTIVATE_ROOT_CANDIDATE",
+    "REBIND_READY_CANDIDATE",
+    "RECONCILE_INTEGRATED",
+}
 TARGET_KEYS = {
     "repository",
     "candidate_pr_number",
@@ -72,6 +82,8 @@ TARGET_KEYS = {
     "expected_base_sha",
 }
 FINALIZE_COMMAND_KEYS = {"operation", *TARGET_KEYS}
+REBIND_COMMAND_KEYS = {"operation", *TARGET_KEYS}
+RECONCILE_COMMAND_KEYS = {"operation", "internal_review_comment_id", *TARGET_KEYS}
 ACTIVATE_COMMAND_KEYS = {
     "operation",
     "approval_comment_id",
@@ -130,7 +142,14 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
     operation = payload.get("operation")
     if operation not in OPERATIONS:
         raise OwnerAdminError("owner-admin operation unsupported")
-    expected_keys = ACTIVATE_COMMAND_KEYS if operation == "ACTIVATE_ROOT_CANDIDATE" else FINALIZE_COMMAND_KEYS
+    if operation == "ACTIVATE_ROOT_CANDIDATE":
+        expected_keys = ACTIVATE_COMMAND_KEYS
+    elif operation == "RECONCILE_INTEGRATED":
+        expected_keys = RECONCILE_COMMAND_KEYS
+    elif operation == "REBIND_READY_CANDIDATE":
+        expected_keys = REBIND_COMMAND_KEYS
+    else:
+        expected_keys = FINALIZE_COMMAND_KEYS
     if set(payload) != expected_keys:
         raise OwnerAdminError("owner-admin command fields invalid")
     payload["repository"] = _repository(payload["repository"])
@@ -143,6 +162,10 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
         payload["approval_comment_id"] = _positive_int(payload["approval_comment_id"], label="approval comment id")
         payload["approval_body_sha256"] = _opaque_key(payload["approval_body_sha256"], label="approval body SHA-256")
         payload["activation_key"] = _opaque_key(payload["activation_key"], label="activation key")
+    if operation == "RECONCILE_INTEGRATED":
+        payload["internal_review_comment_id"] = _positive_int(
+            payload["internal_review_comment_id"], label="internal review comment id"
+        )
     return payload
 
 
@@ -231,18 +254,20 @@ def validate_public_target(command: Mapping[str, Any], target: Mapping[str, Any]
         raise OwnerAdminError("target candidate base branch drifted")
 
     operation = command["operation"]
-    if operation == "ACTIVATE_ROOT_CANDIDATE":
+    if operation in {"ACTIVATE_ROOT_CANDIDATE", "REBIND_READY_CANDIDATE"}:
         if target.get("base_sha") != exact["expected_base_sha"]:
             raise OwnerAdminError("target candidate base drifted")
         if target.get("state") != "open" or target.get("merged") is not False:
-            raise OwnerAdminError("activation candidate is not open/unmerged")
+            raise OwnerAdminError("candidate is not open/unmerged")
         if target.get("mergeable") is not True:
-            raise OwnerAdminError("activation candidate is not currently mergeable")
+            raise OwnerAdminError("candidate is not currently mergeable")
         if target.get("current_base_sha") != exact["expected_base_sha"]:
-            raise OwnerAdminError("activation base branch moved")
+            raise OwnerAdminError("candidate base branch moved")
         return
 
-    if operation == "FINALIZE_INTEGRATED":
+    if operation in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"}:
+        if operation == "RECONCILE_INTEGRATED" and target.get("base_sha") != exact["expected_base_sha"]:
+            raise OwnerAdminError("reconciliation target base drifted")
         if target.get("state") != "closed" or target.get("merged") is not True:
             raise OwnerAdminError("finalization target is not merged")
         if target.get("candidate_in_current_base") is not True:
@@ -265,6 +290,13 @@ def _task_public_pr_matches(task: Mapping[str, Any], command: Mapping[str, Any])
         and isinstance(candidate, Mapping)
         and candidate.get("candidate_pr_number") == command["candidate_pr_number"]
     )
+
+
+def _task_by_public_pr(queue: Mapping[str, Any], command: Mapping[str, Any]) -> Mapping[str, Any]:
+    matches = [task for task in queue["tasks"] if _task_public_pr_matches(task, command)]
+    if len(matches) != 1:
+        raise OwnerAdminError("task does not resolve exactly by repository/PR")
+    return matches[0]
 
 
 def finalize_integrated_v4(
@@ -297,6 +329,80 @@ def finalize_integrated_v4(
     return result
 
 
+def rebind_ready_candidate_v4(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    command: Mapping[str, Any],
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    validate_queue_v4(queue)
+    assert_v4_queue_bound_to_authority(queue, bundle)
+    if queue.get("execution_lock") is not None:
+        raise OwnerAdminError("owner-admin mutation requires no execution lock")
+    source = _task_by_public_pr(queue, command)
+    if source.get("status") != "READY" or source.get("phase") is not None:
+        raise OwnerAdminError("rebind requires READY task")
+    exact = candidate_identity(command)
+    if source.get("candidate") == exact:
+        raise OwnerAdminError("rebind candidate identity did not change")
+
+    result = deepcopy(queue)
+    task = next(item for item in result["tasks"] if item["task_id"] == source["task_id"])
+    task["candidate"] = exact
+    task["last_review"] = None
+    task["external_review"] = None
+    task["status"] = "ACTIVE"
+    task["phase"] = "REVIEW"
+    task["blocker"] = None
+    task["updated_at"] = _ts(now)
+    validate_queue_v4(result)
+    assert_v4_queue_bound_to_authority(result, bundle)
+    return result
+
+
+def reconcile_integrated_v4(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    command: Mapping[str, Any],
+    internal_review: Mapping[str, Any],
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    validate_queue_v4(queue)
+    assert_v4_queue_bound_to_authority(queue, bundle)
+    if queue.get("execution_lock") is not None:
+        raise OwnerAdminError("owner-admin mutation requires no execution lock")
+    source = _task_by_public_pr(queue, command)
+    if source.get("status") != "READY" or source.get("phase") is not None:
+        raise OwnerAdminError("reconciliation requires READY task")
+    if source.get("review_policy") != "INTERNAL":
+        raise OwnerAdminError("integrated reconciliation supports INTERNAL review only")
+    exact = candidate_identity(command)
+    expected_review = {
+        "candidate_sha": exact["candidate_sha"],
+        "expected_base_branch": exact["expected_base_branch"],
+        "expected_base_sha": exact["expected_base_sha"],
+        "verdict": "PASS",
+        "reviewed_at": internal_review.get("reviewed_at"),
+    }
+    if dict(internal_review) != expected_review:
+        raise OwnerAdminError("integrated reconciliation review evidence invalid")
+
+    result = deepcopy(queue)
+    task = next(item for item in result["tasks"] if item["task_id"] == source["task_id"])
+    task["candidate"] = exact
+    task["last_review"] = dict(expected_review)
+    task["external_review"] = None
+    task["status"] = "DONE"
+    task["phase"] = None
+    task["blocker"] = None
+    task["updated_at"] = _ts(now)
+    validate_queue_v4(result)
+    assert_v4_queue_bound_to_authority(result, bundle)
+    return result
+
+
 def _dependency_is_satisfied(
     queue: Mapping[str, Any],
     mission: Mapping[str, Any],
@@ -305,10 +411,7 @@ def _dependency_is_satisfied(
 ) -> bool:
     dependency = gap_by_id[dependency_id]
     if dependency.get("gap_state") == "RETIRED":
-        return any(
-            item.get("target_gap_id") == dependency_id
-            for item in mission.get("done_carry_forward", [])
-        )
+        return any(item.get("target_gap_id") == dependency_id for item in mission.get("done_carry_forward", []))
     matches = [
         task for task in queue["tasks"]
         if task.get("mission_id") == mission.get("mission_id")
@@ -330,10 +433,7 @@ def eligible_unmaterialized_gaps_v4(
         raise OwnerAdminError("repository does not resolve to exactly one current Mission")
     mission = missions[0]
     validate_carry_forward_evidence(mission, queue)
-    existing = {
-        (task["mission_id"], task["mission_revision"], task["gap_id"])
-        for task in queue["tasks"]
-    }
+    existing = {(task["mission_id"], task["mission_revision"], task["gap_id"]) for task in queue["tasks"]}
     gap_by_id = {gap["gap_id"]: gap for gap in mission["gaps"]}
     eligible: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for gap in mission["gaps"]:
@@ -463,14 +563,22 @@ def plan_owner_admin_transition(
     *,
     now: datetime,
     approval: Mapping[str, Any] | None = None,
+    internal_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_public_target(command, target)
-    if command["operation"] == "FINALIZE_INTEGRATED":
+    operation = command["operation"]
+    if operation == "FINALIZE_INTEGRATED":
         return finalize_integrated_v4(queue, bundle, command, now=now)
-    if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
+    if operation == "ACTIVATE_ROOT_CANDIDATE":
         if approval is None:
             raise OwnerAdminError("activation requires exact replenishment approval evidence")
         return activate_root_candidate_v4(queue, bundle, command, approval, now=now)
+    if operation == "REBIND_READY_CANDIDATE":
+        return rebind_ready_candidate_v4(queue, bundle, command, now=now)
+    if operation == "RECONCILE_INTEGRATED":
+        if internal_review is None:
+            raise OwnerAdminError("integrated reconciliation requires exact internal review evidence")
+        return reconcile_integrated_v4(queue, bundle, command, internal_review, now=now)
     raise OwnerAdminError("owner-admin operation unsupported")
 
 
@@ -533,7 +641,9 @@ def _public_get(path: str) -> Any:
 
 def _branch_head(repository: str, branch: str, *, private: bool) -> str:
     encoded = urllib.parse.quote(branch, safe="")
-    value = _private_get(f"repos/{repository}/branches/{encoded}") if private else _public_get(f"repos/{repository}/branches/{encoded}")
+    value = _private_get(f"repos/{repository}/branches/{encoded}") if private else _public_get(
+        f"repos/{repository}/branches/{encoded}"
+    )
     sha = ((value.get("commit") or {}).get("sha")) if isinstance(value, Mapping) else None
     return _sha(sha)
 
@@ -576,15 +686,23 @@ def _load_bundle(main_sha: str) -> V4AuthorityBundle:
         raise OwnerAdminError("private authority registry unavailable")
 
     mission_paths = sorted(
-        item["path"] for item in missions_listing
-        if isinstance(item, Mapping) and item.get("type") == "file" and isinstance(item.get("path"), str)
-        and item["path"].startswith(f"{MISSION_DIR}/") and item["path"].endswith(".mission.json")
+        item["path"]
+        for item in missions_listing
+        if isinstance(item, Mapping)
+        and item.get("type") == "file"
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith(f"{MISSION_DIR}/")
+        and item["path"].endswith(".mission.json")
         and "/" not in item["path"][len(MISSION_DIR) + 1:]
     )
     authority_paths = sorted(
-        item["path"] for item in authorities_listing
-        if isinstance(item, Mapping) and item.get("type") == "file" and isinstance(item.get("path"), str)
-        and item["path"].startswith(f"{AUTHORITY_DIR}/") and item["path"].endswith(".json")
+        item["path"]
+        for item in authorities_listing
+        if isinstance(item, Mapping)
+        and item.get("type") == "file"
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith(f"{AUTHORITY_DIR}/")
+        and item["path"].endswith(".json")
         and "/" not in item["path"][len(AUTHORITY_DIR) + 1:]
     )
     missions: list[dict[str, Any]] = []
@@ -612,7 +730,13 @@ def _load_bundle(main_sha: str) -> V4AuthorityBundle:
 def _load_private_state() -> dict[str, Any]:
     repository = _private_get(f"repos/{PRIVATE_REPOSITORY}")
     node_id = repository.get("node_id") if isinstance(repository, Mapping) else None
-    if not isinstance(repository, Mapping) or repository.get("full_name") != PRIVATE_REPOSITORY or repository.get("private") is not True or not isinstance(node_id, str) or not node_id:
+    if (
+        not isinstance(repository, Mapping)
+        or repository.get("full_name") != PRIVATE_REPOSITORY
+        or repository.get("private") is not True
+        or not isinstance(node_id, str)
+        or not node_id
+    ):
         raise OwnerAdminError("private repository identity invalid")
     main_sha = _branch_head(PRIVATE_REPOSITORY, "main", private=True)
     runtime_sha = _branch_head(PRIVATE_REPOSITORY, RUNTIME_BRANCH, private=True)
@@ -653,6 +777,44 @@ def _public_replenishment_approval(comment_id: int, expected_body_sha256: str) -
     return parse_replenishment_approval(body)
 
 
+def _public_internal_review(command: Mapping[str, Any], queue: Mapping[str, Any]) -> dict[str, Any]:
+    source = _task_by_public_pr(queue, command)
+    if source.get("review_policy") != "INTERNAL":
+        raise OwnerAdminError("public internal review evidence does not match task policy")
+    comment_id = _positive_int(command.get("internal_review_comment_id"), label="internal review comment id")
+    repository = command["repository"]
+    comment = _public_get(f"repos/{repository}/issues/comments/{comment_id}")
+    if not isinstance(comment, Mapping):
+        raise OwnerAdminError("internal review comment unavailable")
+    if comment.get("issue_url") != f"{API}/repos/{repository}/issues/{command['candidate_pr_number']}":
+        raise OwnerAdminError("internal review comment is not bound to target PR")
+    user = comment.get("user") or {}
+    if user.get("login") != "market-predictions" or comment.get("author_association") != "OWNER":
+        raise OwnerAdminError("internal review comment is not owner-authored")
+    created_at = comment.get("created_at")
+    updated_at = comment.get("updated_at")
+    if not isinstance(created_at, str) or not created_at or updated_at != created_at:
+        raise OwnerAdminError("internal review comment was edited")
+    body = comment.get("body")
+    if not isinstance(body, str) or not body.startswith("CONTROL_V4_INTERNAL_REVIEW PASS"):
+        raise OwnerAdminError("internal review comment is not a canonical PASS")
+    required_tokens = (
+        command["candidate_sha"],
+        command["expected_base_sha"],
+        f"{source['mission_id']}@{source['mission_revision']}",
+        source["gap_id"],
+    )
+    if any(token not in body for token in required_tokens):
+        raise OwnerAdminError("internal review comment identity does not match target task")
+    return {
+        "candidate_sha": command["candidate_sha"],
+        "expected_base_branch": command["expected_base_branch"],
+        "expected_base_sha": command["expected_base_sha"],
+        "verdict": "PASS",
+        "reviewed_at": created_at,
+    }
+
+
 def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     repository = command["repository"]
     repo = _public_get(f"repos/{repository}")
@@ -666,10 +828,8 @@ def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     current_base_sha = _branch_head(repository, command["expected_base_branch"], private=False)
     merged = pr.get("merged_at") is not None
     candidate_in_current_base = False
-    if command["operation"] == "FINALIZE_INTEGRATED":
-        comparison = _public_get(
-            f"repos/{repository}/compare/{command['candidate_sha']}...{current_base_sha}"
-        )
+    if command["operation"] in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"}:
+        comparison = _public_get(f"repos/{repository}/compare/{command['candidate_sha']}...{current_base_sha}")
         merge_base = ((comparison.get("merge_base_commit") or {}).get("sha")) if isinstance(comparison, Mapping) else None
         candidate_in_current_base = (
             merge_base == command["candidate_sha"]
@@ -727,19 +887,15 @@ def _write_queue_exact(
     )
     new_commit = _sha(commit.get("sha") if isinstance(commit, Mapping) else None)
 
-    # Public target facts cannot participate in the private-repository CAS. Re-read
-    # them after commit preparation and validate them as close as possible to the
-    # atomic private authority/runtime ref update.
     validate_public_target(command, _public_target(command))
 
-    # Activation authority is bound to the exact approval body digest copied into
-    # the owner-admin command. Re-read the canonical owner comment immediately
-    # before CAS so an edit/deletion cannot silently replace the approved set.
     if operation == "ACTIVATE_ROOT_CANDIDATE":
-        _public_replenishment_approval(
-            command["approval_comment_id"],
-            command["approval_body_sha256"],
-        )
+        _public_replenishment_approval(command["approval_comment_id"], command["approval_body_sha256"])
+    elif operation == "RECONCILE_INTEGRATED":
+        fresh_review = _public_internal_review(command, state["queue"])
+        reconciled = _task_by_public_pr(queue, command)
+        if reconciled.get("candidate") != candidate_identity(command) or reconciled.get("last_review") != fresh_review:
+            raise StaleWriteError("integrated reconciliation evidence changed before CAS")
 
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
@@ -753,14 +909,33 @@ def _write_queue_exact(
                 "repositoryId": state["repository_node_id"],
                 "clientMutationId": f"control-v4-owner-admin-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{operation.lower()}",
                 "refUpdates": [
-                    {"name": "refs/heads/main", "beforeOid": state["main_sha"], "afterOid": state["main_sha"], "force": False},
-                    {"name": f"refs/heads/{RUNTIME_BRANCH}", "beforeOid": state["runtime_sha"], "afterOid": new_commit, "force": False},
+                    {
+                        "name": "refs/heads/main",
+                        "beforeOid": state["main_sha"],
+                        "afterOid": state["main_sha"],
+                        "force": False,
+                    },
+                    {
+                        "name": f"refs/heads/{RUNTIME_BRANCH}",
+                        "beforeOid": state["runtime_sha"],
+                        "afterOid": new_commit,
+                        "force": False,
+                    },
                 ],
             }
         },
     }
-    result = _request_json(GRAPHQL, headers={**_private_headers(), "Content-Type": "application/json"}, method="POST", payload=payload)
-    if not isinstance(result, Mapping) or result.get("errors") or not isinstance((result.get("data") or {}).get("updateRefs"), Mapping):
+    result = _request_json(
+        GRAPHQL,
+        headers={**_private_headers(), "Content-Type": "application/json"},
+        method="POST",
+        payload=payload,
+    )
+    if (
+        not isinstance(result, Mapping)
+        or result.get("errors")
+        or not isinstance((result.get("data") or {}).get("updateRefs"), Mapping)
+    ):
         raise StaleWriteError("owner-admin atomic updateRefs rejected")
     return new_commit
 
@@ -771,11 +946,13 @@ def main() -> int:
         state = _load_private_state()
         target = _public_target(command)
         approval = None
+        internal_review = None
         if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
             approval = _public_replenishment_approval(
-                command["approval_comment_id"],
-                command["approval_body_sha256"],
+                command["approval_comment_id"], command["approval_body_sha256"]
             )
+        elif command["operation"] == "RECONCILE_INTEGRATED":
+            internal_review = _public_internal_review(command, state["queue"])
         next_queue = plan_owner_admin_transition(
             state["queue"],
             state["bundle"],
@@ -783,6 +960,7 @@ def main() -> int:
             target,
             now=datetime.now(timezone.utc),
             approval=approval,
+            internal_review=internal_review,
         )
         runtime_commit = _write_queue_exact(state, next_queue, command)
         print(f"CONTROL_V4_OWNER_ADMIN={command['operation']}:PASS")
