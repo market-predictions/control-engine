@@ -57,6 +57,8 @@ REPLENISH_APPROVAL_PREFIX = "CONTROL_V4_REPLENISH_APPROVAL "
 PRIVATE_REPOSITORY = "market-predictions/control-plane"
 PUBLIC_REPOSITORY = "market-predictions/control-engine"
 PUBLIC_AUDIT_ISSUE = 106
+PRINCIPAL_LOGIN = "market-predictions"
+PRINCIPAL_USER_ID = 267922695
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 MISSION_DIR = "control/missions"
@@ -789,8 +791,8 @@ def _public_internal_review(command: Mapping[str, Any], queue: Mapping[str, Any]
     if comment.get("issue_url") != f"{API}/repos/{repository}/issues/{command['candidate_pr_number']}":
         raise OwnerAdminError("internal review comment is not bound to target PR")
     user = comment.get("user") or {}
-    if user.get("login") != "market-predictions" or comment.get("author_association") != "OWNER":
-        raise OwnerAdminError("internal review comment is not owner-authored")
+    if user.get("login") != PRINCIPAL_LOGIN or user.get("id") != PRINCIPAL_USER_ID:
+        raise OwnerAdminError("internal review comment is not principal-authored")
     created_at = comment.get("created_at")
     updated_at = comment.get("updated_at")
     if not isinstance(created_at, str) or not created_at or updated_at != created_at:
