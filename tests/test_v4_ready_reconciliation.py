@@ -266,7 +266,7 @@ def test_public_target_rules_fail_closed_for_ready_rebind_and_integrated_reconci
         validate_public_target(reconcile_command(), not_contained)
 
 
-def test_public_internal_review_comment_is_exact_pr_task_identity_and_unedited(monkeypatch):
+def test_public_internal_review_comment_uses_stable_principal_identity_and_is_unedited(monkeypatch):
     command = reconcile_command()
     body = (
         f"CONTROL_V4_INTERNAL_REVIEW PASS\n\n"
@@ -275,8 +275,8 @@ def test_public_internal_review_comment_is_exact_pr_task_identity_and_unedited(m
     )
     comment = {
         "issue_url": f"{owner_admin.API}/repos/{REPO}/issues/{PR}",
-        "user": {"login": "market-predictions"},
-        "author_association": "OWNER",
+        "user": {"login": owner_admin.PRINCIPAL_LOGIN, "id": owner_admin.PRINCIPAL_USER_ID},
+        "author_association": "COLLABORATOR",
         "created_at": "2026-09-15T20:30:00Z",
         "updated_at": "2026-09-15T20:30:00Z",
         "body": body,
@@ -287,6 +287,11 @@ def test_public_internal_review_comment_is_exact_pr_task_identity_and_unedited(m
     edited = dict(comment, updated_at="2026-09-15T20:31:00Z")
     monkeypatch.setattr(owner_admin, "_public_get", lambda path: edited)
     with pytest.raises(OwnerAdminError, match="was edited"):
+        owner_admin._public_internal_review(command, queue())
+
+    wrong_principal = dict(comment, user={"login": owner_admin.PRINCIPAL_LOGIN, "id": 1})
+    monkeypatch.setattr(owner_admin, "_public_get", lambda path: wrong_principal)
+    with pytest.raises(OwnerAdminError, match="not principal-authored"):
         owner_admin._public_internal_review(command, queue())
 
     wrong_task = dict(comment, body=body.replace(GAP_ID, "GAP-OTHER"))
