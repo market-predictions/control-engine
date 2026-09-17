@@ -5,6 +5,7 @@ import pytest
 from control_engine.v4_authority_io import V4AuthorityBundle
 from control_engine.v4_contracts import V4ValidationError
 from scripts.control_v4_owner_admin import (
+    OwnerAdminError,
     activate_root_candidate_v4,
     activation_key_v4,
     replenishment_approval_payload_v4,
@@ -151,6 +152,30 @@ def _command(bundle: V4AuthorityBundle) -> dict:
     }
 
 
+def _make_done(task: dict) -> dict:
+    candidate = task["candidate"]
+    task["status"] = "DONE"
+    task["phase"] = None
+    task["blocker"] = None
+    task["last_review"] = {
+        "candidate_sha": candidate["candidate_sha"],
+        "expected_base_branch": candidate["expected_base_branch"],
+        "expected_base_sha": candidate["expected_base_sha"],
+        "verdict": "PASS",
+        "reviewed_at": "2026-09-15T20:00:00Z",
+    }
+    task["external_review"] = {
+        "candidate_sha": candidate["candidate_sha"],
+        "expected_base_branch": candidate["expected_base_branch"],
+        "expected_base_sha": candidate["expected_base_sha"],
+        "request_key": "OLD-GAP--external-review",
+        "status": "PASS",
+        "request_ref": "https://github.com/example/project/pull/1#issuecomment-1",
+        "evidence_ref": "https://github.com/example/project/pull/1#issuecomment-2",
+    }
+    return task
+
+
 def test_replenishment_retires_only_directly_superseded_nonterminal_project_task():
     bundle = _bundle()
     queue = _queue(_stale_task())
@@ -173,4 +198,48 @@ def test_replenishment_does_not_hide_unrelated_stale_authority_drift():
     queue = _queue(unrelated)
 
     with pytest.raises(V4ValidationError, match="revision differs"):
+        replenishment_approval_payload_v4(queue, bundle, TARGET_REPO)
+
+
+def test_replenishment_requires_explicit_current_mission_retirement_before_discarding_old_work():
+    bundle = _bundle()
+    bundle.missions[0]["gaps"][0]["gap_state"] = "OPEN"
+
+    with pytest.raises(OwnerAdminError, match="not explicitly RETIRED"):
+        replenishment_approval_payload_v4(_queue(_stale_task()), bundle, TARGET_REPO)
+
+
+def test_replenishment_does_not_discard_older_than_direct_superseded_revision():
+    bundle = _bundle()
+    stale = _stale_task()
+    stale["mission_revision"] = "2026-09-14-r4"
+    stale["task_id"] = f"MISSION--{TARGET_MISSION}--2026-09-14-r4--OLD-GAP"
+
+    with pytest.raises(V4ValidationError, match="revision differs"):
+        replenishment_approval_payload_v4(_queue(stale), bundle, TARGET_REPO)
+
+
+def test_replenishment_never_discards_historical_done_evidence():
+    bundle = _bundle()
+    done = _make_done(_stale_task())
+
+    with pytest.raises(V4ValidationError, match="revision differs"):
+        replenishment_approval_payload_v4(_queue(done), bundle, TARGET_REPO)
+
+
+def test_replenishment_reconciliation_requires_lock_free_queue():
+    bundle = _bundle()
+    active = _stale_task()
+    active["status"] = "ACTIVE"
+    active["phase"] = "REVIEW"
+    active["blocker"] = None
+    queue = _queue(active)
+    queue["execution_lock"] = {
+        "run_id": "run-1",
+        "task_id": active["task_id"],
+        "started_at": "2026-09-17T18:00:00Z",
+        "expires_at": "2026-09-17T19:30:00Z",
+    }
+
+    with pytest.raises(OwnerAdminError, match="requires no execution lock"):
         replenishment_approval_payload_v4(queue, bundle, TARGET_REPO)
