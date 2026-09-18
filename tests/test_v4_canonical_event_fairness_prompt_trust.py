@@ -15,13 +15,15 @@ def _trusted_prompt() -> str:
             *validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS,
             *validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS,
             *validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS,
+            *validator.OBJECTIVE_AUTO_ACCEPT_PROMPT_REQUIRED_MARKERS,
+            *validator.REVERSIBLE_FAIRNESS_PROMPT_REQUIRED_MARKERS,
             *validator.COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS,
         )
     )
 
 
 def test_stateless_runner_prompt_has_exact_public_trust_anchor() -> None:
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "6628a9e4c47234bd1e58611225c6fa3f236051f4"
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2e31c866e7484c5ff6346c50603bb76a2029c331"
     validator._validate_prompt_trust(
         _trusted_prompt(),
         validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA,
@@ -43,10 +45,12 @@ def test_all_predecessor_runner_prompt_hashes_are_rejected(prompt_oid: str) -> N
         (validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required state-first transport markers"),
         (validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required pre-acquisition command-binding/correlation markers"),
         (validator.LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required live-TICK responsibility markers"),
-        (validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks required post-yield continuation markers"),
+        (validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks bounded fairness/mandatory-continuation markers"),
         (validator.TARGET_EFFECT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks target-effect freshness markers"),
         (validator.CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks canonical EVENT/fairness markers"),
         (validator.HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks holder-closeout markers"),
+        (validator.OBJECTIVE_AUTO_ACCEPT_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks objective INTERNAL auto-accept markers"),
+        (validator.REVERSIBLE_FAIRNESS_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks reversible fairness rollout markers"),
         (validator.COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS, "current Runner prompt lacks mandatory complexity-brake markers"),
     ],
 )
