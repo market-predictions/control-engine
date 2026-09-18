@@ -26,7 +26,7 @@ EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
 TICK_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_TICK\n"
 EVENT_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_EVENT\n"
 PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
-CANONICAL_RUNNER_PROMPT_BLOB_SHA = "6628a9e4c47234bd1e58611225c6fa3f236051f4"
+CANONICAL_RUNNER_PROMPT_BLOB_SHA = "365003ddd393cab4b6f17348950e7cb2fdf864fb"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -438,23 +438,27 @@ def select_task_id_v4(
     if queue.get("execution_lock") is not None:
         raise RuntimeProtocolError("selection requires no execution lock")
     yielded = set(yielded_task_tokens)
+    ordered = sorted(
+        queue["tasks"],
+        key=lambda task: (_parse_ts(task["updated_at"]), task["task_id"]),
+    )
 
     def available(task: Mapping[str, Any]) -> bool:
         return task_token(task, run_id) not in yielded
 
-    for task in queue["tasks"]:
+    for task in ordered:
         if available(task) and task["status"] == "ACTIVE" and not _retryable_external_wait(task):
             if task.get("phase") == "INTEGRATE" and integration_enabled is not True:
                 continue
             return task["task_id"]
     if integration_enabled is True:
-        for task in queue["tasks"]:
+        for task in ordered:
             if available(task) and task["status"] == "READY" and task["integration_policy"] == "AUTO_AFTER_PASS":
                 return task["task_id"]
-    for task in queue["tasks"]:
+    for task in ordered:
         if available(task) and task["status"] == "QUEUED":
             return task["task_id"]
-    for task in queue["tasks"]:
+    for task in ordered:
         if available(task) and _retryable_external_wait(task):
             return task["task_id"]
     return None
@@ -718,8 +722,10 @@ def external_pass_v4(
 
 
 def yield_holder_v4(queue: Mapping[str, Any], command: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
-    assert_event_identity(queue, command, now=now)
+    task = assert_event_identity(queue, command, now=now)
     q = deepcopy(queue)
+    changed = next(item for item in q["tasks"] if item["task_id"] == task["task_id"])
+    changed["updated_at"] = _ts(now)
     q["execution_lock"] = None
     validate_queue_v4(q)
     return q
