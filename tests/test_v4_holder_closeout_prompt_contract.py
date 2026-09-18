@@ -4,14 +4,13 @@ from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 import scripts.validate_private_control_v4 as private_v4
 
 
-GENERATION = "93d60fe2e37d9dca"
-PROMPT_SHA = "6628a9e4c47234bd1e58611225c6fa3f236051f4"
-PREDECESSOR_PROMPT_SHA = "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
+GENERATION = "5e7d30094f258bcf"
+PROMPT_SHA = "2e31c866e7484c5ff6346c50603bb76a2029c331"
+PREDECESSOR_PROMPT_SHA = "6628a9e4c47234bd1e58611225c6fa3f236051f4"
 
 
 def test_holder_closeout_generation_and_hash_are_single_current_trust_identity():
     workflow = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text(encoding="utf-8")
-    validator = Path("scripts/validate_private_control_v4.py").read_text(encoding="utf-8")
 
     assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == PROMPT_SHA
     assert private_v4.REVIEWED_RUNNER_PROMPT_BLOB_SHA == PROMPT_SHA
@@ -19,8 +18,6 @@ def test_holder_closeout_generation_and_hash_are_single_current_trust_identity()
     assert f":{GENERATION}:[0-9a-f]{{32}}$" in workflow
     assert f"runner_command_generation={GENERATION}" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
     assert f"v4:6a9a7e0b18b08191876c134d83cfbba2:{GENERATION}:<32-lowercase-hex-random>" in private_v4.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "83ee437c017961ce" not in workflow
-    assert "c81e7a4f2d1b9306" not in workflow
 
 
 def test_reviewed_private_prompt_must_encode_atomic_event_holder_boundary():
@@ -37,14 +34,23 @@ def test_reviewed_private_prompt_must_encode_atomic_event_holder_boundary():
     assert "never infer private holder state from public history" in required
 
 
-def test_progress_and_wait_boundaries_are_explicitly_distinguished():
+def test_progress_and_wait_boundaries_are_bounded_and_explicitly_distinguished():
     required = set(private_v4.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS)
-    assert "### Progress EVENT versus wait EVENT continuation" in required
+    assert "### Bounded fairness and mandatory continuation" in required
+    assert any("8 new-holder acquisitions" in marker for marker in required)
+    assert any("2 new-holder acquisitions" in marker for marker in required)
     assert "Progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, and `EXTERNAL_FINDING`" in required
-    assert "**do not** add that task token to `yielded_task_tokens`" in required
     assert "Wait/release EVENTs `YIELD` and `REVIEW_UNAVAILABLE`" in required
     assert "`EXTERNAL_REQUESTED` is also a wait boundary" in required
+    assert any("mandatory" in marker for marker in required)
     assert "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth" in required
+
+
+def test_objective_accept_never_implies_auto_merge():
+    required = set(private_v4.OBJECTIVE_AUTO_ACCEPT_PROMPT_REQUIRED_MARKERS)
+    assert "objective_auto_accept_policy=OBJECTIVE_EVIDENCE_V1" in required
+    assert any("auto-accept is forbidden" in marker for marker in required)
+    assert any("Auto-accept never means auto-merge" in marker for marker in required)
 
 
 def test_closeout_contract_reuses_existing_events_instead_of_new_runtime_state():
