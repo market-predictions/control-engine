@@ -23,6 +23,12 @@ private CAS. Each activation must remain a member of the frozen key set and stil
 be currently eligible. A gap that becomes eligible only later therefore cannot
 borrow authority from the older approval.
 
+When the exact current Mission directly supersedes the queued project revision,
+ACTIVATE_ROOT_CANDIDATE may reconcile only lock-free, non-DONE tasks that belong
+to that exact superseded revision and whose gaps are explicitly RETIRED by the
+current Mission. Historical DONE evidence and unrelated authority drift remain
+fail-closed under the unchanged global authority validator.
+
 It never grants standing integration authority, never changes private main, and
 never creates a second queue/state plane. Every queue mutation uses the same
 private-main no-op + runtime-ref atomic GraphQL ``updateRefs`` CAS fence as the
@@ -405,6 +411,50 @@ def reconcile_integrated_v4(
     return result
 
 
+def _replenishment_queue_v4(
+    queue: Mapping[str, Any],
+    bundle: V4AuthorityBundle,
+    repository: str,
+) -> dict[str, Any]:
+    validate_queue_v4(queue)
+    if queue.get("execution_lock") is not None:
+        raise OwnerAdminError("replenishment reconciliation requires no execution lock")
+
+    missions = [mission for mission in bundle.missions if mission.get("repository") == repository]
+    if len(missions) != 1:
+        raise OwnerAdminError("repository does not resolve to exactly one current Mission")
+    mission = missions[0]
+    supersedes_revision = mission.get("supersedes_revision")
+    if not isinstance(supersedes_revision, str) or not supersedes_revision:
+        assert_v4_queue_bound_to_authority(queue, bundle)
+        return deepcopy(queue)
+
+    retired_gap_ids = {
+        gap["gap_id"]
+        for gap in mission["gaps"]
+        if gap.get("gap_state") == "RETIRED"
+    }
+    removable_ids: set[str] = set()
+    for task in queue["tasks"]:
+        if (
+            task.get("mission_id") == mission.get("mission_id")
+            and task.get("repository") == repository
+            and task.get("mission_revision") == supersedes_revision
+            and task.get("status") != "DONE"
+        ):
+            if task.get("gap_id") not in retired_gap_ids:
+                raise OwnerAdminError(
+                    "directly superseded nonterminal task is not explicitly RETIRED by current Mission"
+                )
+            removable_ids.add(task["task_id"])
+
+    result = deepcopy(queue)
+    if removable_ids:
+        result["tasks"] = [task for task in result["tasks"] if task["task_id"] not in removable_ids]
+    assert_v4_queue_bound_to_authority(result, bundle)
+    return result
+
+
 def _dependency_is_satisfied(
     queue: Mapping[str, Any],
     mission: Mapping[str, Any],
@@ -428,14 +478,16 @@ def eligible_unmaterialized_gaps_v4(
     bundle: V4AuthorityBundle,
     repository: str,
 ) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
-    validate_queue_v4(queue)
-    assert_v4_queue_bound_to_authority(queue, bundle)
+    current_queue = _replenishment_queue_v4(queue, bundle, repository)
     missions = [mission for mission in bundle.missions if mission.get("repository") == repository]
     if len(missions) != 1:
         raise OwnerAdminError("repository does not resolve to exactly one current Mission")
     mission = missions[0]
-    validate_carry_forward_evidence(mission, queue)
-    existing = {(task["mission_id"], task["mission_revision"], task["gap_id"]) for task in queue["tasks"]}
+    validate_carry_forward_evidence(mission, current_queue)
+    existing = {
+        (task["mission_id"], task["mission_revision"], task["gap_id"])
+        for task in current_queue["tasks"]
+    }
     gap_by_id = {gap["gap_id"]: gap for gap in mission["gaps"]}
     eligible: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for gap in mission["gaps"]:
@@ -443,7 +495,7 @@ def eligible_unmaterialized_gaps_v4(
         if gap.get("gap_state") != "OPEN" or logical in existing:
             continue
         if all(
-            _dependency_is_satisfied(queue, mission, gap_by_id, dependency_id)
+            _dependency_is_satisfied(current_queue, mission, gap_by_id, dependency_id)
             for dependency_id in gap.get("depends_on", [])
         ):
             eligible.append((mission, gap))
@@ -519,14 +571,11 @@ def activate_root_candidate_v4(
     *,
     now: datetime,
 ) -> dict[str, Any]:
-    validate_queue_v4(queue)
-    assert_v4_queue_bound_to_authority(queue, bundle)
-    if queue.get("execution_lock") is not None:
-        raise OwnerAdminError("owner-admin mutation requires no execution lock")
-    if any(_task_public_pr_matches(task, command) for task in queue["tasks"]):
+    current_queue = _replenishment_queue_v4(queue, bundle, command["repository"])
+    if any(_task_public_pr_matches(task, command) for task in current_queue["tasks"]):
         raise OwnerAdminError("candidate PR is already materialized")
 
-    mission, gap = _eligible_gap_by_activation_key(queue, bundle, command, approval)
+    mission, gap = _eligible_gap_by_activation_key(current_queue, bundle, command, approval)
     repo_key = command["repository"].lower()
     created = _ts(now)
     task = {
@@ -550,7 +599,7 @@ def activate_root_candidate_v4(
         "created_at": created,
         "updated_at": created,
     }
-    result = deepcopy(queue)
+    result = deepcopy(current_queue)
     result["tasks"].append(task)
     validate_queue_v4(result)
     assert_v4_queue_bound_to_authority(result, bundle)
@@ -729,7 +778,7 @@ def _load_bundle(main_sha: str) -> V4AuthorityBundle:
     return V4AuthorityBundle(tuple(missions), tuple(authorities), mission_shas, authority_shas)
 
 
-def _load_private_state() -> dict[str, Any]:
+def _load_private_state(*, allow_replenishment_reconciliation: bool = False) -> dict[str, Any]:
     repository = _private_get(f"repos/{PRIVATE_REPOSITORY}")
     node_id = repository.get("node_id") if isinstance(repository, Mapping) else None
     if (
@@ -745,7 +794,8 @@ def _load_private_state() -> dict[str, Any]:
     bundle = _load_bundle(main_sha)
     queue, queue_blob = _private_json(QUEUE_PATH, runtime_sha)
     validate_queue_v4(queue)
-    assert_v4_queue_bound_to_authority(queue, bundle)
+    if not allow_replenishment_reconciliation:
+        assert_v4_queue_bound_to_authority(queue, bundle)
     return {
         "repository_node_id": node_id,
         "main_sha": main_sha,
@@ -945,7 +995,9 @@ def _write_queue_exact(
 def main() -> int:
     try:
         command = parse_owner_admin_command(os.environ.get("CONTROL_V4_OWNER_COMMAND", ""))
-        state = _load_private_state()
+        state = _load_private_state(
+            allow_replenishment_reconciliation=(command["operation"] == "ACTIVATE_ROOT_CANDIDATE")
+        )
         target = _public_target(command)
         approval = None
         internal_review = None
