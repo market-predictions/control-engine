@@ -26,7 +26,7 @@ EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
 TICK_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_TICK\n"
 EVENT_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_EVENT\n"
 PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
-CANONICAL_RUNNER_PROMPT_BLOB_SHA = "2e31c866e7484c5ff6346c50603bb76a2029c331"
+CANONICAL_RUNNER_PROMPT_BLOB_SHA = "05f15520228cc659b6668e4eb39f194047d15900"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -423,7 +423,7 @@ def _retryable_external_wait(task: Mapping[str, Any]) -> bool:
         and task.get("phase") == "REVIEW"
         and task.get("review_policy") == "EXTERNAL"
         and isinstance(external, Mapping)
-        and external.get("status") in {"PENDING", "INDETERMINATE"}
+        and external.get("status") == "INDETERMINATE"
     )
 
 

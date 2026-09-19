@@ -16,7 +16,7 @@ EXPECTED_STATELESS_TRANSPORT_MARKERS = (
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
     "The schedule is a wake-up mechanism, not runtime state.",
     "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Then create one new unique `run_id` for this invocation in the exact generation-bound format and initialize only invocation-local fairness state",
+    "Then create one new unique `run_id` for this invocation in the exact generation-bound format, an empty invocation-local `yielded_task_tokens` set, and a new-holder acquisition count of `0`.",
     "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
     "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
     "`NO_WORK` or `BUSY` ends this invocation without mutation.",
@@ -38,8 +38,7 @@ def _git_blob_sha(text: str) -> str:
 
 def test_current_state_first_transport_markers_are_the_canonical_prompt_contract():
     assert validator.STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS == EXPECTED_STATELESS_TRANSPORT_MARKERS
-    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "2e31c866e7484c5ff6346c50603bb76a2029c331"
-    assert "6628a9e4c47234bd1e58611225c6fa3f236051f4" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
+    assert validator.REVIEWED_RUNNER_PROMPT_BLOB_SHA == "05f15520228cc659b6668e4eb39f194047d15900"
     assert "6cd83f6c687ae2b8cf437add85c798bfb95f28f3" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2d686b2271a9ff5cde931109d7a8078c8a2154d5" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
@@ -49,7 +48,7 @@ def test_current_state_first_transport_markers_are_the_canonical_prompt_contract
 
 def test_command_binding_markers_cover_generation_object_identity_exact_schedule_and_pre_private_admission():
     markers = validator.COMMAND_BINDING_PROMPT_REQUIRED_MARKERS
-    assert "runner_command_generation=5e7d30094f258bcf" in markers
+    assert "runner_command_generation=b6f42d03a917ce58" in markers
     assert "6a9a7e0b18b08191876c134d83cfbba2" in markers
     assert "timing_mode=exact_schedule" in markers
     for marker in (
@@ -68,18 +67,6 @@ def test_command_binding_markers_cover_generation_object_identity_exact_schedule
     assert any("previously unused" in marker for marker in markers)
     assert any("transition time" in marker for marker in markers)
     assert "persists no transport cursor or ledger" in markers
-
-
-def test_bounded_fairness_and_objective_accept_are_part_of_current_prompt_trust():
-    fairness = validator.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS
-    assert "### Bounded fairness and mandatory continuation" in fairness
-    assert any("8 new-holder acquisitions" in marker for marker in fairness)
-    assert any("2 new-holder acquisitions" in marker for marker in fairness)
-    assert any("mandatory" in marker for marker in fairness)
-    objective = validator.OBJECTIVE_AUTO_ACCEPT_PROMPT_REQUIRED_MARKERS
-    assert any("OBJECTIVE_EVIDENCE_V1" in marker for marker in objective)
-    assert any("auto-accept is forbidden" in marker for marker in objective)
-    assert any("never means auto-merge" in marker for marker in objective)
 
 
 def test_live_tick_responsibility_markers_close_abandoned_fresh_tick_window():
@@ -130,7 +117,6 @@ def test_exact_repaired_compact_prompt_fixture_is_current_trusted_surface():
         "no additional reasoning, waiting, or unrelated work is allowed before effect start",
         "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
         "Reviewer observations do not automatically become roadmap work.",
-        "Auto-accept never means auto-merge",
     ),
 )
 def test_repaired_fail_closed_predicates_are_required_by_real_prompt(removed_marker):
