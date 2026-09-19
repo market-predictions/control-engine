@@ -68,6 +68,9 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "2d686b2271a9ff5cde931109d7a8078c8a2154d5",
         "fe3179cb9dd595999c45a0f9233ef5dc397d9fa0",
         "6cd83f6c687ae2b8cf437add85c798bfb95f28f3",
+        "6628a9e4c47234bd1e58611225c6fa3f236051f4",
+        "2e31c866e7484c5ff6346c50603bb76a2029c331",
+        "b3d671767231ec534c6e22eb7a0c6c4c2875605f",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f0ea82e863bd18170158286c92370bcf7761b374"
@@ -81,7 +84,7 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
     "The schedule is a wake-up mechanism, not runtime state.",
     "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Then create one new unique `run_id` for this invocation in the exact generation-bound format and an empty invocation-local `yielded_task_tokens` set.",
+    "Then create one new unique `run_id` for this invocation in the exact generation-bound format, an empty invocation-local `yielded_task_tokens` set, and a new-holder acquisition count of `0`.",
     "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
     "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
     "`NO_WORK` or `BUSY` ends this invocation without mutation.",
@@ -90,7 +93,7 @@ STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "The next normal Scheduled invocation starts with a fresh TICK",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=93d60fe2e37d9dca",
+    "runner_command_generation=b6f42d03a917ce58",
     "## Pre-acquisition Runner-binding fence",
     "Before creating a `run_id` or posting any acquisition-capable TICK",
     "zero public command writes",
@@ -102,7 +105,7 @@ COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
     "source_of_truth=GITHUB",
     "principal_manual_relay_target=0",
     "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:93d60fe2e37d9dca:<32-lowercase-hex-random>",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:b6f42d03a917ce58:<32-lowercase-hex-random>",
     "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
     "requires a new previously unused `runner_command_generation` before adoption.",
     "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
@@ -123,16 +126,17 @@ LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS = (
     "Never post a replacement TICK merely because the current one is slow.",
     "persists no timer, cursor, retry record, scheduler state, carrier-run ledger or runtime state",
 )
-POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS = (
-    "### Progress EVENT versus wait EVENT continuation",
-    "Progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, and `EXTERNAL_FINDING`",
-    "**do not** add that task token to `yielded_task_tokens`",
-    "one fresh same-`run_id` acquisition TICK with the unchanged yielded-token set",
-    "Wait/release EVENTs `YIELD` and `REVIEW_UNAVAILABLE`",
-    "`EXTERNAL_REQUESTED` is also a wait boundary",
-    "Add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
+LIVENESS_PROMPT_REQUIRED_MARKERS = (
+    "### Mandatory continuation with one runaway cap",
+    "at most **8 new-holder acquisitions per Scheduled invocation**",
+    "A second same-`run_id` TICK used only for immediate pre-effect revalidation of the current holder is not a new-holder acquisition.",
+    "Wait-bound work is a WORK closed by `YIELD`, `REVIEW_UNAVAILABLE`, or `EXTERNAL_REQUESTED`.",
+    "add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
+    "Do not add task tokens after progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, or `EXTERNAL_FINDING`.",
+    "This continuation is mandatory.",
+    "Stop only after the global cap is reached",
     "This is a new current-state acquisition query, not a replay of an earlier command.",
-    "Never carry yielded tokens into another Scheduled invocation.",
+    "Never carry yielded tokens or the acquisition count into another Scheduled invocation.",
     "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth",
 )
 TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
@@ -148,7 +152,7 @@ TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
     "The second same-`run_id` TICK is revalidation only",
     "A fresh phase reacquisition creates a fresh acquisition identity for subsequent target effects.",
 )
-CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS = (
+CANONICAL_EVENT_PROMPT_REQUIRED_MARKERS = (
     "### Canonical EVENT wire contract",
     "For every semantic EVENT, copy the correlated trusted `WORK` identity; do not transform it.",
     "`run_id`, `task_token`, `event`, `repository`, `action`",
@@ -385,12 +389,12 @@ def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
         raise ValidationError("current Runner prompt lacks required pre-acquisition command-binding/correlation markers")
     if any(marker not in prompt_text for marker in LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks required live-TICK responsibility markers")
-    if any(marker not in prompt_text for marker in POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks required post-yield continuation markers")
+    if any(marker not in prompt_text for marker in LIVENESS_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks minimal invocation-liveness markers")
     if any(marker not in prompt_text for marker in TARGET_EFFECT_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks target-effect freshness markers")
-    if any(marker not in prompt_text for marker in CANONICAL_EVENT_FAIRNESS_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks canonical EVENT/fairness markers")
+    if any(marker not in prompt_text for marker in CANONICAL_EVENT_PROMPT_REQUIRED_MARKERS):
+        raise ValidationError("current Runner prompt lacks canonical EVENT markers")
     if any(marker not in prompt_text for marker in HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS):
         raise ValidationError("current Runner prompt lacks holder-closeout markers")
     if any(marker not in prompt_text for marker in COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS):

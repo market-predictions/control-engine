@@ -69,7 +69,7 @@ def _binding(prompt_blob_sha: str):
 
 
 def test_runtime_binding_accepts_only_current_generation_runner_prompt() -> None:
-    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "6628a9e4c47234bd1e58611225c6fa3f236051f4"
+    assert CANONICAL_RUNNER_PROMPT_BLOB_SHA == "05f15520228cc659b6668e4eb39f194047d15900"
     assert _binding(CANONICAL_RUNNER_PROMPT_BLOB_SHA) == (True, False)
 
 
