@@ -4,8 +4,8 @@ from control_engine.v4_runtime_protocol import CANONICAL_RUNNER_PROMPT_BLOB_SHA
 import scripts.validate_private_control_v4 as private_v4
 
 
-GENERATION = "93d60fe2e37d9dca"
-PROMPT_SHA = "6628a9e4c47234bd1e58611225c6fa3f236051f4"
+GENERATION = "b6f42d03a917ce58"
+PROMPT_SHA = "05f15520228cc659b6668e4eb39f194047d15900"
 PREDECESSOR_PROMPT_SHA = "6cd83f6c687ae2b8cf437add85c798bfb95f28f3"
 
 
@@ -37,13 +37,13 @@ def test_reviewed_private_prompt_must_encode_atomic_event_holder_boundary():
     assert "never infer private holder state from public history" in required
 
 
-def test_progress_and_wait_boundaries_are_explicitly_distinguished():
-    required = set(private_v4.POST_YIELD_CONTINUATION_PROMPT_REQUIRED_MARKERS)
-    assert "### Progress EVENT versus wait EVENT continuation" in required
-    assert "Progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, and `EXTERNAL_FINDING`" in required
-    assert "**do not** add that task token to `yielded_task_tokens`" in required
-    assert "Wait/release EVENTs `YIELD` and `REVIEW_UNAVAILABLE`" in required
-    assert "`EXTERNAL_REQUESTED` is also a wait boundary" in required
+def test_minimal_invocation_liveness_contract_is_explicit():
+    required = set(private_v4.LIVENESS_PROMPT_REQUIRED_MARKERS)
+    assert "### Mandatory continuation with one runaway cap" in required
+    assert "at most **8 new-holder acquisitions per Scheduled invocation**" in required
+    assert "Wait-bound work is a WORK closed by `YIELD`, `REVIEW_UNAVAILABLE`, or `EXTERNAL_REQUESTED`." in required
+    assert "This continuation is mandatory." in required
+    assert "Stop only after the global cap is reached" in required
     assert "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth" in required
 
 

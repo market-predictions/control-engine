@@ -27,7 +27,7 @@ def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispat
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT')" in text
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_TICK {')" not in text
     assert "startsWith(github.event.comment.body, 'CONTROL_V4_RUNTIME_EVENT {')" not in text
-    assert '93d60fe2e37d9dca' in text
+    assert 'b6f42d03a917ce58' in text
     assert 'f7beb2a3571eae1f' not in text
 
 
