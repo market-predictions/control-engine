@@ -513,8 +513,8 @@ def candidate_ready_v4(
     now: datetime,
 ) -> dict[str, Any]:
     task = assert_event_identity(queue, command, now=now)
-    if task.get("status") != "ACTIVE" or task.get("phase") not in {"BUILD", "REPAIR"}:
-        raise RuntimeProtocolError("candidate-ready requires ACTIVE BUILD/REPAIR")
+    if task.get("status") != "ACTIVE" or task.get("phase") not in {"BUILD", "REPAIR", "REVIEW"}:
+        raise RuntimeProtocolError("candidate-ready requires ACTIVE BUILD/REPAIR/REVIEW")
     expected = {
         "candidate_sha": command["new_candidate_sha"],
         "candidate_pr_number": command["candidate_pr_number"],
