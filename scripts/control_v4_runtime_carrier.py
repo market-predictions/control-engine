@@ -686,6 +686,7 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
     event = command["event"]
 
     review_events_requiring_live_candidate = {
+        "CANDIDATE_READY",
         "INTERNAL_PASS",
         "INTERNAL_REPAIR",
         "EXTERNAL_REQUESTED",

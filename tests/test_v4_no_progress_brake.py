@@ -249,3 +249,70 @@ def test_blocked_no_progress_task_auto_resumes_only_after_real_candidate_drift(m
     assert current["blocker"] is None
     assert state["queue"]["execution_lock"]["run_id"] == "run-drift"
     assert writes[-1][1] == "no-progress-unblock-acquire"
+
+
+def test_candidate_ready_during_review_drift_yields_to_repair_before_rebind(monkeypatch) -> None:
+    external_pending = {
+        "candidate_sha": OLD_SHA,
+        "expected_base_branch": "main",
+        "expected_base_sha": BASE_SHA,
+        "request_key": f"G1--{OLD_SHA}--main--{BASE_SHA}",
+        "status": "PENDING",
+        "request_ref": "https://github.com/example/repo/pull/125#issuecomment-1",
+        "evidence_ref": None,
+    }
+    current = task(phase="REVIEW", review_policy="EXTERNAL", external_review=external_pending)
+    q = queue(current, run_id="run-review-drift")
+    parsed = parse_public_command(
+        event_body(
+            q,
+            "CANDIDATE_READY",
+            new_candidate_sha=NEW_SHA,
+            candidate_pr_number=125,
+            candidate_head_branch="candidate",
+            new_expected_base_branch="main",
+            new_expected_base_sha=BASE_SHA,
+        )
+    )
+    writes: list[tuple[dict, str]] = []
+    monkeypatch.setattr(carrier, "_target_pr_candidate", lambda repository, pr_number: candidate(NEW_SHA))
+    install_fake_write(monkeypatch, writes)
+
+    state, result = carrier._event(parsed, fake_state(q), now=NOW)
+    drifted = state["queue"]["tasks"][0]
+    assert result["result"] == "YIELDED"
+    assert drifted["status"] == "ACTIVE"
+    assert drifted["phase"] == "REPAIR"
+    assert drifted["candidate"]["candidate_sha"] == OLD_SHA
+    assert state["queue"]["execution_lock"] is None
+    assert writes[-1][1] == "candidate-drift-to-repair"
+
+    reacquired = acquire_task_v4(
+        state["queue"],
+        task_id=drifted["task_id"],
+        run_id="run-review-drift-repair",
+        now=NOW,
+        control_runtime_enabled=True,
+        integration_enabled=False,
+    )
+    parsed_repair = parse_public_command(
+        event_body(
+            reacquired,
+            "CANDIDATE_READY",
+            new_candidate_sha=NEW_SHA,
+            candidate_pr_number=125,
+            candidate_head_branch="candidate",
+            new_expected_base_branch="main",
+            new_expected_base_sha=BASE_SHA,
+        )
+    )
+    state2, result2 = carrier._event(parsed_repair, {**state, "queue": reacquired}, now=NOW)
+    rebound = state2["queue"]["tasks"][0]
+    assert result2["result"] == "YIELDED"
+    assert rebound["phase"] == "REVIEW"
+    assert rebound["candidate"]["candidate_sha"] == NEW_SHA
+    assert rebound["last_review"] is None
+    assert rebound["external_review"] is None
+    assert rebound["blocker"] is None
+    assert state2["queue"]["execution_lock"] is None
+    assert writes[-1][1] == "candidate-ready"
