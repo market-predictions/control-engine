@@ -38,7 +38,7 @@ def task(task_id: str, repository: str, pr: int, *, review_policy: str = "INTERN
         "repository_authority_blob_sha": AUTHORITY_SHA,
         "gap_id": task_id.rsplit("--", 1)[-1],
         "repository": repository,
-        "acceptance": ["Current target truth must reconcile without stalling unrelated work."],
+        "acceptance": ["Exact integrated candidate and review evidence must be preserved."],
         "integration_policy": "HOLD_AFTER_PASS",
         "review_policy": review_policy,
         "convergence_required": False,
