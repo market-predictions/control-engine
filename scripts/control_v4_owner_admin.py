@@ -10,9 +10,8 @@ This is an outside-Runner governance path for four concrete actions only:
   unmaterialized OPEN Mission gap selected by an opaque authority-bound key;
 - rebind one stale READY task to the current exact open/unmerged PR identity,
   clearing stale review evidence and returning it to normal REVIEW;
-- reconcile one stale READY task whose same PR is already integrated, using an
-  exact public INTERNAL PASS comment as the review evidence for the integrated
-  candidate before recording DONE.
+- reconcile one stale task whose same PR is already integrated, using exact
+  public review evidence required by its Mission policy before recording DONE.
 
 A principal may authorize a project-level replenishment cycle once. That approval
 is frozen as one owner-authored audit comment containing only the exact opaque
@@ -65,6 +64,8 @@ PUBLIC_REPOSITORY = "market-predictions/control-engine"
 PUBLIC_AUDIT_ISSUE = 106
 PRINCIPAL_LOGIN = "market-predictions"
 PRINCIPAL_USER_ID = 267922695
+EXTERNAL_REVIEW_BOT_LOGIN = "chatgpt-codex-connector[bot]"
+EXTERNAL_REVIEW_BOT_USER_ID = 199175422
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 MISSION_DIR = "control/missions"
@@ -91,7 +92,14 @@ TARGET_KEYS = {
 }
 FINALIZE_COMMAND_KEYS = {"operation", *TARGET_KEYS}
 REBIND_COMMAND_KEYS = {"operation", *TARGET_KEYS}
-RECONCILE_COMMAND_KEYS = {"operation", "internal_review_comment_id", *TARGET_KEYS}
+RECONCILE_INTERNAL_COMMAND_KEYS = {"operation", "internal_review_comment_id", *TARGET_KEYS}
+RECONCILE_EXTERNAL_COMMAND_KEYS = {
+    "operation",
+    "internal_review_comment_id",
+    "external_review_request_comment_id",
+    "external_review_comment_id",
+    *TARGET_KEYS,
+}
 ACTIVATE_COMMAND_KEYS = {
     "operation",
     "approval_comment_id",
@@ -153,7 +161,12 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
     if operation == "ACTIVATE_ROOT_CANDIDATE":
         expected_keys = ACTIVATE_COMMAND_KEYS
     elif operation == "RECONCILE_INTEGRATED":
-        expected_keys = RECONCILE_COMMAND_KEYS
+        if set(payload) == RECONCILE_INTERNAL_COMMAND_KEYS:
+            expected_keys = RECONCILE_INTERNAL_COMMAND_KEYS
+        elif set(payload) == RECONCILE_EXTERNAL_COMMAND_KEYS:
+            expected_keys = RECONCILE_EXTERNAL_COMMAND_KEYS
+        else:
+            raise OwnerAdminError("owner-admin command fields invalid")
     elif operation == "REBIND_READY_CANDIDATE":
         expected_keys = REBIND_COMMAND_KEYS
     else:
@@ -174,6 +187,13 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
         payload["internal_review_comment_id"] = _positive_int(
             payload["internal_review_comment_id"], label="internal review comment id"
         )
+        if "external_review_comment_id" in payload:
+            payload["external_review_request_comment_id"] = _positive_int(
+                payload["external_review_request_comment_id"], label="external review request comment id"
+            )
+            payload["external_review_comment_id"] = _positive_int(
+                payload["external_review_comment_id"], label="external review comment id"
+            )
     return payload
 
 
@@ -375,6 +395,7 @@ def reconcile_integrated_v4(
     command: Mapping[str, Any],
     internal_review: Mapping[str, Any],
     *,
+    external_review: Mapping[str, Any] | None = None,
     now: datetime,
 ) -> dict[str, Any]:
     validate_queue_v4(queue)
@@ -382,10 +403,26 @@ def reconcile_integrated_v4(
     if queue.get("execution_lock") is not None:
         raise OwnerAdminError("owner-admin mutation requires no execution lock")
     source = _task_by_public_pr(queue, command)
-    if source.get("status") != "READY" or source.get("phase") is not None:
-        raise OwnerAdminError("reconciliation requires READY task")
-    if source.get("review_policy") != "INTERNAL":
-        raise OwnerAdminError("integrated reconciliation supports INTERNAL review only")
+    policy = source.get("review_policy")
+    if policy == "INTERNAL":
+        if source.get("status") != "READY" or source.get("phase") is not None:
+            raise OwnerAdminError("reconciliation requires READY task")
+        if external_review is not None:
+            raise OwnerAdminError("INTERNAL reconciliation cannot consume external review evidence")
+    elif policy == "EXTERNAL":
+        admissible = (
+            (source.get("status") == "ACTIVE" and source.get("phase") == "REVIEW")
+            or (source.get("status") in {"READY", "BLOCKED"} and source.get("phase") is None)
+        )
+        if not admissible:
+            raise OwnerAdminError("EXTERNAL integrated reconciliation task state invalid")
+        if external_review is None:
+            raise OwnerAdminError(
+                "integrated reconciliation supports INTERNAL review only unless exact external PASS evidence is supplied"
+            )
+    else:
+        raise OwnerAdminError("integrated reconciliation review policy invalid")
+
     exact = candidate_identity(command)
     expected_review = {
         "candidate_sha": exact["candidate_sha"],
@@ -397,11 +434,27 @@ def reconcile_integrated_v4(
     if dict(internal_review) != expected_review:
         raise OwnerAdminError("integrated reconciliation review evidence invalid")
 
+    expected_external = None
+    if policy == "EXTERNAL":
+        expected_external = {
+            "candidate_sha": exact["candidate_sha"],
+            "expected_base_branch": exact["expected_base_branch"],
+            "expected_base_sha": exact["expected_base_sha"],
+            "request_key": f"{source['gap_id']}--{exact['candidate_sha']}--{exact['expected_base_branch']}--{exact['expected_base_sha']}",
+            "status": "PASS",
+            "request_ref": external_review.get("request_ref"),
+            "evidence_ref": external_review.get("evidence_ref"),
+        }
+        if dict(external_review) != expected_external:
+            raise OwnerAdminError("integrated reconciliation external review evidence invalid")
+        if not all(isinstance(expected_external[key], str) and expected_external[key] for key in ("request_ref", "evidence_ref")):
+            raise OwnerAdminError("integrated reconciliation external references invalid")
+
     result = deepcopy(queue)
     task = next(item for item in result["tasks"] if item["task_id"] == source["task_id"])
     task["candidate"] = exact
     task["last_review"] = dict(expected_review)
-    task["external_review"] = None
+    task["external_review"] = None if expected_external is None else dict(expected_external)
     task["status"] = "DONE"
     task["phase"] = None
     task["blocker"] = None
@@ -615,6 +668,7 @@ def plan_owner_admin_transition(
     now: datetime,
     approval: Mapping[str, Any] | None = None,
     internal_review: Mapping[str, Any] | None = None,
+    external_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_public_target(command, target)
     operation = command["operation"]
@@ -629,7 +683,9 @@ def plan_owner_admin_transition(
     if operation == "RECONCILE_INTEGRATED":
         if internal_review is None:
             raise OwnerAdminError("integrated reconciliation requires exact internal review evidence")
-        return reconcile_integrated_v4(queue, bundle, command, internal_review, now=now)
+        return reconcile_integrated_v4(
+            queue, bundle, command, internal_review, external_review=external_review, now=now
+        )
     raise OwnerAdminError("owner-admin operation unsupported")
 
 
@@ -831,7 +887,7 @@ def _public_replenishment_approval(comment_id: int, expected_body_sha256: str) -
 
 def _public_internal_review(command: Mapping[str, Any], queue: Mapping[str, Any]) -> dict[str, Any]:
     source = _task_by_public_pr(queue, command)
-    if source.get("review_policy") != "INTERNAL":
+    if source.get("review_policy") not in {"INTERNAL", "EXTERNAL"}:
         raise OwnerAdminError("public internal review evidence does not match task policy")
     comment_id = _positive_int(command.get("internal_review_comment_id"), label="internal review comment id")
     repository = command["repository"]
@@ -864,6 +920,70 @@ def _public_internal_review(command: Mapping[str, Any], queue: Mapping[str, Any]
         "expected_base_sha": command["expected_base_sha"],
         "verdict": "PASS",
         "reviewed_at": created_at,
+    }
+
+
+def _public_external_review(command: Mapping[str, Any], queue: Mapping[str, Any]) -> dict[str, Any]:
+    source = _task_by_public_pr(queue, command)
+    if source.get("review_policy") != "EXTERNAL":
+        raise OwnerAdminError("public external review evidence does not match task policy")
+    request_id = _positive_int(
+        command.get("external_review_request_comment_id"), label="external review request comment id"
+    )
+    evidence_id = _positive_int(command.get("external_review_comment_id"), label="external review comment id")
+    repository = command["repository"]
+    issue_url = f"{API}/repos/{repository}/issues/{command['candidate_pr_number']}"
+
+    request = _public_get(f"repos/{repository}/issues/comments/{request_id}")
+    if not isinstance(request, Mapping) or request.get("issue_url") != issue_url:
+        raise OwnerAdminError("external review request is not bound to target PR")
+    request_user = request.get("user") or {}
+    if request_user.get("login") != PRINCIPAL_LOGIN or request_user.get("id") != PRINCIPAL_USER_ID:
+        raise OwnerAdminError("external review request is not principal-authored")
+    request_created = request.get("created_at")
+    if not isinstance(request_created, str) or not request_created or request.get("updated_at") != request_created:
+        raise OwnerAdminError("external review request was edited")
+    request_body = request.get("body")
+    required_tokens = (
+        "CONTROL_V4_EXTERNAL_REVIEW_REQUEST",
+        command["candidate_sha"],
+        command["expected_base_sha"],
+        f"{source['mission_id']}@{source['mission_revision']}",
+        source["gap_id"],
+    )
+    if not isinstance(request_body, str) or any(token not in request_body for token in required_tokens):
+        raise OwnerAdminError("external review request identity does not match target task")
+
+    evidence = _public_get(f"repos/{repository}/issues/comments/{evidence_id}")
+    if not isinstance(evidence, Mapping) or evidence.get("issue_url") != issue_url:
+        raise OwnerAdminError("external review evidence is not bound to target PR")
+    evidence_user = evidence.get("user") or {}
+    if (
+        evidence_user.get("login") != EXTERNAL_REVIEW_BOT_LOGIN
+        or evidence_user.get("id") != EXTERNAL_REVIEW_BOT_USER_ID
+    ):
+        raise OwnerAdminError("external review evidence is not authored by the trusted review bot")
+    evidence_created = evidence.get("created_at")
+    if not isinstance(evidence_created, str) or not evidence_created or evidence.get("updated_at") != evidence_created:
+        raise OwnerAdminError("external review evidence was edited")
+    body = evidence.get("body")
+    if not isinstance(body, str) or "Codex Review: Didn't find any major issues." not in body:
+        raise OwnerAdminError("external review evidence is not a canonical PASS")
+    match = re.search(r"(?:\*\*)?Reviewed commit:(?:\*\*)?\s*`([0-9a-f]{10,40})`", body)
+    if match is None or not command["candidate_sha"].startswith(match.group(1)):
+        raise OwnerAdminError("external review evidence candidate identity mismatch")
+    request_ref = request.get("html_url")
+    evidence_ref = evidence.get("html_url")
+    if not all(isinstance(value, str) and value for value in (request_ref, evidence_ref)):
+        raise OwnerAdminError("external review evidence references unavailable")
+    return {
+        "candidate_sha": command["candidate_sha"],
+        "expected_base_branch": command["expected_base_branch"],
+        "expected_base_sha": command["expected_base_sha"],
+        "request_key": f"{source['gap_id']}--{command['candidate_sha']}--{command['expected_base_branch']}--{command['expected_base_sha']}",
+        "status": "PASS",
+        "request_ref": request_ref,
+        "evidence_ref": evidence_ref,
     }
 
 
@@ -945,9 +1065,15 @@ def _write_queue_exact(
         _public_replenishment_approval(command["approval_comment_id"], command["approval_body_sha256"])
     elif operation == "RECONCILE_INTEGRATED":
         fresh_review = _public_internal_review(command, state["queue"])
+        fresh_external = None
+        source = _task_by_public_pr(state["queue"], command)
+        if source.get("review_policy") == "EXTERNAL":
+            fresh_external = _public_external_review(command, state["queue"])
         reconciled = _task_by_public_pr(queue, command)
         if reconciled.get("candidate") != candidate_identity(command) or reconciled.get("last_review") != fresh_review:
             raise StaleWriteError("integrated reconciliation evidence changed before CAS")
+        if reconciled.get("external_review") != fresh_external:
+            raise StaleWriteError("integrated external review evidence changed before CAS")
 
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
@@ -1001,12 +1127,16 @@ def main() -> int:
         target = _public_target(command)
         approval = None
         internal_review = None
+        external_review = None
         if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
             approval = _public_replenishment_approval(
                 command["approval_comment_id"], command["approval_body_sha256"]
             )
         elif command["operation"] == "RECONCILE_INTEGRATED":
             internal_review = _public_internal_review(command, state["queue"])
+            source = _task_by_public_pr(state["queue"], command)
+            if source.get("review_policy") == "EXTERNAL":
+                external_review = _public_external_review(command, state["queue"])
         next_queue = plan_owner_admin_transition(
             state["queue"],
             state["bundle"],
@@ -1015,6 +1145,7 @@ def main() -> int:
             now=datetime.now(timezone.utc),
             approval=approval,
             internal_review=internal_review,
+            external_review=external_review,
         )
         runtime_commit = _write_queue_exact(state, next_queue, command)
         print(f"CONTROL_V4_OWNER_ADMIN={command['operation']}:PASS")
