@@ -417,7 +417,9 @@ def reconcile_integrated_v4(
         if not admissible:
             raise OwnerAdminError("EXTERNAL integrated reconciliation task state invalid")
         if external_review is None:
-            raise OwnerAdminError("EXTERNAL integrated reconciliation requires external PASS evidence")
+            raise OwnerAdminError(
+                "integrated reconciliation supports INTERNAL review only unless exact external PASS evidence is supplied"
+            )
     else:
         raise OwnerAdminError("integrated reconciliation review policy invalid")
 
@@ -967,7 +969,7 @@ def _public_external_review(command: Mapping[str, Any], queue: Mapping[str, Any]
     body = evidence.get("body")
     if not isinstance(body, str) or "Codex Review: Didn't find any major issues." not in body:
         raise OwnerAdminError("external review evidence is not a canonical PASS")
-    match = re.search(r"Reviewed commit:\s*`([0-9a-f]{10,40})`", body)
+    match = re.search(r"(?:\*\*)?Reviewed commit:(?:\*\*)?\s*`([0-9a-f]{10,40})`", body)
     if match is None or not command["candidate_sha"].startswith(match.group(1)):
         raise OwnerAdminError("external review evidence candidate identity mismatch")
     request_ref = request.get("html_url")
