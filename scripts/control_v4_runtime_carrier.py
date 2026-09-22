@@ -9,6 +9,7 @@ protocol implemented by ``control_engine.v4_runtime_protocol`` and mutates only
 """
 
 import base64
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
@@ -66,6 +67,8 @@ MISSION_DIR = "control/missions"
 REPOSITORY_AUTHORITY_DIR = "control/repository-authority"
 API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
+INTEGRATED_TARGET_BLOCKER = "TARGET_PR_INTEGRATED_RECONCILIATION_REQUIRED"
+CLOSED_TARGET_BLOCKER = "TARGET_PR_CLOSED_RECONCILIATION_REQUIRED"
 
 
 class CarrierError(RuntimeError):
@@ -74,6 +77,12 @@ class CarrierError(RuntimeError):
 
 class StaleWriteError(CarrierError):
     pass
+
+
+class TargetCandidateTerminalError(RuntimeProtocolError):
+    def __init__(self, blocker: str):
+        super().__init__("target pull request is terminal")
+        self.blocker = blocker
 
 
 def _private_headers() -> dict[str, str]:
@@ -492,13 +501,12 @@ def _assert_public_target_repository(repository: str) -> None:
 def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
     _assert_public_target_repository(repository)
     pr = _public_get(f"repos/{repository}/pulls/{pr_number}", allow_404=True)
-    if (
-        not isinstance(pr, Mapping)
-        or pr.get("number") != pr_number
-        or pr.get("state") != "open"
-        or pr.get("merged_at") is not None
-    ):
-        raise RuntimeProtocolError("target pull request is not an open public candidate")
+    if not isinstance(pr, Mapping) or pr.get("number") != pr_number:
+        raise RuntimeProtocolError("target pull request is unavailable")
+    if pr.get("merged_at") is not None:
+        raise TargetCandidateTerminalError(INTEGRATED_TARGET_BLOCKER)
+    if pr.get("state") != "open":
+        raise TargetCandidateTerminalError(CLOSED_TARGET_BLOCKER)
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     values = (head.get("sha"), head.get("ref"), base.get("ref"), base.get("sha"))
@@ -511,6 +519,23 @@ def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
         "expected_base_branch": values[2],
         "expected_base_sha": values[3],
     }
+
+
+def _park_terminal_target(queue: Mapping[str, Any], *, task_id: str, blocker: str, now: datetime) -> dict[str, Any]:
+    validate_queue_v4(queue)
+    if blocker not in {INTEGRATED_TARGET_BLOCKER, CLOSED_TARGET_BLOCKER}:
+        raise V4ValidationError("terminal target blocker invalid")
+    matches = [task for task in queue["tasks"] if task["task_id"] == task_id]
+    if len(matches) != 1 or matches[0].get("status") != "ACTIVE":
+        raise V4ValidationError("terminal target parking requires one ACTIVE task")
+    result = deepcopy(queue)
+    changed = next(task for task in result["tasks"] if task["task_id"] == task_id)
+    changed["status"] = "BLOCKED"
+    changed["phase"] = None
+    changed["blocker"] = blocker
+    changed["updated_at"] = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    validate_queue_v4(result)
+    return result
 
 
 def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -544,8 +569,6 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         candidate = task.get("candidate")
         live_candidate = None
         if task.get("phase") == "REPAIR" and isinstance(candidate, Mapping):
-            # Same-run revalidation has no holder write, so refreshing this
-            # read-only compatibility hint cannot create a write/result mismatch.
             live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
         work_result = safe_work_capsule(
             queue,
@@ -556,6 +579,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         return state, work_result
 
     no_progress_unblocked = False
+    terminal_target_parked = False
     resumed_live_candidates: dict[str, dict[str, Any]] = {}
     for blocked in list(queue["tasks"]):
         candidate = blocked.get("candidate")
@@ -568,8 +592,6 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         try:
             live_candidate = _target_pr_candidate(blocked["repository"], candidate["candidate_pr_number"])
         except RuntimeProtocolError:
-            # A parked task must never poison unrelated runnable work. If its PR
-            # is currently unreadable/closed, it remains fail-closed BLOCKED.
             continue
         reconciled, changed = reconcile_no_progress_candidate_drift_v4(
             queue,
@@ -582,37 +604,43 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             no_progress_unblocked = True
             resumed_live_candidates[blocked["task_id"]] = live_candidate
 
-    task_id = select_task_id_v4(
-        queue,
-        run_id=command["run_id"],
-        yielded_task_tokens=command.get("yielded_task_tokens", []),
-        integration_enabled=False,
-    )
-    if task_id is None:
-        result = {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
-        if recovery_pending or no_progress_unblocked:
-            if recovery_pending and no_progress_unblocked:
-                reason = "expired-lock-recovery-no-progress-unblock"
-            elif recovery_pending:
-                reason = "expired-lock-recovery"
-            else:
-                reason = "no-progress-unblock"
-            state = _write_queue_exact(state, queue, reason=reason)
-        return state, result
+    while True:
+        task_id = select_task_id_v4(
+            queue,
+            run_id=command["run_id"],
+            yielded_task_tokens=command.get("yielded_task_tokens", []),
+            integration_enabled=False,
+        )
+        if task_id is None:
+            result = {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
+            if recovery_pending or no_progress_unblocked or terminal_target_parked:
+                reason_parts: list[str] = []
+                if recovery_pending:
+                    reason_parts.append("expired-lock-recovery")
+                if no_progress_unblocked:
+                    reason_parts.append("no-progress-unblock")
+                if terminal_target_parked:
+                    reason_parts.append("terminal-target-park")
+                state = _write_queue_exact(state, queue, reason="-".join(reason_parts))
+            return state, result
 
-    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
-    candidate = task.get("candidate")
-    live_candidate = None
-    # All target I/O required for a new public WORK projection occurs before
-    # durable ownership. Semantic candidate-drift reconciliation is EVENT-side.
-    if isinstance(candidate, Mapping):
-        observed = resumed_live_candidates.get(task_id)
-        if observed is None:
-            observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
-        if task.get("phase") == "REPAIR":
-            live_candidate = observed
-    else:
-        _assert_public_target_repository(task["repository"])
+        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+        candidate = task.get("candidate")
+        live_candidate = None
+        if isinstance(candidate, Mapping):
+            observed = resumed_live_candidates.get(task_id)
+            if observed is None:
+                try:
+                    observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
+                except TargetCandidateTerminalError as exc:
+                    queue = _park_terminal_target(queue, task_id=task_id, blocker=exc.blocker, now=now)
+                    terminal_target_parked = True
+                    continue
+            if task.get("phase") == "REPAIR":
+                live_candidate = observed
+        else:
+            _assert_public_target_repository(task["repository"])
+        break
 
     acquired = acquire_task_v4(
         queue,
@@ -633,6 +661,8 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         reason_parts.append("expired-lock-recovery")
     if no_progress_unblocked:
         reason_parts.append("no-progress-unblock")
+    if terminal_target_parked:
+        reason_parts.append("terminal-target-park")
     reason_parts.append("acquire")
     reason = "-".join(reason_parts)
     state = _write_queue_exact(state, acquired, reason=reason)
@@ -826,7 +856,7 @@ def main() -> int:
         _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "REJECTED", "code": "STALE_EVENT", "run_id": command.get("run_id")}, ok=True)
     except (RuntimeProtocolError, V4ValidationError, CarrierError):
         _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "FAIL_CLOSED", "run_id": command.get("run_id")}, ok=False)
-    except Exception:  # never expose private data through logs or public transport
+    except Exception:
         _set_outputs({"protocol": RESULT_PROTOCOL_ID, "result": "ERROR", "code": "UNEXPECTED_FAIL_CLOSED", "run_id": command.get("run_id")}, ok=False)
     return 0
 
