@@ -163,6 +163,7 @@ def reconcile_command() -> dict:
     return {
         "operation": "RECONCILE_INTEGRATED",
         "internal_review_comment_id": 101,
+        "external_review_request_comment_id": 201,
         "external_review_comment_id": 202,
         "repository": "example/integrated",
         "candidate_pr_number": 10,
@@ -235,16 +236,32 @@ def test_public_external_review_is_exact_bot_authored_unedited_and_head_bound(mo
     )
     q = queue(source)
     command = reconcile_command()
-    comment = {
+    request = {
+        "issue_url": f"{owner_admin.API}/repos/example/integrated/issues/10",
+        "html_url": "https://github.com/example/integrated/pull/10#issuecomment-201",
+        "user": {"login": owner_admin.PRINCIPAL_LOGIN, "id": owner_admin.PRINCIPAL_USER_ID},
+        "created_at": "2026-09-22T18:35:00Z",
+        "updated_at": "2026-09-22T18:35:00Z",
+        "body": (
+            "@codex review\n\nCONTROL_V4_EXTERNAL_REVIEW_REQUEST\n"
+            f"Fresh review of `{NEW_SHA}` against `main@{BASE_SHA}` for `M@2026-09-22-r1 / G1`."
+        ),
+    }
+    evidence_comment = {
         "issue_url": f"{owner_admin.API}/repos/example/integrated/issues/10",
         "html_url": "https://github.com/example/integrated/pull/10#issuecomment-202",
-        "user": {"login": "chatgpt-codex-connector[bot]", "id": 199175422},
+        "user": {
+            "login": owner_admin.EXTERNAL_REVIEW_BOT_LOGIN,
+            "id": owner_admin.EXTERNAL_REVIEW_BOT_USER_ID,
+        },
         "created_at": "2026-09-22T18:40:00Z",
         "updated_at": "2026-09-22T18:40:00Z",
         "body": f"Codex Review: Didn't find any major issues. :+1:\n\n**Reviewed commit:** `{NEW_SHA[:10]}`",
     }
-    monkeypatch.setattr(owner_admin, "_public_get", lambda path: dict(comment))
+
+    def fake_get(path: str):
+        return dict(request if path.endswith("/201") else evidence_comment)
+
+    monkeypatch.setattr(owner_admin, "_public_get", fake_get)
     evidence = owner_admin._public_external_review(command, q)
-    assert evidence["candidate_sha"] == NEW_SHA
-    assert evidence["status"] == "PASS"
-    assert evidence["evidence_ref"] == comment["html_url"]
+    assert evidence == external_review()
