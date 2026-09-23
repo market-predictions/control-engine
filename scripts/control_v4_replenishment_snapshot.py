@@ -13,6 +13,7 @@ import json
 import os
 from typing import Any, Mapping
 
+from control_engine.v4_contracts import V4ValidationError
 from control_engine.v4_runtime_protocol import (
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
@@ -74,6 +75,20 @@ def enrich_no_work_result_v4(
     return enriched
 
 
+def assert_replenishment_targets_public_v4(result: Mapping[str, Any]) -> None:
+    """Fail closed before publication unless every proposed repository is public."""
+    proposals = result.get("replenishment_proposals", [])
+    if not isinstance(proposals, list):
+        raise ReplenishmentSnapshotError("replenishment proposal envelope invalid")
+    for proposal in proposals:
+        if not isinstance(proposal, Mapping):
+            raise ReplenishmentSnapshotError("replenishment proposal invalid")
+        repository = proposal.get("repository")
+        if not isinstance(repository, str) or not repository:
+            raise ReplenishmentSnapshotError("replenishment repository identity invalid")
+        runtime_carrier._assert_public_target_repository(repository)
+
+
 def _set_output(result: Mapping[str, Any]) -> None:
     text = json.dumps(dict(result), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     output_path = os.environ.get("GITHUB_OUTPUT")
@@ -98,9 +113,16 @@ def main() -> int:
         state = runtime_carrier._load_current()
         bundle = runtime_carrier._load_authority_bundle(state["main_sha"])
         enriched = enrich_no_work_result_v4(result, state["queue"], bundle)
+        assert_replenishment_targets_public_v4(enriched)
         _set_output(enriched)
         return 0
-    except (RuntimeProtocolError, ReplenishmentSnapshotError, owner_admin.OwnerAdminError, runtime_carrier.CarrierError):
+    except (
+        RuntimeProtocolError,
+        ReplenishmentSnapshotError,
+        V4ValidationError,
+        owner_admin.OwnerAdminError,
+        runtime_carrier.CarrierError,
+    ):
         return 1
 
 
