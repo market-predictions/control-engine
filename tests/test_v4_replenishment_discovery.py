@@ -1,5 +1,8 @@
+import pytest
+
 from control_engine.v4_authority_io import V4AuthorityBundle
 from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID
+from scripts import control_v4_replenishment_discovery as discovery
 from scripts.control_v4_replenishment_discovery import (
     OBSERVABILITY_INCOMPLETE,
     discover_replenishment_proposals_v4,
@@ -10,6 +13,11 @@ from scripts.control_v4_replenishment_discovery import (
 REPO = "market-predictions/example"
 MISSION_SHA = "a" * 40
 AUTHORITY_SHA = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _public_target_boundary(monkeypatch):
+    monkeypatch.setattr(discovery, "repository_is_publicly_supported_v4", lambda _repository: True)
 
 
 def _gap(gap_id: str, *, state: str = "OPEN") -> dict:
@@ -123,6 +131,22 @@ def test_invocation_local_no_work_does_not_replenish_project_with_active_work():
     assert incomplete is False
     assert proposals == []
     assert enrich_carrier_result_v4(_no_work(), queue=queue, bundle=bundle) == _no_work()
+
+
+def test_private_or_unsupported_repository_identity_is_never_projected(monkeypatch):
+    monkeypatch.setattr(discovery, "repository_is_publicly_supported_v4", lambda _repository: False)
+    proposals, incomplete = discover_replenishment_proposals_v4(_queue(), _bundle())
+    assert proposals == []
+    assert incomplete is True
+
+    enriched = enrich_carrier_result_v4(_no_work(), queue=_queue(), bundle=_bundle())
+    assert enriched == {
+        "protocol": RESULT_PROTOCOL_ID,
+        "result": "NO_WORK",
+        "run_id": "v4:test",
+        "replenishment_observability": OBSERVABILITY_INCOMPLETE,
+    }
+    assert REPO not in str(enriched)
 
 
 def test_no_eligible_gap_keeps_plain_no_work_result():
