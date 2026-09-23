@@ -12,6 +12,8 @@ Discovery runs only after the existing trusted V4 runtime carrier has produced a
 
 It is an advisory read-only projection. The carrier's queue transition, holder semantics, TICK/EVENT protocol, lease, freshness checks and CAS boundary are unchanged.
 
+`NO_WORK` can also be invocation-local after the Runner has yielded a task. Therefore discovery suppresses a project while its current Mission still has an `ACTIVE` `BUILD`, `REVIEW` or `REPAIR` task. A same-invocation skip cannot masquerade as project exhaustion.
+
 ## Source of truth
 
 Discovery reads the same current private sources already used by governed replenishment:
@@ -24,7 +26,9 @@ It reuses the existing `eligible_unmaterialized_gaps_v4()` and `replenishment_ap
 
 ## Public result
 
-When eligible unmaterialized work exists, the `NO_WORK` result may contain:
+Only repositories that independently resolve through the existing **public target boundary** are eligible for public proposal output. A private, missing or otherwise unsupported repository is omitted and can produce only the generic incomplete-observability marker; its repository identity is not projected.
+
+When eligible unmaterialized work exists for a supported public target, the `NO_WORK` result may contain:
 
 ```json
 {
@@ -70,6 +74,8 @@ If the business objective requires work that is not present in current Mission a
 Discovery is deliberately non-critical to runtime transport.
 
 The workflow keeps the original trusted carrier result as a fallback. If the discovery step itself fails, the original carrier result is published unchanged. Therefore advisory discovery cannot strand a holder, suppress `NO_WORK`, mutate the queue or turn a durable runtime result into an error.
+
+A failure isolated to one project does not suppress a valid proposal for another project. It only marks replenishment observability incomplete.
 
 ## Reversibility
 
