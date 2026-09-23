@@ -1,8 +1,9 @@
 from copy import deepcopy
 
 from control_engine.v4_authority_io import V4AuthorityBundle
+from control_engine.v4_contracts import V4ValidationError
 from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID, assert_public_safe
-from scripts.control_v4_replenishment_snapshot import enrich_no_work_result_v4
+from scripts import control_v4_replenishment_snapshot as snapshot
 
 
 REPO = "market-predictions/agent"
@@ -64,7 +65,9 @@ def _no_work() -> dict:
 def test_no_work_exposes_only_opaque_replenishment_snapshot_without_mutation():
     queue = _queue()
     before = deepcopy(queue)
-    result = enrich_no_work_result_v4(_no_work(), queue, _bundle(gaps=[_gap("GAP-01"), _gap("GAP-02")]))
+    result = snapshot.enrich_no_work_result_v4(
+        _no_work(), queue, _bundle(gaps=[_gap("GAP-01"), _gap("GAP-02")])
+    )
 
     assert queue == before
     proposals = result["replenishment_proposals"]
@@ -82,7 +85,9 @@ def test_no_work_exposes_only_opaque_replenishment_snapshot_without_mutation():
 
 
 def test_no_work_without_eligible_open_gap_stays_backward_compatible():
-    result = enrich_no_work_result_v4(_no_work(), _queue(), _bundle(gaps=[_gap("GAP-01", state="RETIRED")]))
+    result = snapshot.enrich_no_work_result_v4(
+        _no_work(), _queue(), _bundle(gaps=[_gap("GAP-01", state="RETIRED")])
+    )
     assert result == _no_work()
 
 
@@ -92,5 +97,45 @@ def test_non_no_work_result_is_not_changed_or_replenished():
         "result": "BUSY",
         "run_id": "v4:test",
     }
-    result = enrich_no_work_result_v4(work, _queue(), _bundle(gaps=[_gap("GAP-01")]))
+    result = snapshot.enrich_no_work_result_v4(work, _queue(), _bundle(gaps=[_gap("GAP-01")]))
     assert result == work
+
+
+def test_proposal_repository_is_verified_public_before_publication(monkeypatch):
+    result = snapshot.enrich_no_work_result_v4(_no_work(), _queue(), _bundle(gaps=[_gap("GAP-01")]))
+    observed: list[str] = []
+
+    def verify(repository: str) -> None:
+        observed.append(repository)
+
+    monkeypatch.setattr(snapshot.runtime_carrier, "_assert_public_target_repository", verify)
+    snapshot.assert_replenishment_targets_public_v4(result)
+    assert observed == [REPO]
+
+
+def test_private_or_unavailable_proposal_repository_fails_closed(monkeypatch):
+    result = snapshot.enrich_no_work_result_v4(_no_work(), _queue(), _bundle(gaps=[_gap("GAP-01")]))
+
+    def reject(_repository: str) -> None:
+        raise snapshot.RuntimeProtocolError("target repository is not publicly readable")
+
+    monkeypatch.setattr(snapshot.runtime_carrier, "_assert_public_target_repository", reject)
+    try:
+        snapshot.assert_replenishment_targets_public_v4(result)
+    except snapshot.RuntimeProtocolError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("private/unavailable repository must fail closed")
+
+
+def test_main_catches_private_validation_error_without_emitting_result(monkeypatch, tmp_path):
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("CONTROL_V4_CARRIER_RESULT", snapshot.json.dumps(_no_work()))
+
+    def invalid_private_state():
+        raise V4ValidationError("private validation failed")
+
+    monkeypatch.setattr(snapshot.runtime_carrier, "_load_current", invalid_private_state)
+    assert snapshot.main() == 1
+    assert not output.exists()
