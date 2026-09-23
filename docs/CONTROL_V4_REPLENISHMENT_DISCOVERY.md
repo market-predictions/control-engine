@@ -44,6 +44,8 @@ When eligible unmaterialized work exists for a supported public target, the `NO_
 
 The projection intentionally exposes no Mission id, Mission revision, gap id, acceptance criteria, private authority blobs, queue state or review evidence. The keys are the same opaque authority-bound identifiers already used by project-level replenishment approval.
 
+The enriched result is explicitly size-bounded with headroom below the public issue-comment limit. If the complete exact proposal set would exceed that bound, Control publishes **no partial key set**. It falls back to ordinary `NO_WORK` plus generic incomplete observability. This preserves the invariant that a visible replenishment proposal always represents a complete exact eligible snapshot rather than a truncation.
+
 If discovery cannot safely observe one or more projects, it may add only:
 
 ```json
