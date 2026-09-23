@@ -14,12 +14,12 @@ After the existing trusted V4 runtime carrier has successfully returned `NO_WORK
 
 If current Mission scope contains one or more currently eligible, unmaterialized OPEN gaps, the public `CONTROL_V4_RUNTIME_RESULT` remains `NO_WORK` and gains `replenishment_proposals`. Each proposal contains only:
 
-- the public repository name;
+- a repository name that has first been confirmed publicly readable;
 - an opaque authority key bound to the exact current Mission/authority snapshot;
 - the sorted opaque activation keys that are eligible in that snapshot;
 - the exact `CONTROL_V4_REPLENISH_APPROVAL` command for that snapshot.
 
-Mission IDs, Mission revisions, gap IDs, acceptance text, queue contents and private blob identities remain private.
+Mission IDs, Mission revisions, gap IDs, acceptance text, queue contents and private blob identities remain private. A private or unavailable target repository is not published; discovery fails closed before emitting the enriched result.
 
 If no eligible OPEN gap exists, the `NO_WORK` result is byte-semantically backward compatible apart from normal JSON serialization: no replenishment field is added.
 
@@ -38,7 +38,7 @@ A later-eligible gap cannot borrow an older approval snapshot. Scope not present
 
 ## Failure behavior
 
-Discovery is fail-closed. Unexpected authority/replenishment inconsistencies make the discovery step fail rather than fabricate or broaden a proposal. The underlying successful carrier result remains separately observable, and no private mutation is performed by discovery.
+Discovery is fail-closed. Unexpected authority/replenishment inconsistencies, invalid V4 private-state validation, or a private/unavailable proposed target repository make the discovery step fail rather than fabricate, broaden, or publish a proposal. Validation failures are caught at the discovery boundary so private validation details are not emitted through an uncaught traceback in the public workflow. The underlying successful carrier result remains separately observable, and no private mutation is performed by discovery.
 
 ## Reversibility
 
