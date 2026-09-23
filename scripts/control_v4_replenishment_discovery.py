@@ -20,6 +20,7 @@ from scripts.control_v4_owner_admin import (
     _load_private_state,
     _public_get,
     eligible_unmaterialized_gaps_v4,
+    format_replenishment_approval_v4,
     replenishment_approval_payload_v4,
 )
 
@@ -98,7 +99,11 @@ def discover_replenishment_proposals_v4(
             eligible = eligible_unmaterialized_gaps_v4(queue, bundle, repository)
             if not eligible:
                 continue
-            proposals.append(replenishment_approval_payload_v4(queue, bundle, repository))
+            proposal = replenishment_approval_payload_v4(queue, bundle, repository)
+            # One source of truth for proposal admissibility: only advertise an exact
+            # snapshot that the existing owner-approval parser can itself accept.
+            format_replenishment_approval_v4(proposal)
+            proposals.append(proposal)
         except (OwnerAdminError, V4ValidationError):
             incomplete = True
 
