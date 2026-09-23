@@ -120,6 +120,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_V4_CARRIER_RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
         run: python scripts/control_v4_replenishment_discovery.py
 
