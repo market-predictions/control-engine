@@ -18,6 +18,8 @@ The former V3.1 runtime workflow remains retired. Retained V3.1 kernel, migratio
 
 The V4 runtime carrier remains activation-bounded to `integration_enabled=false`; target integration remains fail-closed until a separate reviewed carrier extension is justified. There is still one private queue, one Scheduled semantic Runner and no provider fallback, broker, database, second scheduler, retry ledger or second state plane.
 
-Generic Mission-to-queue root-work materialization and candidate-less BUILD execution, including `[control] task overige: ...`, remain separate future product decisions and are not implemented by this stabilization.
+After a trusted `NO_WORK`, the existing carrier workflow may perform a **read-only advisory replenishment discovery** against current private Mission/queue truth. It reuses the existing governed project-replenishment eligibility and opaque approval-snapshot primitives and may expose only public-safe repository plus opaque authority/activation keys. Discovery never creates a candidate, task, approval, Mission revision or queue mutation; the existing project-level owner approval and `ACTIVATE_ROOT_CANDIDATE` path remain the only materialization boundary. Failure of this advisory step falls back to the original carrier result.
 
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V4.md` for the complete V4 public/private boundary and `docs/CONTROL_V4_STABILIZATION_2026_09_09.md` for the current stabilization record.
+Generic new Mission/scope generation and candidate-less BUILD execution, including `[control] task overige: ...`, remain separate product decisions and are not implemented by replenishment discovery.
+
+See `docs/PUBLIC_PRIVATE_BOUNDARY_V4.md` for the complete V4 public/private boundary, `docs/CONTROL_V4_REPLENISHMENT_DISCOVERY.md` for the reversible advisory discovery contract, and `docs/CONTROL_V4_STABILIZATION_2026_09_09.md` for the stabilization record.

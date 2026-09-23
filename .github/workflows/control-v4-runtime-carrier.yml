@@ -113,11 +113,23 @@ jobs:
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
         run: python scripts/control_v4_runtime_carrier.py
 
+      - name: Discover read-only replenishment proposals after NO_WORK
+        if: ${{ steps.carrier.outputs.result_json != '' }}
+        id: replenishment
+        continue-on-error: true
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
+          CONTROL_V4_CARRIER_RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+        run: python scripts/control_v4_replenishment_discovery.py
+
       - name: Publish public-safe carrier result
         if: ${{ always() && steps.carrier.outputs.result_json != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+          ENRICHED_RESULT_JSON: ${{ steps.replenishment.outputs.result_json }}
+          CARRIER_RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
           COMMAND_COMMENT_ID: ${{ github.event.comment.id }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -127,7 +139,8 @@ jobs:
           import os
           import urllib.request
 
-          payload = json.loads(os.environ["RESULT_JSON"])
+          raw = os.environ.get("ENRICHED_RESULT_JSON") or os.environ["CARRIER_RESULT_JSON"]
+          payload = json.loads(raw)
           if not isinstance(payload, dict) or "command_comment_id" in payload:
               raise SystemExit("carrier result envelope invalid")
           payload["command_comment_id"] = int(os.environ["COMMAND_COMMENT_ID"])
