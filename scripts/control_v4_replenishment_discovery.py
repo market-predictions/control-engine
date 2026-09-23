@@ -18,6 +18,7 @@ from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID, assert_public
 from scripts.control_v4_owner_admin import (
     OwnerAdminError,
     _load_private_state,
+    _public_get,
     eligible_unmaterialized_gaps_v4,
     replenishment_approval_payload_v4,
 )
@@ -48,15 +49,26 @@ def project_has_runnable_current_work_v4(
     )
 
 
+def repository_is_publicly_supported_v4(repository: str) -> bool:
+    """Return true only for the already-supported public target boundary."""
+
+    value = _public_get(f"repos/{repository}")
+    return (
+        isinstance(value, Mapping)
+        and value.get("full_name") == repository
+        and value.get("private") is False
+    )
+
+
 def discover_replenishment_proposals_v4(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Return public-safe opaque project snapshots and whether any project was unreadable.
 
-    Discovery is best-effort per project. A malformed/stale project cannot hide a
-    valid proposal for another project, but it is surfaced only as a generic
-    observability marker; private Mission/gap details never enter public output.
+    Discovery is best-effort per project. A malformed/stale/unsupported project
+    cannot hide a valid proposal for another project, but it is surfaced only as a
+    generic observability marker; private Mission/gap details never enter output.
     """
 
     repositories = sorted(
@@ -77,6 +89,9 @@ def discover_replenishment_proposals_v4(
         if project_has_runnable_current_work_v4(queue, mission):
             continue
         try:
+            if not repository_is_publicly_supported_v4(repository):
+                incomplete = True
+                continue
             eligible = eligible_unmaterialized_gaps_v4(queue, bundle, repository)
             if not eligible:
                 continue
