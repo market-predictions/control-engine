@@ -150,6 +150,21 @@ def test_private_or_unsupported_repository_identity_is_never_projected(monkeypat
     assert REPO not in str(enriched)
 
 
+def test_snapshot_rejected_by_existing_approval_gate_is_not_advertised():
+    gaps = [_gap(f"EXAMPLE-GAP-{index:03d}") for index in range(101)]
+    proposals, incomplete = discover_replenishment_proposals_v4(_queue(), _bundle(gaps=gaps))
+    assert proposals == []
+    assert incomplete is True
+
+    enriched = enrich_carrier_result_v4(_no_work(), queue=_queue(), bundle=_bundle(gaps=gaps))
+    assert enriched == {
+        "protocol": RESULT_PROTOCOL_ID,
+        "result": "NO_WORK",
+        "run_id": "v4:test",
+        "replenishment_observability": OBSERVABILITY_INCOMPLETE,
+    }
+
+
 def test_oversized_advisory_projection_falls_back_without_partial_snapshot(monkeypatch):
     keys = [f"{index:064x}" for index in range(900)]
     oversized = [{
