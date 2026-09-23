@@ -26,6 +26,9 @@ from scripts.control_v4_owner_admin import (
 
 OBSERVABILITY_INCOMPLETE = "INCOMPLETE"
 RUNNABLE_PROJECT_PHASES = {"BUILD", "REVIEW", "REPAIR"}
+# Keep generous headroom below GitHub's issue-comment body limit for the public
+# result prefix, command correlation field and future small envelope additions.
+MAX_ADVISORY_RESULT_BYTES = 48_000
 
 
 def project_has_runnable_current_work_v4(
@@ -104,6 +107,12 @@ def discover_replenishment_proposals_v4(
     return proposals, incomplete
 
 
+def _serialized_public_result_size(result: Mapping[str, Any]) -> int:
+    return len(
+        json.dumps(dict(result), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    )
+
+
 def enrich_carrier_result_v4(
     result: Mapping[str, Any],
     *,
@@ -127,6 +136,13 @@ def enrich_carrier_result_v4(
         enriched["replenishment_observability"] = OBSERVABILITY_INCOMPLETE
 
     assert_public_safe(enriched)
+    if _serialized_public_result_size(enriched) > MAX_ADVISORY_RESULT_BYTES:
+        # A partial eligible-key set must never look like an exact project snapshot.
+        # Drop advisory proposals completely and retain only generic observability.
+        bounded = dict(result)
+        bounded["replenishment_observability"] = OBSERVABILITY_INCOMPLETE
+        assert_public_safe(bounded)
+        return bounded
     return enriched
 
 
