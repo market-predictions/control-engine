@@ -24,6 +24,28 @@ from scripts.control_v4_owner_admin import (
 
 
 OBSERVABILITY_INCOMPLETE = "INCOMPLETE"
+RUNNABLE_PROJECT_PHASES = {"BUILD", "REVIEW", "REPAIR"}
+
+
+def project_has_runnable_current_work_v4(
+    queue: Mapping[str, Any],
+    mission: Mapping[str, Any],
+) -> bool:
+    """Conservatively detect current project work that should finish before replenishment.
+
+    In particular, an invocation-local YIELD leaves the canonical task ACTIVE. A
+    later same-invocation NO_WORK must not be misread as project-level exhaustion.
+    """
+
+    return any(
+        task.get("mission_id") == mission.get("mission_id")
+        and task.get("mission_revision") == mission.get("mission_revision")
+        and task.get("repository") == mission.get("repository")
+        and task.get("status") == "ACTIVE"
+        and task.get("phase") in RUNNABLE_PROJECT_PHASES
+        for task in queue.get("tasks", [])
+        if isinstance(task, Mapping)
+    )
 
 
 def discover_replenishment_proposals_v4(
@@ -47,6 +69,13 @@ def discover_replenishment_proposals_v4(
     proposals: list[dict[str, Any]] = []
     incomplete = False
     for repository in repositories:
+        missions = [mission for mission in bundle.missions if mission.get("repository") == repository]
+        if len(missions) != 1:
+            incomplete = True
+            continue
+        mission = missions[0]
+        if project_has_runnable_current_work_v4(queue, mission):
+            continue
         try:
             eligible = eligible_unmaterialized_gaps_v4(queue, bundle, repository)
             if not eligible:
