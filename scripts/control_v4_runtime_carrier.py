@@ -565,16 +565,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         task_id = lock.get("task_id")
         if not isinstance(task_id, str):
             raise CarrierError("current private lock task invalid")
-        task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
-        candidate = task.get("candidate")
-        live_candidate = None
-        if task.get("phase") == "REPAIR" and isinstance(candidate, Mapping):
-            live_candidate = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
+        # A same-run TICK is holder revalidation only. Target identity is read
+        # by the Runner after this trusted WORK and immediately before a target
+        # effect, so target-network availability must not gate holder proof.
         work_result = safe_work_capsule(
             queue,
             task_id=task_id,
             run_id=command["run_id"],
-            live_candidate=live_candidate,
         )
         return state, work_result
 
