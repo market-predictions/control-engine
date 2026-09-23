@@ -12,11 +12,11 @@ import json
 import os
 from typing import Any, Mapping
 
+from control_engine.v4_authority_io import V4AuthorityBundle
 from control_engine.v4_contracts import V4ValidationError
 from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID, assert_public_safe, strict_json_object
 from scripts.control_v4_owner_admin import (
     OwnerAdminError,
-    V4AuthorityBundle,
     _load_private_state,
     eligible_unmaterialized_gaps_v4,
     replenishment_approval_payload_v4,
