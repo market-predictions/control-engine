@@ -113,11 +113,20 @@ jobs:
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
         run: python scripts/control_v4_runtime_carrier.py
 
+      - name: Discover governed replenishment after NO_WORK
+        if: ${{ steps.carrier.outputs.ok == 'true' && steps.carrier.outputs.result_json != '' }}
+        id: replenishment
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_V4_CARRIER_RESULT: ${{ steps.carrier.outputs.result_json }}
+        run: python scripts/control_v4_replenishment_snapshot.py
+
       - name: Publish public-safe carrier result
-        if: ${{ always() && steps.carrier.outputs.result_json != '' }}
+        if: ${{ always() && (steps.replenishment.outputs.result_json != '' || steps.carrier.outputs.result_json != '') }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+          RESULT_JSON: ${{ steps.replenishment.outputs.result_json != '' && steps.replenishment.outputs.result_json || steps.carrier.outputs.result_json }}
           COMMAND_COMMENT_ID: ${{ github.event.comment.id }}
           REPOSITORY: ${{ github.repository }}
         run: |
