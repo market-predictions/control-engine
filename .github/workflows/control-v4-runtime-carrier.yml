@@ -113,11 +113,31 @@ jobs:
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
         run: python scripts/control_v4_runtime_carrier.py
 
+      - name: Create read-only private replenishment capability
+        if: ${{ steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"NO_WORK"') }}
+        id: replenishment-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: read
+
+      - name: Discover governed replenishment after NO_WORK
+        if: ${{ steps.replenishment-token.outputs.token != '' }}
+        id: replenishment
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.replenishment-token.outputs.token }}
+          CONTROL_V4_CARRIER_RESULT: ${{ steps.carrier.outputs.result_json }}
+        run: python scripts/control_v4_replenishment_snapshot.py
+
       - name: Publish public-safe carrier result
-        if: ${{ always() && steps.carrier.outputs.result_json != '' }}
+        if: ${{ always() && (steps.replenishment.outputs.result_json != '' || steps.carrier.outputs.result_json != '') }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+          RESULT_JSON: ${{ steps.replenishment.outputs.result_json != '' && steps.replenishment.outputs.result_json || steps.carrier.outputs.result_json }}
           COMMAND_COMMENT_ID: ${{ github.event.comment.id }}
           REPOSITORY: ${{ github.repository }}
         run: |
