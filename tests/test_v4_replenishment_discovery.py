@@ -4,6 +4,7 @@ from control_engine.v4_authority_io import V4AuthorityBundle
 from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID
 from scripts import control_v4_replenishment_discovery as discovery
 from scripts.control_v4_replenishment_discovery import (
+    MAX_ADVISORY_RESULT_BYTES,
     OBSERVABILITY_INCOMPLETE,
     discover_replenishment_proposals_v4,
     enrich_carrier_result_v4,
@@ -147,6 +148,30 @@ def test_private_or_unsupported_repository_identity_is_never_projected(monkeypat
         "replenishment_observability": OBSERVABILITY_INCOMPLETE,
     }
     assert REPO not in str(enriched)
+
+
+def test_oversized_advisory_projection_falls_back_without_partial_snapshot(monkeypatch):
+    keys = [f"{index:064x}" for index in range(900)]
+    oversized = [{
+        "repository": REPO,
+        "authority_key": "a" * 64,
+        "eligible_activation_keys": keys,
+    }]
+    assert len(str(oversized).encode("utf-8")) > MAX_ADVISORY_RESULT_BYTES
+    monkeypatch.setattr(
+        discovery,
+        "discover_replenishment_proposals_v4",
+        lambda _queue, _bundle: (oversized, False),
+    )
+
+    enriched = enrich_carrier_result_v4(_no_work(), queue=_queue(), bundle=_bundle())
+    assert enriched == {
+        "protocol": RESULT_PROTOCOL_ID,
+        "result": "NO_WORK",
+        "run_id": "v4:test",
+        "replenishment_observability": OBSERVABILITY_INCOMPLETE,
+    }
+    assert "replenishment_proposals" not in enriched
 
 
 def test_no_eligible_gap_keeps_plain_no_work_result():
