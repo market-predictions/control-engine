@@ -24,14 +24,14 @@ def _gap(gap_id: str, *, state: str = "OPEN") -> dict:
     }
 
 
-def _bundle(*, gap_state: str = "OPEN") -> V4AuthorityBundle:
+def _bundle(*, gap_state: str = "OPEN", gaps: list[dict] | None = None) -> V4AuthorityBundle:
     mission = {
         "protocol_id": "MISSION_CONTRACT_V4",
         "mission_id": "EXAMPLE",
         "mission_revision": "2026-09-23-r1",
         "repository": REPO,
         "desired_outcome": "Complete the governed example outcome.",
-        "gaps": [_gap("EXAMPLE-GAP-10", state=gap_state)],
+        "gaps": list(gaps or [_gap("EXAMPLE-GAP-10", state=gap_state)]),
         "authority_boundaries": ["No production authority."],
         "principal_manual_relay_count": 0,
     }
@@ -59,6 +59,37 @@ def _queue() -> dict:
     }
 
 
+def _active_review_task(gap_id: str) -> dict:
+    candidate = {
+        "candidate_sha": "c" * 40,
+        "candidate_pr_number": 7,
+        "candidate_head_branch": "control/example-active",
+        "expected_base_branch": "main",
+        "expected_base_sha": "d" * 40,
+    }
+    return {
+        "task_id": f"MISSION--EXAMPLE--2026-09-23-r1--{gap_id}",
+        "mission_id": "EXAMPLE",
+        "mission_revision": "2026-09-23-r1",
+        "mission_contract_blob_sha": MISSION_SHA,
+        "repository_authority_blob_sha": AUTHORITY_SHA,
+        "gap_id": gap_id,
+        "repository": REPO,
+        "acceptance": ["Exact acceptance."],
+        "integration_policy": "HOLD_AFTER_PASS",
+        "review_policy": "INTERNAL",
+        "convergence_required": False,
+        "status": "ACTIVE",
+        "phase": "REVIEW",
+        "candidate": candidate,
+        "last_review": None,
+        "external_review": None,
+        "blocker": None,
+        "created_at": "2026-09-23T18:00:00Z",
+        "updated_at": "2026-09-23T18:00:00Z",
+    }
+
+
 def _no_work() -> dict:
     return {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": "v4:test"}
 
@@ -80,6 +111,18 @@ def test_no_work_discovers_only_opaque_current_project_snapshot():
     assert "gap_id" not in rendered
     assert "acceptance" not in rendered
     assert "EXAMPLE-GAP-10" not in rendered
+
+
+def test_invocation_local_no_work_does_not_replenish_project_with_active_work():
+    gaps = [_gap("EXAMPLE-GAP-10"), _gap("EXAMPLE-GAP-20")]
+    bundle = _bundle(gaps=gaps)
+    queue = _queue()
+    queue["tasks"].append(_active_review_task("EXAMPLE-GAP-10"))
+
+    proposals, incomplete = discover_replenishment_proposals_v4(queue, bundle)
+    assert incomplete is False
+    assert proposals == []
+    assert enrich_carrier_result_v4(_no_work(), queue=queue, bundle=bundle) == _no_work()
 
 
 def test_no_eligible_gap_keeps_plain_no_work_result():
