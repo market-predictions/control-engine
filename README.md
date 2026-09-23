@@ -12,12 +12,14 @@ Runtime writes use one exact atomic GraphQL `updateRefs` compare-and-swap. That 
 
 TICK is deliberately small: recover an expired holder when required, select/acquire one eligible task, atomically persist ownership, and return the bounded public-safe `WORK` capsule. It performs no target-repository or pull-request network verification after ownership has been acquired. Target/candidate checks live at semantic EVENT boundaries where they can govern a state transition. EVENT transitions preserve exact holder identity and release accepted holders atomically with the semantic queue change.
 
+After a successful canonical `NO_WORK`, a separate read-only discovery step may project already-authorized, currently eligible unmaterialized OPEN Mission work as opaque `replenishment_proposals`. Discovery does not mutate the queue or Mission authority and cannot create a candidate or task. The existing exact owner-authored `CONTROL_V4_REPLENISH_APPROVAL` plus `ACTIVATE_ROOT_CANDIDATE` path remains the sole task-materialization route.
+
 Public issue comments are transport/audit evidence only. They are never a queue, Mission, status plane or authority source. Runtime responses contain only a bounded public-safe projection and opaque task token; raw private queue, Mission, acceptance, authority and review-state content is never mirrored into this repository or public issue transport.
 
 The former V3.1 runtime workflow remains retired. Retained V3.1 kernel, migration and validation code exists only while concrete current dependencies remain. Obsolete V4-40 freeze helpers and the superseded post-CAS retry/readback mechanism are not current runtime code.
 
 The V4 runtime carrier remains activation-bounded to `integration_enabled=false`; target integration remains fail-closed until a separate reviewed carrier extension is justified. There is still one private queue, one Scheduled semantic Runner and no provider fallback, broker, database, second scheduler, retry ledger or second state plane.
 
-Generic Mission-to-queue root-work materialization and candidate-less BUILD execution, including `[control] task overige: ...`, remain separate future product decisions and are not implemented by this stabilization.
+Generic Mission creation, autonomous scope invention and candidate-less BUILD execution, including `[control] task overige: ...` outside already-committed eligible Mission scope, remain separate product decisions and are not implemented by replenishment discovery.
 
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V4.md` for the complete V4 public/private boundary and `docs/CONTROL_V4_STABILIZATION_2026_09_09.md` for the current stabilization record.
+See `docs/PUBLIC_PRIVATE_BOUNDARY_V4.md` for the complete V4 public/private boundary, `docs/CONTROL_V4_REPLENISHMENT_DISCOVERY.md` for the discovery/approval boundary and rollback path, and `docs/CONTROL_V4_STABILIZATION_2026_09_09.md` for the stabilization record.
