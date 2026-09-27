@@ -22,11 +22,12 @@ private CAS. Each activation must remain a member of the frozen key set and stil
 be currently eligible. A gap that becomes eligible only later therefore cannot
 borrow authority from the older approval.
 
-When the exact current Mission directly supersedes the queued project revision,
+When the exact current Mission supersedes the current private authority revision,
 ACTIVATE_ROOT_CANDIDATE may reconcile only lock-free, non-DONE tasks that belong
-to that exact superseded revision and whose gaps are explicitly RETIRED by the
-current Mission. Historical DONE evidence and unrelated authority drift remain
-fail-closed under the unchanged global authority validator.
+either to that exact directly superseded revision or to a historical revision
+explicitly bound by current V4_DONE carry-forward evidence, and whose gaps are
+explicitly RETIRED by the current Mission. Historical DONE evidence and unrelated
+authority drift remain fail-closed under the unchanged global authority validator.
 
 It never grants standing integration authority, never changes private main, and
 never creates a second queue/state plane. Every queue mutation uses the same
@@ -482,6 +483,14 @@ def _replenishment_queue_v4(
         assert_v4_queue_bound_to_authority(queue, bundle)
         return deepcopy(queue)
 
+    recognized_revisions = {supersedes_revision}
+    for item in mission.get("done_carry_forward", []):
+        if item.get("source_fact_kind") != "V4_DONE":
+            continue
+        source_revision = item.get("source_mission_revision")
+        if isinstance(source_revision, str) and source_revision:
+            recognized_revisions.add(source_revision)
+
     retired_gap_ids = {
         gap["gap_id"]
         for gap in mission["gaps"]
@@ -492,12 +501,12 @@ def _replenishment_queue_v4(
         if (
             task.get("mission_id") == mission.get("mission_id")
             and task.get("repository") == repository
-            and task.get("mission_revision") == supersedes_revision
+            and task.get("mission_revision") in recognized_revisions
             and task.get("status") != "DONE"
         ):
             if task.get("gap_id") not in retired_gap_ids:
                 raise OwnerAdminError(
-                    "directly superseded nonterminal task is not explicitly RETIRED by current Mission"
+                    "recognized historical nonterminal task is not explicitly RETIRED by current Mission"
                 )
             removable_ids.add(task["task_id"])
 
