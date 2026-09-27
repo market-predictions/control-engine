@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from control_engine.v4_authority_io import V4AuthorityBundle
-from control_engine.v4_contracts import V4ValidationError
+from control_engine.v4_contracts import V4ValidationError, canonical_task_sha256
 from scripts.control_v4_owner_admin import (
     OwnerAdminError,
     activate_root_candidate_v4,
@@ -190,6 +190,58 @@ def test_replenishment_retires_only_directly_superseded_nonterminal_project_task
     assert task["mission_revision"] == CURRENT_REVISION
     assert task["status"] == "ACTIVE"
     assert task["phase"] == "REVIEW"
+
+
+def test_replenishment_retires_nonterminal_task_from_explicitly_carried_historical_revision():
+    bundle = _bundle()
+    mission = bundle.missions[0]
+    historical_revision = "2026-09-14-r4"
+    historical_gap = "CARRY-GAP"
+    mission["gaps"].append(
+        {
+            "gap_id": historical_gap,
+            "gap_state": "RETIRED",
+            "depends_on": [],
+            "repository": TARGET_REPO,
+            "acceptance": ["Historical completed evidence."],
+            "integration_policy": "HOLD_AFTER_PASS",
+            "review_policy": "EXTERNAL",
+        }
+    )
+
+    done = _stale_task()
+    done["mission_revision"] = historical_revision
+    done["gap_id"] = historical_gap
+    done["task_id"] = f"MISSION--{TARGET_MISSION}--{historical_revision}--{historical_gap}"
+    done["acceptance"] = ["Historical completed evidence."]
+    done = _make_done(done)
+    mission["done_carry_forward"] = [
+        {
+            "protocol_id": "DONE_CARRY_FORWARD",
+            "target_gap_id": historical_gap,
+            "source_mission_revision": historical_revision,
+            "source_gap_id": historical_gap,
+            "source_fact_kind": "V4_DONE",
+            "source_fact_ref": done["task_id"],
+            "source_task_sha256": canonical_task_sha256(done),
+        }
+    ]
+
+    stale = _stale_task()
+    stale["mission_revision"] = historical_revision
+    stale["task_id"] = f"MISSION--{TARGET_MISSION}--{historical_revision}--OLD-GAP"
+    queue = _queue(done, stale)
+    approval = replenishment_approval_payload_v4(queue, bundle, TARGET_REPO)
+    command = _command(bundle)
+
+    assert command["activation_key"] in approval["eligible_activation_keys"]
+    result = activate_root_candidate_v4(queue, bundle, command, approval, now=NOW)
+
+    assert [task["gap_id"] for task in result["tasks"]] == [historical_gap, CURRENT_GAP]
+    assert result["tasks"][0]["status"] == "DONE"
+    assert result["tasks"][1]["mission_revision"] == CURRENT_REVISION
+    assert result["tasks"][1]["status"] == "ACTIVE"
+    assert result["tasks"][1]["phase"] == "REVIEW"
 
 
 def test_replenishment_does_not_hide_unrelated_stale_authority_drift():
