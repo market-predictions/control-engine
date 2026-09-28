@@ -114,7 +114,7 @@ jobs:
         run: python scripts/control_v4_runtime_carrier.py
 
       - name: Diagnose anonymous REST budget after safe carrier error
-        if: ${{ steps.carrier.outputs.ok != 'true' }}
+        if: ${{ steps.admission.outputs.admitted == 'true' && steps.carrier.outputs.ok != 'true' }}
         run: |
           python3 - <<'PY'
           import json
