@@ -10,7 +10,7 @@ def test_failclosed_transport_diagnostic_is_post_carrier_read_only_and_bounded()
         '- name: Diagnose anonymous REST budget after safe carrier error', 1
     )[1].split('- name: Create read-only private replenishment capability', 1)[0]
 
-    assert "if: ${{ steps.carrier.outputs.ok != 'true' }}" in diagnostic
+    assert "if: ${{ steps.admission.outputs.admitted == 'true' && steps.carrier.outputs.ok != 'true' }}" in diagnostic
     assert 'https://api.github.com/rate_limit' in diagnostic
     assert 'CONTROL_V4_ANON_RATE_LIMIT=' in diagnostic
     assert 'Authorization' not in diagnostic
