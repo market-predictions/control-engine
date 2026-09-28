@@ -113,6 +113,47 @@ jobs:
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
         run: python scripts/control_v4_runtime_carrier.py
 
+      - name: Diagnose anonymous REST budget after safe carrier error
+        if: ${{ steps.admission.outputs.admitted == 'true' && steps.carrier.outputs.ok != 'true' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+
+          request = urllib.request.Request(
+              "https://api.github.com/rate_limit",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "control-v4-anonymous-rate-diagnostic",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  payload = json.load(response)
+              core = ((payload.get("resources") or {}).get("core") or {})
+              limit = core.get("limit")
+              remaining = core.get("remaining")
+              reset = core.get("reset")
+              if all(isinstance(value, int) for value in (limit, remaining, reset)):
+                  print(
+                      "CONTROL_V4_ANON_RATE_LIMIT="
+                      f"limit:{limit},remaining:{remaining},reset:{reset}"
+                  )
+              else:
+                  print("CONTROL_V4_ANON_RATE_LIMIT=UNAVAILABLE")
+          except urllib.error.HTTPError as exc:
+              remaining = exc.headers.get("x-ratelimit-remaining", "unknown")
+              reset = exc.headers.get("x-ratelimit-reset", "unknown")
+              print(
+                  "CONTROL_V4_ANON_RATE_LIMIT="
+                  f"HTTP_{exc.code},remaining:{remaining},reset:{reset}"
+              )
+          except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+              print("CONTROL_V4_ANON_RATE_LIMIT=UNAVAILABLE")
+          PY
+
       - name: Create read-only private replenishment capability
         if: ${{ steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"NO_WORK"') }}
         id: replenishment-token
