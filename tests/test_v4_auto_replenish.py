@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -93,6 +92,26 @@ def public_pr(number=3, body=None):
         "head": {"sha": HEAD, "ref": "control/mission-agent-r2-gap-05"},
         "base": {"sha": BASE, "ref": "main"},
     }
+
+
+def test_private_policy_marker_is_exact_line_and_absence_keeps_auto_path_inert(monkeypatch):
+    state = {"main_sha": "1" * 40}
+    monkeypatch.setattr(carrier, "_text_file", lambda path, ref: ("# policy\n", "a" * 40))
+    assert auto._auto_materialization_policy_enabled(state) is False
+
+    monkeypatch.setattr(
+        carrier,
+        "_text_file",
+        lambda path, ref: (f"# policy\n{auto.AUTO_MATERIALIZATION_POLICY}\n", "a" * 40),
+    )
+    assert auto._auto_materialization_policy_enabled(state) is True
+
+    monkeypatch.setattr(
+        carrier,
+        "_text_file",
+        lambda path, ref: (f"prefix-{auto.AUTO_MATERIALIZATION_POLICY}-suffix\n", "a" * 40),
+    )
+    assert auto._auto_materialization_policy_enabled(state) is False
 
 
 def test_exact_current_mission_gap_candidate_is_discovered_and_target_revalidated(monkeypatch):
@@ -202,6 +221,22 @@ def test_no_exact_candidate_means_no_queue_write(monkeypatch):
     monkeypatch.setattr(auto, "_candidate_command", lambda *args: None)
     monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: pytest.fail("must not write"))
     assert auto._materialize_one(state, b) is None
+
+
+def test_main_policy_gate_uses_proposals_without_materialization_when_not_adopted(monkeypatch):
+    result = {"protocol": auto.RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": "v4:test"}
+    state = {"main_sha": "1" * 40, "queue": queue()}
+    b = bundle()
+    outputs = []
+    monkeypatch.setenv("CONTROL_V4_CARRIER_RESULT", '{"protocol":"CONTROL_V4_RUNTIME_RESULT_V1","result":"NO_WORK","run_id":"v4:test"}')
+    monkeypatch.setattr(carrier, "_load_current", lambda: state)
+    monkeypatch.setattr(carrier, "_load_authority_bundle", lambda _sha: b)
+    monkeypatch.setattr(auto, "_auto_materialization_policy_enabled", lambda _state: False)
+    monkeypatch.setattr(auto, "_materialize_one", lambda *_args: pytest.fail("must remain inert before private policy adoption"))
+    monkeypatch.setattr(auto, "_proposal_fallback", lambda *_args: result)
+    monkeypatch.setattr(auto, "_set_output", lambda value: outputs.append(dict(value)))
+    assert auto.main() == 0
+    assert outputs == [result]
 
 
 def test_workflow_reuses_admitted_private_write_capability_and_current_tick_fences():
