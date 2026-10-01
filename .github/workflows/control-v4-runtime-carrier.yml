@@ -154,25 +154,18 @@ jobs:
               print("CONTROL_V4_ANON_RATE_LIMIT=UNAVAILABLE")
           PY
 
-      - name: Create read-only private replenishment capability
+      - name: Auto-materialize governed exact candidate after NO_WORK
         if: ${{ steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"NO_WORK"') }}
-        id: replenishment-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
-          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
-          owner: market-predictions
-          repositories: control-plane
-          permission-contents: read
-
-      - name: Discover governed replenishment after NO_WORK
-        if: ${{ steps.replenishment-token.outputs.token != '' }}
         id: replenishment
         env:
           PYTHONPATH: ${{ github.workspace }}
-          CONTROL_PLANE_TOKEN: ${{ steps.replenishment-token.outputs.token }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
+          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
+          CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
           CONTROL_V4_CARRIER_RESULT: ${{ steps.carrier.outputs.result_json }}
-        run: python scripts/control_v4_replenishment_snapshot.py
+        run: python scripts/control_v4_auto_replenish.py
 
       - name: Publish public-safe carrier result
         if: ${{ always() && (steps.replenishment.outputs.result_json != '' || steps.carrier.outputs.result_json != '') }}

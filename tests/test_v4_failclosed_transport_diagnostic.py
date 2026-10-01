@@ -8,7 +8,7 @@ def test_failclosed_transport_diagnostic_is_post_carrier_read_only_and_bounded()
     text = WORKFLOW.read_text(encoding='utf-8')
     diagnostic = text.split(
         '- name: Diagnose anonymous REST budget after safe carrier error', 1
-    )[1].split('- name: Create read-only private replenishment capability', 1)[0]
+    )[1].split('- name: Auto-materialize governed exact candidate after NO_WORK', 1)[0]
 
     assert "if: ${{ steps.admission.outputs.admitted == 'true' && steps.carrier.outputs.ok != 'true' }}" in diagnostic
     assert 'https://api.github.com/rate_limit' in diagnostic
@@ -29,9 +29,10 @@ def test_failclosed_transport_diagnostic_does_not_change_carrier_result_contract
     text = WORKFLOW.read_text(encoding='utf-8')
     carrier_index = text.index('- name: Execute bounded typed V4 runtime carrier')
     diagnostic_index = text.index('- name: Diagnose anonymous REST budget after safe carrier error')
+    replenish_index = text.index('- name: Auto-materialize governed exact candidate after NO_WORK')
     publish_index = text.index('- name: Publish public-safe carrier result')
     fail_index = text.index('- name: Fail workflow after safe error publication')
 
-    assert carrier_index < diagnostic_index < publish_index < fail_index
+    assert carrier_index < diagnostic_index < replenish_index < publish_index < fail_index
     assert 'RESULT_JSON: ${{ steps.replenishment.outputs.result_json != \'\' && steps.replenishment.outputs.result_json || steps.carrier.outputs.result_json }}' in text
     assert "if: ${{ steps.carrier.outputs.ok != 'true' }}\n        run: exit 1" in text

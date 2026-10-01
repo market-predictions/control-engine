@@ -29,6 +29,8 @@ RUNNER_PROMPT_PATH = "control/CONTROL_RUNNER_V4_PROMPT.md"
 MISSION_README_PATH = "control/missions/README.md"
 CHANGELOG_PATH = "control/CHANGELOG.md"
 COHERENCE_REPAIR_PATH = "control/CONTROL_V4_COHERENCE_REPAIR_2026_09_05.md"
+REPLENISHMENT_POLICY_PATH = "control/CONTROL_V4_REPLENISHMENT_DISCOVERY.md"
+AUTO_MATERIALIZATION_POLICY = "auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1"
 LEGACY_CURRENT_PATHS = {
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V3_1.md",
     "control/CONTROL_RUNTIME_AUTHORITY_V3_1.json",
@@ -41,6 +43,7 @@ NORMATIVE_DOCTRINE_PATHS = {
     "control/CONTROL_V4_ROADMAP.md",
     "control/CONTROL_V4_CONVERGENCE_AND_DEBT_RETIREMENT_PLAN.md",
     "control/CONTROL_V4_SURFACE_INVENTORY.md",
+    REPLENISHMENT_POLICY_PATH,
     MISSION_README_PATH,
     CHANGELOG_PATH,
 }
@@ -73,7 +76,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "b3d671767231ec534c6e22eb7a0c6c4c2875605f",
     }
 )
-REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f0ea82e863bd18170158286c92370bcf7761b374"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "19918dd8403a44f87f2020df859abbddc41a3390"
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
@@ -356,6 +359,10 @@ def validate_current_surface(root: Path, entries) -> None:
     for path in sorted(CURRENT_SURFACE_PATHS):
         _regular_blob(entries, path)
 
+    replenishment_policy = _text(root, entries, REPLENISHMENT_POLICY_PATH)
+    if AUTO_MATERIALIZATION_POLICY not in replenishment_policy.splitlines():
+        raise ValidationError("private replenishment policy lacks exact auto-materialization authority marker")
+
     mission_readme = _text(root, entries, MISSION_README_PATH)
     required = ("Mission Contract Registry — V4", "CONTROL_AUTONOMY_ARCHITECTURE_V4.md", "MISSION_CONTRACT_V4", "review_policy")
     if any(marker not in mission_readme for marker in required):
@@ -471,6 +478,7 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
         "runner_config=control/CONTROL_RUNNER_V4.json",
         "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
+        "replenishment_policy=control/CONTROL_V4_REPLENISHMENT_DISCOVERY.md",
         "fresh live projection",
         "STATUS_OBSERVABILITY_INCOMPLETE",
         "### Canonical status dashboard presentation contract",
@@ -482,10 +490,12 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         "APPROVAL NEEDED — A1 — <workstream>",
         "Approval is one-shot and action-scoped.",
         "The conversation is an approval interaction surface, not persistent semantic authority.",
-        "Queue replenishment needed",
-        "project_replenishment_approval_scope=CURRENT_ELIGIBLE_SNAPSHOT",
-        "project_replenishment_task_by_task_approval=false",
-        "project_replenishment_future_authority=false",
+        "Queue replenishment candidate missing",
+        "## Automatic candidate materialization",
+        AUTO_MATERIALIZATION_POLICY,
+        "auto_materialization_requires_exact_existing_candidate=true",
+        "auto_materialization_max_per_no_work=1",
+        "candidate_less_build_for_replenishment=false",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
         "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",
@@ -501,11 +511,18 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         "owner_approval_is_persistent_semantic_authority=false",
     }
     if any(marker not in text for marker in required):
-        raise ValidationError("SYSTEM_INDEX lacks current V4 live-first/status-dashboard authority markers")
+        raise ValidationError("SYSTEM_INDEX lacks current V4 live-first/status-dashboard/replenishment authority markers")
 
-    for stale in ("# Control — Canonical System Index V3.1", "Control Autonomy V3.1 supersedes conflicting", "Until cutover, V3.1 above is current truth."):
+    for stale in (
+        "# Control — Canonical System Index V3.1",
+        "Control Autonomy V3.1 supersedes conflicting",
+        "Until cutover, V3.1 above is current truth.",
+        "project_replenishment_approval_scope=",
+        "project_replenishment_task_by_task_approval=",
+        "project_replenishment_future_authority=",
+    ):
         if stale in text:
-            raise ValidationError("SYSTEM_INDEX retains stale V3.1/current-unadopted routing authority")
+            raise ValidationError("SYSTEM_INDEX retains stale V3.1 or approval-gated replenishment authority")
 
 
 def validate_candidate(candidate_root: Path, base_root: Path) -> None:
