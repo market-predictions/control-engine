@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+"""Bounded post-NO_WORK materialization of already-authorized exact candidates.
+
+This is not a planner. It may materialize at most one current Mission OPEN gap
+per admitted TICK, and only when that gap is already dependency-eligible and has
+exactly one public, open, mergeable PR explicitly bound to the current Mission
+revision and gap. Otherwise the existing public-safe replenishment proposal path
+remains unchanged.
+"""
+
+from datetime import datetime, timezone
+import os
+from typing import Any, Mapping
+
+from control_engine.v4_contracts import V4ValidationError
+from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID, RuntimeProtocolError, assert_public_safe, strict_json_object
+from scripts import control_v4_owner_admin as owner_admin
+from scripts import control_v4_replenishment_snapshot as snapshot
+from scripts import control_v4_runtime_carrier as runtime_carrier
+
+
+class AutoReplenishError(RuntimeError):
+    pass
+
+
+def _exact_public_repository(repository: str) -> None:
+    value = owner_admin._public_get(f"repos/{repository}")
+    if not isinstance(value, Mapping) or value.get("full_name") != repository or value.get("private") is not False:
+        raise AutoReplenishError("replenishment target repository is not exact public repository")
+
+
+def _candidate_command(
+    mission: Mapping[str, Any],
+    gap: Mapping[str, Any],
+    bundle: Any,
+) -> dict[str, Any] | None:
+    repository = gap["repository"]
+    _exact_public_repository(repository)
+    pulls = owner_admin._public_get(
+        f"repos/{repository}/pulls?state=open&base=main&per_page=100&sort=updated&direction=desc"
+    )
+    if not isinstance(pulls, list):
+        raise AutoReplenishError("replenishment candidate listing invalid")
+    if len(pulls) >= 100:
+        raise AutoReplenishError("replenishment candidate listing exceeds bounded read")
+
+    mission_marker = f"Mission: `{mission['mission_id']}` revision `{mission['mission_revision']}`"
+    gap_marker = f"Gap: `{gap['gap_id']}`"
+    matches = []
+    for item in pulls:
+        if not isinstance(item, Mapping):
+            continue
+        body = item.get("body")
+        if isinstance(body, str) and mission_marker in body and gap_marker in body:
+            matches.append(item)
+    if len(matches) > 1:
+        raise AutoReplenishError("multiple exact replenishment candidates claim the same governed gap")
+    if not matches:
+        return None
+
+    pr_number = matches[0].get("number")
+    if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number < 1:
+        raise AutoReplenishError("replenishment candidate PR identity invalid")
+    pr = owner_admin._public_get(f"repos/{repository}/pulls/{pr_number}")
+    if not isinstance(pr, Mapping):
+        raise AutoReplenishError("replenishment candidate unavailable")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if base.get("ref") != "main":
+        raise AutoReplenishError("replenishment candidate must target main")
+    command = {
+        "operation": "ACTIVATE_ROOT_CANDIDATE",
+        "activation_key": owner_admin.activation_key_v4(mission, gap, bundle),
+        "repository": repository,
+        "candidate_pr_number": pr_number,
+        "candidate_sha": head.get("sha"),
+        "candidate_head_branch": head.get("ref"),
+        "expected_base_branch": base.get("ref"),
+        "expected_base_sha": base.get("sha"),
+    }
+    target = owner_admin._public_target(command)
+    owner_admin.validate_public_target(command, target)
+    return command
+
+
+def _materialize_one(state: Mapping[str, Any], bundle: Any) -> dict[str, Any] | None:
+    queue = state["queue"]
+    repositories = sorted(
+        {
+            mission.get("repository")
+            for mission in bundle.missions
+            if isinstance(mission, Mapping) and isinstance(mission.get("repository"), str)
+        }
+    )
+    for repository in repositories:
+        eligible = owner_admin.eligible_unmaterialized_gaps_v4(queue, bundle, repository)
+        for mission, gap in eligible:
+            command = _candidate_command(mission, gap, bundle)
+            if command is None:
+                continue
+            approval = owner_admin.replenishment_approval_payload_v4(queue, bundle, repository)
+            next_queue = owner_admin.activate_root_candidate_v4(
+                queue,
+                bundle,
+                command,
+                approval,
+                now=datetime.now(timezone.utc),
+            )
+            # Re-read exact public target immediately before the existing runtime
+            # CAS. The CAS itself rechecks private main/runtime/queue + TICK age.
+            owner_admin.validate_public_target(command, owner_admin._public_target(command))
+            runtime_carrier._write_queue_exact(state, next_queue, reason="auto-replenish")
+            print(
+                "CONTROL_V4_AUTO_REPLENISH=MATERIALIZED "
+                f"{command['repository']}#{command['candidate_pr_number']}@{command['candidate_sha']}"
+            )
+            return command
+    return None
+
+
+def _assert_proposal_targets_public(result: Mapping[str, Any]) -> None:
+    proposals = result.get("replenishment_proposals", [])
+    if not isinstance(proposals, list):
+        raise AutoReplenishError("replenishment proposal envelope invalid")
+    for proposal in proposals:
+        if not isinstance(proposal, Mapping):
+            raise AutoReplenishError("replenishment proposal invalid")
+        repository = proposal.get("repository")
+        if not isinstance(repository, str) or not repository:
+            raise AutoReplenishError("replenishment repository identity invalid")
+        _exact_public_repository(repository)
+
+
+def _set_output(result: Mapping[str, Any]) -> None:
+    snapshot._set_output(result)
+
+
+def main() -> int:
+    try:
+        result = strict_json_object(os.environ.get("CONTROL_V4_CARRIER_RESULT", ""))
+        assert_public_safe(result)
+        if result.get("protocol") != RESULT_PROTOCOL_ID:
+            raise RuntimeProtocolError("carrier result protocol invalid")
+        if result.get("result") != "NO_WORK":
+            _set_output(result)
+            return 0
+
+        state = runtime_carrier._load_current()
+        bundle = runtime_carrier._load_authority_bundle(state["main_sha"])
+        materialized = _materialize_one(state, bundle)
+        if materialized is not None:
+            # Keep the already-published wire contract simple: this invocation
+            # still observed NO_WORK before the bounded post-result materialization.
+            # The next fresh TICK acquires from current canonical queue truth.
+            _set_output(result)
+            return 0
+
+        enriched = snapshot.enrich_no_work_result_v4(result, state["queue"], bundle)
+        _assert_proposal_targets_public(enriched)
+        _set_output(enriched)
+        return 0
+    except (
+        AutoReplenishError,
+        RuntimeProtocolError,
+        V4ValidationError,
+        owner_admin.OwnerAdminError,
+        runtime_carrier.CarrierError,
+    ):
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
