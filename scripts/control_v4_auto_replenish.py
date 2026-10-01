@@ -3,10 +3,10 @@ from __future__ import annotations
 """Bounded post-NO_WORK materialization of already-authorized exact candidates.
 
 This is not a planner. It may materialize at most one current Mission OPEN gap
-per admitted TICK, and only when that gap is already dependency-eligible and has
-exactly one public, open, mergeable PR explicitly bound to the current Mission
-revision and gap. Otherwise the existing public-safe replenishment proposal path
-remains unchanged.
+per admitted TICK, and only when private main explicitly carries the reviewed
+auto-materialization policy and the gap already has exactly one public, open,
+mergeable PR bound to the exact current Mission revision + gap. Otherwise the
+existing public-safe replenishment proposal path remains unchanged.
 """
 
 from datetime import datetime, timezone
@@ -14,14 +14,28 @@ import os
 from typing import Any, Mapping
 
 from control_engine.v4_contracts import V4ValidationError
-from control_engine.v4_runtime_protocol import RESULT_PROTOCOL_ID, RuntimeProtocolError, assert_public_safe, strict_json_object
+from control_engine.v4_runtime_protocol import (
+    RESULT_PROTOCOL_ID,
+    RuntimeProtocolError,
+    assert_public_safe,
+    strict_json_object,
+)
 from scripts import control_v4_owner_admin as owner_admin
 from scripts import control_v4_replenishment_snapshot as snapshot
 from scripts import control_v4_runtime_carrier as runtime_carrier
 
 
+POLICY_PATH = "control/CONTROL_V4_REPLENISHMENT_DISCOVERY.md"
+AUTO_MATERIALIZATION_POLICY = "auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1"
+
+
 class AutoReplenishError(RuntimeError):
     pass
+
+
+def _auto_materialization_policy_enabled(state: Mapping[str, Any]) -> bool:
+    text, _blob_sha = runtime_carrier._text_file(POLICY_PATH, state["main_sha"])
+    return AUTO_MATERIALIZATION_POLICY in text.splitlines()
 
 
 def _exact_public_repository(repository: str) -> None:
@@ -136,6 +150,12 @@ def _set_output(result: Mapping[str, Any]) -> None:
     snapshot._set_output(result)
 
 
+def _proposal_fallback(result: Mapping[str, Any], state: Mapping[str, Any], bundle: Any) -> dict[str, Any]:
+    enriched = snapshot.enrich_no_work_result_v4(result, state["queue"], bundle)
+    _assert_proposal_targets_public(enriched)
+    return enriched
+
+
 def main() -> int:
     try:
         result = strict_json_object(os.environ.get("CONTROL_V4_CARRIER_RESULT", ""))
@@ -148,17 +168,18 @@ def main() -> int:
 
         state = runtime_carrier._load_current()
         bundle = runtime_carrier._load_authority_bundle(state["main_sha"])
+        if not _auto_materialization_policy_enabled(state):
+            _set_output(_proposal_fallback(result, state, bundle))
+            return 0
+
         materialized = _materialize_one(state, bundle)
         if materialized is not None:
-            # Keep the already-published wire contract simple: this invocation
-            # still observed NO_WORK before the bounded post-result materialization.
-            # The next fresh TICK acquires from current canonical queue truth.
+            # This TICK already observed NO_WORK. The queue materialization is a
+            # bounded post-result transition; the next fresh TICK acquires it.
             _set_output(result)
             return 0
 
-        enriched = snapshot.enrich_no_work_result_v4(result, state["queue"], bundle)
-        _assert_proposal_targets_public(enriched)
-        _set_output(enriched)
+        _set_output(_proposal_fallback(result, state, bundle))
         return 0
     except (
         AutoReplenishError,
