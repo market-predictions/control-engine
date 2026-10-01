@@ -81,7 +81,7 @@ def target():
     }
 
 
-def public_pr(number=3, body=None):
+def public_pr(number=3, body=None, *, head_repo=REPO, author=auto.PRINCIPAL_LOGIN):
     return {
         "number": number,
         "state": "open",
@@ -89,7 +89,12 @@ def public_pr(number=3, body=None):
         "mergeable": True,
         "body": body
         or "Mission: `AGENT_FRAMEWORK` revision `2026-09-10-r2`\nGap: `AGENT-R1-GAP-05`",
-        "head": {"sha": HEAD, "ref": "control/mission-agent-r2-gap-05"},
+        "user": {"login": author},
+        "head": {
+            "sha": HEAD,
+            "ref": "control/mission-agent-r2-gap-05",
+            "repo": {"full_name": head_repo, "private": False},
+        },
         "base": {"sha": BASE, "ref": "main"},
     }
 
@@ -155,6 +160,48 @@ def test_candidate_discovery_requires_exact_mission_and_gap_markers(monkeypatch)
 
     monkeypatch.setattr(owner_admin, "_public_get", fake_get)
     assert auto._candidate_command(m, g, b) is None
+
+
+def test_fork_or_non_owner_exact_candidate_fails_closed(monkeypatch):
+    b = bundle()
+    m = b.missions[0]
+    g = m["gaps"][0]
+
+    for candidate in (
+        public_pr(head_repo="attacker/agent"),
+        public_pr(author="someone-else"),
+    ):
+        def fake_get(path, candidate=candidate):
+            if path == f"repos/{REPO}":
+                return {"full_name": REPO, "private": False}
+            if path.startswith(f"repos/{REPO}/pulls?state=open"):
+                return [candidate]
+            raise AssertionError(path)
+
+        monkeypatch.setattr(owner_admin, "_public_get", fake_get)
+        with pytest.raises(auto.AutoReplenishError, match="not same-repository owner-authored"):
+            auto._candidate_command(m, g, b)
+
+
+def test_candidate_source_identity_is_rechecked_on_exact_pr_read(monkeypatch):
+    b = bundle()
+    m = b.missions[0]
+    g = m["gaps"][0]
+    listed = public_pr()
+    drifted = public_pr(head_repo="attacker/agent")
+
+    def fake_get(path):
+        if path == f"repos/{REPO}":
+            return {"full_name": REPO, "private": False}
+        if path.startswith(f"repos/{REPO}/pulls?state=open"):
+            return [listed]
+        if path == f"repos/{REPO}/pulls/3":
+            return drifted
+        raise AssertionError(path)
+
+    monkeypatch.setattr(owner_admin, "_public_get", fake_get)
+    with pytest.raises(auto.AutoReplenishError, match="source identity drifted"):
+        auto._candidate_command(m, g, b)
 
 
 def test_duplicate_exact_candidates_fail_closed(monkeypatch):
