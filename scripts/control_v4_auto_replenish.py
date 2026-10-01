@@ -5,8 +5,9 @@ from __future__ import annotations
 This is not a planner. It may materialize at most one current Mission OPEN gap
 per admitted TICK, and only when private main explicitly carries the reviewed
 auto-materialization policy and the gap already has exactly one public, open,
-mergeable PR bound to the exact current Mission revision + gap. Otherwise the
-existing public-safe replenishment proposal path remains unchanged.
+mergeable same-repository owner-authored PR bound to the exact current Mission
+revision + gap. Otherwise the existing public-safe replenishment proposal path
+remains unchanged.
 """
 
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from scripts import control_v4_runtime_carrier as runtime_carrier
 
 POLICY_PATH = "control/CONTROL_V4_REPLENISHMENT_DISCOVERY.md"
 AUTO_MATERIALIZATION_POLICY = "auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1"
+PRINCIPAL_LOGIN = "market-predictions"
 
 
 class AutoReplenishError(RuntimeError):
@@ -42,6 +44,20 @@ def _exact_public_repository(repository: str) -> None:
     value = owner_admin._public_get(f"repos/{repository}")
     if not isinstance(value, Mapping) or value.get("full_name") != repository or value.get("private") is not False:
         raise AutoReplenishError("replenishment target repository is not exact public repository")
+
+
+def _candidate_is_trusted_source(item: Mapping[str, Any], repository: str) -> bool:
+    head = item.get("head") or {}
+    head_repo = head.get("repo") or {}
+    user = item.get("user") or {}
+    return (
+        isinstance(head, Mapping)
+        and isinstance(head_repo, Mapping)
+        and isinstance(user, Mapping)
+        and head_repo.get("full_name") == repository
+        and head_repo.get("private") is False
+        and user.get("login") == PRINCIPAL_LOGIN
+    )
 
 
 def _candidate_command(
@@ -61,24 +77,29 @@ def _candidate_command(
 
     mission_marker = f"Mission: `{mission['mission_id']}` revision `{mission['mission_revision']}`"
     gap_marker = f"Gap: `{gap['gap_id']}`"
-    matches = []
+    exact_claims = []
+    trusted_matches = []
     for item in pulls:
         if not isinstance(item, Mapping):
             continue
         body = item.get("body")
         if isinstance(body, str) and mission_marker in body and gap_marker in body:
-            matches.append(item)
-    if len(matches) > 1:
+            exact_claims.append(item)
+            if _candidate_is_trusted_source(item, repository):
+                trusted_matches.append(item)
+    if len(exact_claims) > 1:
         raise AutoReplenishError("multiple exact replenishment candidates claim the same governed gap")
-    if not matches:
+    if exact_claims and not trusted_matches:
+        raise AutoReplenishError("exact replenishment candidate is not same-repository owner-authored")
+    if not trusted_matches:
         return None
 
-    pr_number = matches[0].get("number")
+    pr_number = trusted_matches[0].get("number")
     if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number < 1:
         raise AutoReplenishError("replenishment candidate PR identity invalid")
     pr = owner_admin._public_get(f"repos/{repository}/pulls/{pr_number}")
-    if not isinstance(pr, Mapping):
-        raise AutoReplenishError("replenishment candidate unavailable")
+    if not isinstance(pr, Mapping) or not _candidate_is_trusted_source(pr, repository):
+        raise AutoReplenishError("replenishment candidate source identity drifted")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if base.get("ref") != "main":
