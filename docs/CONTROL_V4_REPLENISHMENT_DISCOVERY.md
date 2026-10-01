@@ -6,11 +6,19 @@ Status: public current-truth extension for Control V4.
 
 Prevent a governed project from becoming operationally idle merely because the canonical runtime queue has no runnable task while the already-committed current Mission still contains eligible OPEN work.
 
-Current Mission scope is already semantic authority. Therefore a fresh successful `NO_WORK` may materialize an **already-authorized** gap without another principal approval, but only when an exact executable public candidate already exists and is unambiguous. The mechanism may never invent Mission scope, create a candidate, merge a pull request, enable integration or grant production authority.
+Current Mission scope is already semantic authority. Therefore a fresh successful `NO_WORK` may materialize an **already-authorized** gap without another principal approval, but only when an exact executable public candidate already exists, is unambiguous and comes from the canonical owner/repository. The mechanism may never invent Mission scope, create a candidate, merge a pull request, enable integration or grant production authority.
 
 ## Exact behavior
 
 After the trusted V4 runtime carrier has successfully returned `NO_WORK`, one bounded post-result step reloads current private `main` authority and the canonical `control-runtime-state` queue using the same admitted private capability.
+
+Automatic mutation is enabled only when current private `main` contains the exact replenishment policy marker:
+
+```text
+auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1
+```
+
+If that marker is absent, public tooling remains proposal-only and performs no queue mutation.
 
 For currently eligible unmaterialized OPEN gaps, in deterministic repository/Mission order, it looks for an existing public PR whose body contains the exact current markers:
 
@@ -25,7 +33,10 @@ A candidate is materializable only when all of these remain true:
 - current Mission and repository-authority blobs still bind the gap;
 - the target repository is exact and public;
 - exactly one open PR claims the exact current Mission revision and gap;
+- the PR is authored by the canonical owner;
+- the PR head repository equals the governed repository exactly and is public; external/fork heads are rejected;
 - that PR targets `main`, is unmerged and currently mergeable;
+- exact PR source identity is rechecked on the exact PR read;
 - exact PR head branch/SHA and exact current base branch/SHA still match immediately before the queue write;
 - there is no execution lock;
 - private `main`, runtime ref and queue blob still match the fresh snapshot;
@@ -39,13 +50,13 @@ The public runtime result for the invocation remains the already-computed `NO_WO
 
 If eligible Mission work exists but no exact candidate is available, no queue mutation occurs. The existing public-safe `replenishment_proposals` remain available as diagnostic/governance evidence. They contain only public repository identity plus opaque authority/activation keys and do not authorize candidate-less BUILD.
 
-Multiple exact PRs claiming the same governed gap, target drift, stale authority, dependency ambiguity or any other identity inconsistency fails closed instead of guessing which candidate to activate.
+Multiple exact PR claims, an exact claim from an untrusted/fork source, target drift, stale authority, dependency ambiguity or any other identity inconsistency fails closed instead of guessing which candidate to activate.
 
 ## Authority boundary
 
 Automatic replenishment consumes **existing Mission authority**; it does not create new authority.
 
-The change removes only the redundant approval handshake between an already-authoritative current OPEN gap and an already-existing exact candidate. It does not remove or weaken any later boundary:
+The change removes only the redundant approval handshake between an already-authoritative current OPEN gap and an already-existing exact trusted candidate. It does not remove or weaken any later boundary:
 
 - new or changed Mission scope still requires governed Mission evolution;
 - candidate creation is outside this mechanism;
@@ -69,7 +80,7 @@ There is still one canonical queue, one runtime CAS model and one Scheduled Runn
 
 ## Failure behavior
 
-The path is fail-closed. Invalid private state, stale authority, candidate ambiguity, non-public target, stale/moved target identity, live execution lock, stale TICK, private ref/queue movement or CAS rejection cannot create a task.
+The path is fail-closed. Invalid private state, stale authority, candidate ambiguity, untrusted/fork candidate source, non-public target, stale/moved target identity, live execution lock, stale TICK, private ref/queue movement or CAS rejection cannot create a task.
 
 If there is no exact candidate, ordinary `NO_WORK` plus public-safe replenishment proposals is preserved. If the automatic path detects an ambiguity or consistency defect, the workflow fails visibly while the underlying public-safe carrier result can still be published; no guessed queue mutation is performed.
 
