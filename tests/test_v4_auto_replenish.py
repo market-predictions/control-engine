@@ -242,6 +242,7 @@ def test_materialization_reuses_existing_eligibility_and_runtime_cas_and_stops_a
         "queue_blob": "3" * 40,
         "queue": q,
         "repository_node_id": "repo-node",
+        "runtime_enabled": True,
     }
     writes = []
     monkeypatch.setattr(auto, "_candidate_command", lambda mission_value, gap_value, bundle_value: command)
@@ -262,9 +263,17 @@ def test_materialization_reuses_existing_eligibility_and_runtime_cas_and_stops_a
     assert task["repository_authority_blob_sha"] == AUTHORITY_SHA
 
 
+def test_disabled_runtime_no_work_cannot_discover_or_write_candidate(monkeypatch):
+    b = bundle()
+    state = {"queue": queue(), "runtime_enabled": False}
+    monkeypatch.setattr(auto, "_candidate_command", lambda *args: pytest.fail("disabled runtime must not discover candidate"))
+    monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: pytest.fail("disabled runtime must not write"))
+    assert auto._materialize_one(state, b) is None
+
+
 def test_no_exact_candidate_means_no_queue_write(monkeypatch):
     b = bundle()
-    state = {"queue": queue()}
+    state = {"queue": queue(), "runtime_enabled": True}
     monkeypatch.setattr(auto, "_candidate_command", lambda *args: None)
     monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: pytest.fail("must not write"))
     assert auto._materialize_one(state, b) is None
