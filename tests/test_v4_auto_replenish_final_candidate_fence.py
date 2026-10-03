@@ -85,7 +85,7 @@ def test_exact_pr_reread_rejects_mission_gap_marker_drift(monkeypatch):
         auto._candidate_command(mission, gap, object())
 
 
-def test_failed_pre_cas_candidate_revalidation_never_writes_or_falls_back_to_no_work(monkeypatch):
+def test_failed_pre_cas_candidate_revalidation_never_reaches_durable_ref_write(monkeypatch):
     state = {
         "main_sha": "1" * 40,
         "queue": {"tasks": []},
@@ -138,11 +138,14 @@ def test_failed_pre_cas_candidate_revalidation_never_writes_or_falls_back_to_no_
             auto.AutoReplenishError("multiple exact replenishment candidates claim the same governed gap")
         ),
     )
-    monkeypatch.setattr(
-        carrier,
-        "_write_queue_exact",
-        lambda *_args, **_kwargs: pytest.fail("failed final candidate fence must prevent queue write"),
-    )
+
+    def fake_write(_state, _queue, *, reason, pre_ref_cas=None):
+        assert reason == "auto-replenish-acquire"
+        assert pre_ref_cas is not None
+        pre_ref_cas()
+        pytest.fail("failed final candidate fence must prevent durable ref update")
+
+    monkeypatch.setattr(carrier, "_write_queue_exact", fake_write)
     monkeypatch.setattr(auto, "_set_output", lambda value: outputs.append(dict(value)))
 
     assert auto.main() == 1
