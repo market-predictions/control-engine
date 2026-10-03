@@ -120,6 +120,13 @@ def _candidate_command(
 
 
 def _materialize_one(state: Mapping[str, Any], bundle: Any) -> dict[str, Any] | None:
+    # Runtime disablement is an authority boundary, not merely an acquisition
+    # preference. The state was freshly loaded for this post-NO_WORK step, and
+    # no candidate discovery or durable queue mutation is allowed unless that
+    # same state explicitly authorizes runtime execution.
+    if state.get("runtime_enabled") is not True:
+        return None
+
     queue = state["queue"]
     repositories = sorted(
         {
