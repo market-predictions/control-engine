@@ -19,6 +19,7 @@ REQUIRED_NORMATIVE_DOCTRINE_PATHS = (
     "control/CONTROL_V4_ROADMAP.md",
     "control/CONTROL_V4_CONVERGENCE_AND_DEBT_RETIREMENT_PLAN.md",
     "control/CONTROL_V4_SURFACE_INVENTORY.md",
+    "control/CONTROL_V4_REPLENISHMENT_DISCOVERY.md",
     "control/missions/README.md",
     "control/CHANGELOG.md",
 )
@@ -36,6 +37,10 @@ VALID_MISSION_README = (
     "MISSION_CONTRACT_V4\n"
     "review_policy\n"
 )
+VALID_REPLENISHMENT_POLICY = (
+    "# Control V4 — Governed Replenishment\n"
+    "auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1\n"
+)
 VALID_HISTORICAL_COHERENCE = (
     "status=HISTORICAL_AUDIT_EVIDENCE\n"
     "documentation_is_current_status_authority=false\n"
@@ -48,6 +53,8 @@ def _current_surface_entries() -> dict[str, tuple[str, str, str]]:
 
 
 def _surface_text(_root, _tree, path: str) -> str:
+    if path == validator.REPLENISHMENT_POLICY_PATH:
+        return VALID_REPLENISHMENT_POLICY
     if path == validator.MISSION_README_PATH:
         return VALID_MISSION_README
     if path == validator.COHERENCE_REPAIR_PATH:
@@ -125,7 +132,7 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
-    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "f0ea82e863bd18170158286c92370bcf7761b374"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "f65c05a566539cbda7d9e75993fce8be7b5842c6"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):
@@ -150,6 +157,7 @@ def test_coherence_record_is_historical_surface_not_normative_doctrine(monkeypat
 def test_current_surface_rejects_current_looking_coherence_record(monkeypatch, tmp_path):
     entries = _current_surface_entries()
     def stale_surface_text(_root, _tree, path: str) -> str:
+        if path == validator.REPLENISHMENT_POLICY_PATH: return VALID_REPLENISHMENT_POLICY
         if path == validator.MISSION_README_PATH: return VALID_MISSION_README
         if path == validator.COHERENCE_REPAIR_PATH: return "status=IMPLEMENTATION_CANDIDATE\ndocumentation_is_current_status_authority=false\nruntime_snapshot_semantics=HISTORICAL_OBSERVATION_ONLY\n"
         raise AssertionError(f"unexpected text path: {path}")
@@ -247,6 +255,7 @@ def _valid_system_index() -> bytes:
         "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",
         "runner_config=control/CONTROL_RUNNER_V4.json",
         "runner_prompt=control/CONTROL_RUNNER_V4_PROMPT.md",
+        "replenishment_policy=control/CONTROL_V4_REPLENISHMENT_DISCOVERY.md",
         "Current status is a fresh live projection, not a documentation lookup.",
         "Missing required evidence returns STATUS_OBSERVABILITY_INCOMPLETE.",
         "### Canonical status dashboard presentation contract",
@@ -258,10 +267,15 @@ def _valid_system_index() -> bytes:
         "APPROVAL NEEDED — A1 — <workstream>",
         "Approval is one-shot and action-scoped.",
         "The conversation is an approval interaction surface, not persistent semantic authority.",
-        "Queue replenishment needed",
-        "project_replenishment_approval_scope=CURRENT_ELIGIBLE_SNAPSHOT",
-        "project_replenishment_task_by_task_approval=false",
-        "project_replenishment_future_authority=false",
+        "Queue replenishment candidate missing",
+        "## Automatic candidate materialize+acquire",
+        "auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1",
+        "auto_materialization_requires_runtime_enabled=true",
+        "auto_materialization_requires_exact_existing_candidate=true",
+        "auto_materialization_max_per_tick=1",
+        "auto_materialization_and_acquisition_one_cas=true",
+        "terminal_no_work_requires_no_auto_mutation=true",
+        "candidate_less_build_for_replenishment=false",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
         "More than 48 hours without a legitimate external dependency MUST escalate the workstream to at least 🟠 ORANGE",
