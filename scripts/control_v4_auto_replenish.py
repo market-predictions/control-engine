@@ -276,13 +276,16 @@ def main() -> int:
         # the carrier's original terminal NO_WORK.
         _set_output(_mutation_path_error(result.get("run_id")))
 
+        # Reject already-stale invocations before spending writes on Git objects.
+        # Candidate authority is re-derived again inside the writer after those
+        # objects exist and immediately before the atomic ref CAS.
         runtime_carrier._assert_tick_not_superseded(public_command)
         runtime_carrier._assert_tick_fresh(now=datetime.now(timezone.utc))
-        _revalidate_candidate_command(state, bundle, command)
         runtime_carrier._write_queue_exact(
             state,
             acquired_queue,
             reason="auto-replenish-acquire",
+            pre_ref_cas=lambda: _revalidate_candidate_command(state, bundle, command),
         )
         print(
             "CONTROL_V4_AUTO_REPLENISH=ACQUIRED "
