@@ -183,6 +183,31 @@ def _plan_materialize_and_acquire_one(
     return None
 
 
+def _revalidate_candidate_command(
+    state: Mapping[str, Any],
+    bundle: Any,
+    command: Mapping[str, Any],
+) -> None:
+    repository = command.get("repository")
+    activation_key = command.get("activation_key")
+    if not isinstance(repository, str) or not repository or not isinstance(activation_key, str) or not activation_key:
+        raise AutoReplenishError("replenishment candidate binding invalid before runtime write")
+
+    eligible = owner_admin.eligible_unmaterialized_gaps_v4(state["queue"], bundle, repository)
+    matches = [
+        (mission, gap)
+        for mission, gap in eligible
+        if owner_admin.activation_key_v4(mission, gap, bundle) == activation_key
+    ]
+    if len(matches) != 1:
+        raise AutoReplenishError("replenishment authority eligibility changed before runtime write")
+
+    mission, gap = matches[0]
+    fresh_command = _candidate_command(mission, gap, bundle)
+    if fresh_command is None or fresh_command != dict(command):
+        raise AutoReplenishError("replenishment candidate binding changed before runtime write")
+
+
 def _assert_proposal_targets_public(result: Mapping[str, Any]) -> None:
     proposals = result.get("replenishment_proposals", [])
     if not isinstance(proposals, list):
@@ -250,7 +275,7 @@ def main() -> int:
 
         runtime_carrier._assert_tick_not_superseded(public_command)
         runtime_carrier._assert_tick_fresh(now=datetime.now(timezone.utc))
-        owner_admin.validate_public_target(command, owner_admin._public_target(command))
+        _revalidate_candidate_command(state, bundle, command)
         runtime_carrier._write_queue_exact(
             state,
             acquired_queue,
