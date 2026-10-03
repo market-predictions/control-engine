@@ -16,6 +16,7 @@ def test_writer_defers_optional_authority_fence_until_after_git_object_construct
 
 def test_pre_ref_cas_hook_runs_immediately_before_command_freshness_and_graphql(monkeypatch):
     order = []
+    monkeypatch.setenv("CONTROL_PLANE_TOKEN", "inert-test-token")
 
     monkeypatch.setattr(
         carrier,
