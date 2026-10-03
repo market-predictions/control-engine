@@ -17,7 +17,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from control_engine.v4_authority_io import V4AuthorityBundle, assert_v4_queue_bound_to_authority
 from control_engine.v4_contracts import V4ValidationError, acquire_task_v4, validate_authority_set, validate_queue_v4
@@ -384,6 +384,7 @@ def _update_refs_exact(
     runtime_after_oid: str,
     client_id: str,
     source_queue: Mapping[str, Any],
+    pre_ref_cas: Callable[[], None] | None = None,
 ) -> None:
     mutation = """
     mutation UpdateRefs($input: UpdateRefsInput!) {
@@ -392,6 +393,8 @@ def _update_refs_exact(
       }
     }
     """
+    if pre_ref_cas is not None:
+        pre_ref_cas()
     _assert_current_command_fresh_at_ref_cas(source_queue)
     result = _request_json(
         GRAPHQL,
@@ -434,7 +437,13 @@ def _serialize_queue(queue: Mapping[str, Any]) -> str:
     return json.dumps(queue, separators=(",", ":"), ensure_ascii=False)
 
 
-def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, reason: str) -> dict[str, Any]:
+def _write_queue_exact(
+    state: Mapping[str, Any],
+    queue: Mapping[str, Any],
+    *,
+    reason: str,
+    pre_ref_cas: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     validate_queue_v4(queue)
     if _branch_head("main") != state["main_sha"]:
         raise StaleWriteError("private authority moved before runtime write")
@@ -486,6 +495,7 @@ def _write_queue_exact(state: Mapping[str, Any], queue: Mapping[str, Any], *, re
         runtime_after_oid=new_commit,
         client_id=f"control-v4-runtime-{os.environ.get('GITHUB_RUN_ID', 'unknown')}-{reason}",
         source_queue=state["queue"],
+        pre_ref_cas=pre_ref_cas,
     )
     # Successful updateRefs is the commit boundary. Everything that can reject
     # this transition has already run; later commands reload canonical truth.
