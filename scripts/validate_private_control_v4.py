@@ -76,7 +76,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "b3d671767231ec534c6e22eb7a0c6c4c2875605f",
     }
 )
-REVIEWED_SYSTEM_INDEX_BLOB_SHA = "19918dd8403a44f87f2020df859abbddc41a3390"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f65c05a566539cbda7d9e75993fce8be7b5842c6"
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
@@ -491,10 +491,13 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         "Approval is one-shot and action-scoped.",
         "The conversation is an approval interaction surface, not persistent semantic authority.",
         "Queue replenishment candidate missing",
-        "## Automatic candidate materialization",
+        "## Automatic candidate materialize+acquire",
         AUTO_MATERIALIZATION_POLICY,
+        "auto_materialization_requires_runtime_enabled=true",
         "auto_materialization_requires_exact_existing_candidate=true",
-        "auto_materialization_max_per_no_work=1",
+        "auto_materialization_max_per_tick=1",
+        "auto_materialization_and_acquisition_one_cas=true",
+        "terminal_no_work_requires_no_auto_mutation=true",
         "candidate_less_build_for_replenishment=false",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
