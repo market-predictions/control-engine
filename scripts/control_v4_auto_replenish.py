@@ -104,6 +104,9 @@ def _candidate_command(
     pr = owner_admin._public_get(f"repos/{repository}/pulls/{pr_number}")
     if not isinstance(pr, Mapping) or not _candidate_is_trusted_source(pr, repository):
         raise AutoReplenishError("replenishment candidate source identity drifted")
+    pr_body = pr.get("body")
+    if not isinstance(pr_body, str) or mission_marker not in pr_body or gap_marker not in pr_body:
+        raise AutoReplenishError("replenishment candidate Mission/gap binding drifted")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if base.get("ref") != "main":
