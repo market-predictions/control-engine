@@ -122,11 +122,11 @@ def _candidate_command(
     return command
 
 
-def _materialize_and_acquire_one(
+def _plan_materialize_and_acquire_one(
     state: Mapping[str, Any],
     bundle: Any,
     tick_command: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
     if state.get("runtime_enabled") is not True:
         return None
     if state.get("integration_enabled") is True:
@@ -179,23 +179,7 @@ def _materialize_and_acquire_one(
             )
             if work_result.get("result") != "WORK":
                 raise AutoReplenishError("auto replenishment acquisition did not produce WORK")
-
-            # Re-prove both command currency and target identity immediately
-            # before the one durable mutation. _write_queue_exact repeats the
-            # originating-TICK age check at the atomic ref-CAS boundary.
-            runtime_carrier._assert_tick_not_superseded(tick_command)
-            runtime_carrier._assert_tick_fresh(now=datetime.now(timezone.utc))
-            owner_admin.validate_public_target(command, owner_admin._public_target(command))
-            next_state = runtime_carrier._write_queue_exact(
-                state,
-                acquired,
-                reason="auto-replenish-acquire",
-            )
-            print(
-                "CONTROL_V4_AUTO_REPLENISH=ACQUIRED "
-                f"{command['repository']}#{command['candidate_pr_number']}@{command['candidate_sha']}"
-            )
-            return next_state, work_result
+            return acquired, command, work_result
     return None
 
 
@@ -252,18 +236,30 @@ def main() -> int:
         if public_command.get("kind") != "TICK" or public_command.get("run_id") != result.get("run_id"):
             raise AutoReplenishError("carrier NO_WORK does not bind exact admitted TICK")
 
-        # Pre-seed a public-safe fail-closed result before entering any path that
-        # can write. If transport becomes ambiguous around the CAS, workflow
-        # publication can never fall back to the carrier's original NO_WORK.
-        fail_closed_result = _mutation_path_error(result.get("run_id"))
-        _set_output(fail_closed_result)
-
-        acquired = _materialize_and_acquire_one(state, bundle, public_command)
-        if acquired is None:
+        planned = _plan_materialize_and_acquire_one(state, bundle, public_command)
+        if planned is None:
             _set_output(_proposal_fallback(result, state, bundle))
             return 0
 
-        _next_state, work_result = acquired
+        acquired_queue, command, work_result = planned
+
+        # From here a durable write is possible. Pre-seed a public-safe error so
+        # an ambiguous transport failure can never make publication fall back to
+        # the carrier's original terminal NO_WORK.
+        _set_output(_mutation_path_error(result.get("run_id")))
+
+        runtime_carrier._assert_tick_not_superseded(public_command)
+        runtime_carrier._assert_tick_fresh(now=datetime.now(timezone.utc))
+        owner_admin.validate_public_target(command, owner_admin._public_target(command))
+        runtime_carrier._write_queue_exact(
+            state,
+            acquired_queue,
+            reason="auto-replenish-acquire",
+        )
+        print(
+            "CONTROL_V4_AUTO_REPLENISH=ACQUIRED "
+            f"{command['repository']}#{command['candidate_pr_number']}@{command['candidate_sha']}"
+        )
         _set_output(work_result)
         return 0
     except (
