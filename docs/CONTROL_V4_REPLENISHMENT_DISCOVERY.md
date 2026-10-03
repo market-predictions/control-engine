@@ -6,11 +6,11 @@ Status: public current-truth extension for Control V4.
 
 Prevent a governed project from becoming operationally idle merely because the canonical runtime queue has no runnable task while the already-committed current Mission still contains eligible OPEN work.
 
-Current Mission scope is already semantic authority. Therefore a fresh successful `NO_WORK` may materialize an **already-authorized** gap without another principal approval, but only when an exact executable public candidate already exists, is unambiguous and comes from the canonical owner/repository. The mechanism may never invent Mission scope, create a candidate, merge a pull request, enable integration or grant production authority.
+Current Mission scope is already semantic authority. Therefore an admitted TICK that initially finds no executable queue item may bind an **already-authorized** gap to an exact existing public candidate without another principal approval, but only when that candidate already exists, is unambiguous and comes from the canonical owner/repository. The mechanism may never invent Mission scope, create a candidate, merge a pull request, enable integration or grant production authority.
 
 ## Exact behavior
 
-After the trusted V4 runtime carrier has successfully returned `NO_WORK`, one bounded post-result step reloads current private `main` authority and the canonical `control-runtime-state` queue using the same admitted private capability.
+After the trusted V4 runtime carrier has computed provisional `NO_WORK`, one bounded step reloads current private `main` authority and the canonical `control-runtime-state` queue using the same admitted private capability. That provisional carrier result is not yet the Runner-visible terminal result.
 
 Automatic mutation is enabled only when current private `main` contains the exact replenishment policy marker:
 
@@ -20,31 +20,39 @@ auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1
 
 If that marker is absent, public tooling remains proposal-only and performs no queue mutation.
 
-For currently eligible unmaterialized OPEN gaps, in deterministic repository/Mission order, it looks for an existing public PR whose body contains the exact current markers:
+The freshly loaded private state must also have `runtime_enabled=true` and `integration_enabled=false`. Runtime disablement is an authority boundary: when runtime is disabled, candidate discovery/materialization is not attempted and no replenishment queue write can occur.
+
+For currently eligible unmaterialized OPEN gaps, in deterministic repository/Mission order, the step looks for an existing public PR whose body contains the exact current markers:
 
 - `Mission: `<mission_id>` revision `<mission_revision>``;
 - `Gap: `<gap_id>``.
 
 Private identifiers are used only inside the trusted job and are never emitted publicly by this path.
 
-A candidate is materializable only when all of these remain true:
+A candidate is eligible for automatic materialize+acquire only when all of these remain true:
 
 - the gap is `OPEN`, unmaterialized and every declared dependency is canonically satisfied;
 - current Mission and repository-authority blobs still bind the gap;
+- freshly loaded runtime authority is enabled and integration remains disabled;
 - the target repository is exact and public;
 - exactly one open PR claims the exact current Mission revision and gap;
 - the PR is authored by the canonical owner;
 - the PR head repository equals the governed repository exactly and is public; external/fork heads are rejected;
 - that PR targets `main`, is unmerged and currently mergeable;
 - exact PR source identity is rechecked on the exact PR read;
-- exact PR head branch/SHA and exact current base branch/SHA still match immediately before the queue write;
 - there is no execution lock;
+- the originating command is the exact admitted TICK and has not been superseded;
+- exact PR head branch/SHA and exact current base branch/SHA still match immediately before the durable mutation;
 - private `main`, runtime ref and queue blob still match the fresh snapshot;
-- the originating TICK is still current and within the existing freshness window at the atomic CAS boundary.
+- the originating TICK is still within the existing freshness window immediately before and at the atomic CAS boundary.
 
-At most **one** candidate is materialized per `NO_WORK` invocation. It becomes the same ordinary `ACTIVE/REVIEW` task already produced by the existing owner-admin activation logic. The next fresh canonical TICK sees that task through normal V4 selection.
+At most **one** candidate is processed per admitted TICK. The existing owner-admin logic first constructs the ordinary `ACTIVE/REVIEW` task in memory. The existing runtime acquisition primitive then acquires that exact new task in the same in-memory queue image. Only after the full WORK capsule exists are command currency and exact public target identity revalidated and the combined materialize+acquire queue image committed with the existing `_write_queue_exact` private-main no-op + runtime-ref atomic CAS.
 
-The public runtime result for the invocation remains the already-computed `NO_WORK`; materialization is logged only with public candidate identity. No private Mission/gap/queue data is added to the public result protocol.
+There is therefore no durable intermediate state in which auto-replenishment created an unlocked task and waits for a later TICK. One durable mutation both materializes the task and establishes the ordinary holder.
+
+If that CAS succeeds, the Runner-visible result for the admitted TICK is ordinary `WORK`. If no exact candidate is available, no queue mutation occurs and the Runner-visible result may remain ordinary terminal `NO_WORK`, optionally enriched by the existing public-safe read-only replenishment proposal. **A published terminal `NO_WORK` never accompanies an auto-replenishment queue mutation.**
+
+Before entering the only path that can write, the step pre-seeds a public-safe fail-closed `ERROR` result. If transport becomes ambiguous around the CAS, result publication therefore cannot fall back to the carrier's original `NO_WORK`. A successful write is followed only by publication of the already-computed WORK capsule; no second target read or second queue transition is needed.
 
 ## Fallback discovery
 
@@ -72,17 +80,29 @@ The existing explicit owner-admin replenishment path remains available for bound
 This mechanism deliberately does not add a second queue writer. It reuses:
 
 - existing owner-admin eligibility and task materialization functions;
+- existing runtime task acquisition and WORK-capsule functions;
 - the existing admitted carrier private capability;
 - the existing runtime `_write_queue_exact` atomic private-main no-op + runtime-ref CAS;
-- the same current TICK freshness check at the CAS boundary.
+- the same current-TICK supersession and freshness checks at the CAS boundary.
 
 There is still one canonical queue, one runtime CAS model and one Scheduled Runner.
 
+## Runner contract
+
+The canonical Runner generation remains `b6f42d03a917ce58`. No prompt rotation is needed because the Runner-visible result contract is preserved:
+
+- `BUSY` remains terminal and mutation-free;
+- terminal published `NO_WORK` remains mutation-free;
+- a successful acquisition-producing mutation is represented by the existing `WORK` result;
+- TICK/EVENT wire shapes, holder lifecycle, lease, target-effect fences and semantic review/repair policy are unchanged.
+
+The replenishment helper acts inside the already-admitted TICK workflow before final result publication; it does not introduce a new command or result type.
+
 ## Failure behavior
 
-The path is fail-closed. Invalid private state, stale authority, candidate ambiguity, untrusted/fork candidate source, non-public target, stale/moved target identity, live execution lock, stale TICK, private ref/queue movement or CAS rejection cannot create a task.
+The path is fail-closed. Disabled runtime authority, invalid private state, stale authority, candidate ambiguity, untrusted/fork candidate source, non-public target, stale/moved target identity, live execution lock, stale/superseded TICK, private ref/queue movement or CAS rejection cannot create a task.
 
-If there is no exact candidate, ordinary `NO_WORK` plus public-safe replenishment proposals is preserved. If the automatic path detects an ambiguity or consistency defect, the workflow fails visibly while the underlying public-safe carrier result can still be published; no guessed queue mutation is performed.
+If there is no exact candidate, ordinary terminal `NO_WORK` plus public-safe replenishment proposals is preserved because no mutation occurred. If the automatic path reaches a potential write and then fails or becomes ambiguous, publication uses fail-closed `ERROR`, never the original `NO_WORK`.
 
 ## Reversibility
 
@@ -91,10 +111,10 @@ This change introduces no schema migration, durable discovery state, new queue, 
 Rollback is an ordinary reviewed source rollback of:
 
 - `scripts/control_v4_auto_replenish.py`;
-- its bounded post-`NO_WORK` workflow step;
+- its bounded post-carrier workflow step;
 - the focused tests and documentation.
 
-Already materialized tasks are ordinary V4 tasks and require no queue migration or rewind. Git history is the rollback record.
+Already materialized/acquired tasks use the ordinary V4 task and holder schema and require no queue migration or rewind. Git history is the rollback record.
 
 ## Non-goals
 
