@@ -39,14 +39,15 @@ A candidate is eligible for automatic materialize+acquire only when all of these
 - the PR is authored by the canonical owner;
 - the PR head repository equals the governed repository exactly and is public; external/fork heads are rejected;
 - that PR targets `main`, is unmerged and currently mergeable;
-- exact PR source identity is rechecked on the exact PR read;
+- exact PR source identity and Mission/gap markers are rechecked on the exact PR read;
 - there is no execution lock;
 - the originating command is the exact admitted TICK and has not been superseded;
+- immediately before the durable mutation, current eligible-gap binding and the bounded exact-claim set are re-derived and must reproduce the exact same candidate command;
 - exact PR head branch/SHA and exact current base branch/SHA still match immediately before the durable mutation;
 - private `main`, runtime ref and queue blob still match the fresh snapshot;
 - the originating TICK is still within the existing freshness window immediately before and at the atomic CAS boundary.
 
-At most **one** candidate is processed per admitted TICK. The existing owner-admin logic first constructs the ordinary `ACTIVE/REVIEW` task in memory. The existing runtime acquisition primitive then acquires that exact new task in the same in-memory queue image. Only after the full WORK capsule exists are command currency and exact public target identity revalidated and the combined materialize+acquire queue image committed with the existing `_write_queue_exact` private-main no-op + runtime-ref atomic CAS.
+At most **one** candidate is processed per admitted TICK. The existing owner-admin logic first constructs the ordinary `ACTIVE/REVIEW` task in memory. The existing runtime acquisition primitive then acquires that exact new task in the same in-memory queue image. Only after the full WORK capsule exists are command currency, current eligibility, exact candidate uniqueness, exact Mission/gap binding and public target identity revalidated; only then is the combined materialize+acquire queue image committed with the existing `_write_queue_exact` private-main no-op + runtime-ref atomic CAS.
 
 There is therefore no durable intermediate state in which auto-replenishment created an unlocked task and waits for a later TICK. One durable mutation both materializes the task and establishes the ordinary holder.
 
