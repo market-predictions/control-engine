@@ -22,12 +22,15 @@ def _exact_pr(number: int) -> dict:
     }
 
 
+def _mission_and_gap():
+    return (
+        {"mission_id": "AGENT_FRAMEWORK", "mission_revision": "2026-09-10-r2"},
+        {"gap_id": "AGENT-R1-GAP-05", "repository": REPO},
+    )
+
+
 def test_pre_cas_revalidation_rejects_new_duplicate_exact_claim(monkeypatch):
-    mission = {
-        "mission_id": "AGENT_FRAMEWORK",
-        "mission_revision": "2026-09-10-r2",
-    }
-    gap = {"gap_id": "AGENT-R1-GAP-05", "repository": REPO}
+    mission, gap = _mission_and_gap()
     state = {"queue": {"tasks": []}}
     bundle = object()
     command = {
@@ -59,6 +62,27 @@ def test_pre_cas_revalidation_rejects_new_duplicate_exact_claim(monkeypatch):
 
     with pytest.raises(auto.AutoReplenishError, match="multiple exact replenishment candidates"):
         auto._revalidate_candidate_command(state, bundle, command)
+
+
+def test_exact_pr_reread_rejects_mission_gap_marker_drift(monkeypatch):
+    mission, gap = _mission_and_gap()
+    listed = _exact_pr(3)
+    drifted = _exact_pr(3)
+    drifted["body"] = "Mission: `OTHER` revision `2026-09-10-r2`\nGap: `AGENT-R1-GAP-05`"
+
+    def fake_get(path):
+        if path == f"repos/{REPO}":
+            return {"full_name": REPO, "private": False}
+        if path.startswith(f"repos/{REPO}/pulls?state=open"):
+            return [listed]
+        if path == f"repos/{REPO}/pulls/3":
+            return drifted
+        raise AssertionError(path)
+
+    monkeypatch.setattr(owner_admin, "_public_get", fake_get)
+
+    with pytest.raises(auto.AutoReplenishError, match="Mission/gap binding drifted"):
+        auto._candidate_command(mission, gap, object())
 
 
 def test_failed_pre_cas_candidate_revalidation_never_writes_or_falls_back_to_no_work(monkeypatch):
