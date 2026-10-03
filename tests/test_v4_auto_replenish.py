@@ -338,6 +338,7 @@ def test_materialized_candidate_commits_once_and_final_result_is_work(monkeypatc
     monkeypatch.setattr(auto, "_plan_materialize_and_acquire_one", lambda *_args: (acquired_queue, command, work))
     monkeypatch.setattr(carrier, "_assert_tick_not_superseded", lambda _command: None)
     monkeypatch.setattr(carrier, "_assert_tick_fresh", lambda **_kwargs: None)
+    monkeypatch.setattr(auto, "_revalidate_candidate_command", lambda *_args: None)
     monkeypatch.setattr(owner_admin, "_public_target", lambda _command: target())
     monkeypatch.setattr(owner_admin, "validate_public_target", lambda *_args: None)
     monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: writes.append((args, kwargs)))
