@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-"""Bounded post-NO_WORK materialization of already-authorized exact candidates.
+"""Bounded exact-candidate materialization behind an admitted TICK.
 
 This is not a planner. It may materialize at most one current Mission OPEN gap
 per admitted TICK, and only when private main explicitly carries the reviewed
 auto-materialization policy and the gap already has exactly one public, open,
 mergeable same-repository owner-authored PR bound to the exact current Mission
-revision + gap. Otherwise the existing public-safe replenishment proposal path
-remains unchanged.
+revision + gap.
+
+A published terminal NO_WORK remains mutation-free. If materialization succeeds,
+the same admitted TICK immediately acquires the newly materialized task through
+the existing carrier path and publishes WORK instead of NO_WORK.
 """
 
 from datetime import datetime, timezone
@@ -19,6 +22,7 @@ from control_engine.v4_runtime_protocol import (
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     assert_public_safe,
+    parse_public_command,
     strict_json_object,
 )
 from scripts import control_v4_owner_admin as owner_admin
@@ -119,11 +123,11 @@ def _candidate_command(
     return command
 
 
-def _materialize_one(state: Mapping[str, Any], bundle: Any) -> dict[str, Any] | None:
+def _materialize_one(state: Mapping[str, Any], bundle: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
     # Runtime disablement is an authority boundary, not merely an acquisition
-    # preference. The state was freshly loaded for this post-NO_WORK step, and
-    # no candidate discovery or durable queue mutation is allowed unless that
-    # same state explicitly authorizes runtime execution.
+    # preference. The state was freshly loaded for this step, and no candidate
+    # discovery or durable queue mutation is allowed unless that same state
+    # explicitly authorizes runtime execution.
     if state.get("runtime_enabled") is not True:
         return None
 
@@ -152,12 +156,12 @@ def _materialize_one(state: Mapping[str, Any], bundle: Any) -> dict[str, Any] | 
             # Re-read exact public target immediately before the existing runtime
             # CAS. The CAS itself rechecks private main/runtime/queue + TICK age.
             owner_admin.validate_public_target(command, owner_admin._public_target(command))
-            runtime_carrier._write_queue_exact(state, next_queue, reason="auto-replenish")
+            next_state = runtime_carrier._write_queue_exact(state, next_queue, reason="auto-replenish")
             print(
                 "CONTROL_V4_AUTO_REPLENISH=MATERIALIZED "
                 f"{command['repository']}#{command['candidate_pr_number']}@{command['candidate_sha']}"
             )
-            return command
+            return next_state, command
     return None
 
 
@@ -184,6 +188,16 @@ def _proposal_fallback(result: Mapping[str, Any], state: Mapping[str, Any], bund
     return enriched
 
 
+def _post_materialization_error(run_id: object) -> dict[str, Any]:
+    value = run_id if isinstance(run_id, str) else "unknown"
+    return {
+        "protocol": RESULT_PROTOCOL_ID,
+        "result": "ERROR",
+        "code": "AUTO_REPLENISH_POST_MATERIALIZATION_FAIL_CLOSED",
+        "run_id": value,
+    }
+
+
 def main() -> int:
     try:
         result = strict_json_object(os.environ.get("CONTROL_V4_CARRIER_RESULT", ""))
@@ -200,14 +214,41 @@ def main() -> int:
             _set_output(_proposal_fallback(result, state, bundle))
             return 0
 
+        # If anything fails after the mutation path becomes eligible, the
+        # workflow must never fall back to publishing the carrier's terminal
+        # NO_WORK because a private write may already have committed.
+        fail_closed_result = _post_materialization_error(result.get("run_id"))
+        _set_output(fail_closed_result)
+
         materialized = _materialize_one(state, bundle)
-        if materialized is not None:
-            # This TICK already observed NO_WORK. The queue materialization is a
-            # bounded post-result transition; the next fresh TICK acquires it.
-            _set_output(result)
+        if materialized is None:
+            _set_output(_proposal_fallback(result, state, bundle))
             return 0
 
-        _set_output(_proposal_fallback(result, state, bundle))
+        materialized_state, _materialized_command = materialized
+        public_command = parse_public_command(os.environ.get("CONTROL_V4_PUBLIC_COMMAND", ""))
+        if public_command.get("kind") != "TICK" or public_command.get("run_id") != result.get("run_id"):
+            _set_output(fail_closed_result)
+            return 0
+
+        try:
+            runtime_carrier._assert_tick_not_superseded(public_command)
+            now = datetime.now(timezone.utc)
+            runtime_carrier._assert_tick_fresh(now=now)
+            _next_state, acquired_result = runtime_carrier._tick(public_command, materialized_state, now=now)
+        except (
+            RuntimeProtocolError,
+            V4ValidationError,
+            runtime_carrier.CarrierError,
+        ):
+            _set_output(fail_closed_result)
+            return 0
+
+        if acquired_result.get("result") != "WORK":
+            _set_output(fail_closed_result)
+            return 0
+
+        _set_output(acquired_result)
         return 0
     except (
         AutoReplenishError,
