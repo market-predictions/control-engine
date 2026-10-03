@@ -132,7 +132,7 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
-    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "19918dd8403a44f87f2020df859abbddc41a3390"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "f65c05a566539cbda7d9e75993fce8be7b5842c6"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):
@@ -268,10 +268,13 @@ def _valid_system_index() -> bytes:
         "Approval is one-shot and action-scoped.",
         "The conversation is an approval interaction surface, not persistent semantic authority.",
         "Queue replenishment candidate missing",
-        "## Automatic candidate materialization",
+        "## Automatic candidate materialize+acquire",
         "auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1",
+        "auto_materialization_requires_runtime_enabled=true",
         "auto_materialization_requires_exact_existing_candidate=true",
-        "auto_materialization_max_per_no_work=1",
+        "auto_materialization_max_per_tick=1",
+        "auto_materialization_and_acquisition_one_cas=true",
+        "terminal_no_work_requires_no_auto_mutation=true",
         "candidate_less_build_for_replenishment=false",
         "no material progress for more than 24 hours MUST be shown as stalled",
         "The 24-hour stall threshold overrides any longer `Autonomous ETA` band.",
