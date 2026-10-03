@@ -221,7 +221,7 @@ def test_duplicate_exact_candidates_fail_closed(monkeypatch):
         auto._candidate_command(m, g, b)
 
 
-def test_materialization_reuses_existing_eligibility_and_runtime_cas_and_stops_after_one(monkeypatch):
+def test_plan_materializes_and_acquires_exactly_one_task_in_memory(monkeypatch):
     b = bundle()
     q = queue()
     m = b.missions[0]
@@ -243,27 +243,22 @@ def test_materialization_reuses_existing_eligibility_and_runtime_cas_and_stops_a
         "queue": q,
         "repository_node_id": "repo-node",
         "runtime_enabled": True,
+        "integration_enabled": False,
     }
-    writes = []
-    monkeypatch.setattr(auto, "_candidate_command", lambda mission_value, gap_value, bundle_value: command)
-    monkeypatch.setattr(owner_admin, "_public_target", lambda command_value: target())
+    tick = {"kind": "TICK", "run_id": "v4:test", "yielded_task_tokens": []}
+    monkeypatch.setattr(auto, "_candidate_command", lambda *_args: command)
+    monkeypatch.setattr(owner_admin, "_public_target", lambda _command: target())
+    monkeypatch.setattr(carrier, "_write_queue_exact", lambda *_args, **_kwargs: pytest.fail("planning must not write"))
 
-    def fake_write(state_value, next_queue, reason):
-        writes.append((next_queue, reason))
-        return {**state_value, "queue": next_queue, "runtime_sha": "4" * 40, "queue_blob": "5" * 40}
-
-    monkeypatch.setattr(carrier, "_write_queue_exact", fake_write)
-
-    materialized = auto._materialize_one(state, b)
-    assert materialized is not None
-    next_state, result_command = materialized
+    planned = auto._plan_materialize_and_acquire_one(state, b, tick)
+    assert planned is not None
+    acquired, result_command, work = planned
     assert result_command == command
-    assert next_state["runtime_sha"] == "4" * 40
-    assert len(writes) == 1
-    next_queue, reason = writes[0]
-    assert reason == "auto-replenish"
-    assert len(next_queue["tasks"]) == 1
-    task = next_queue["tasks"][0]
+    assert work["result"] == "WORK"
+    assert work["run_id"] == "v4:test"
+    assert acquired["execution_lock"]["run_id"] == "v4:test"
+    assert len(acquired["tasks"]) == 1
+    task = acquired["tasks"][0]
     assert task["status"] == "ACTIVE"
     assert task["phase"] == "REVIEW"
     assert task["candidate"]["candidate_pr_number"] == 3
@@ -271,20 +266,21 @@ def test_materialization_reuses_existing_eligibility_and_runtime_cas_and_stops_a
     assert task["repository_authority_blob_sha"] == AUTHORITY_SHA
 
 
-def test_disabled_runtime_no_work_cannot_discover_or_write_candidate(monkeypatch):
+def test_disabled_runtime_no_work_cannot_discover_or_plan_candidate(monkeypatch):
     b = bundle()
-    state = {"queue": queue(), "runtime_enabled": False}
+    state = {"queue": queue(), "runtime_enabled": False, "integration_enabled": False}
+    tick = {"kind": "TICK", "run_id": "v4:test", "yielded_task_tokens": []}
     monkeypatch.setattr(auto, "_candidate_command", lambda *args: pytest.fail("disabled runtime must not discover candidate"))
-    monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: pytest.fail("disabled runtime must not write"))
-    assert auto._materialize_one(state, b) is None
+    assert auto._plan_materialize_and_acquire_one(state, b, tick) is None
 
 
 def test_no_exact_candidate_means_no_queue_write(monkeypatch):
     b = bundle()
-    state = {"queue": queue(), "runtime_enabled": True}
+    state = {"queue": queue(), "runtime_enabled": True, "integration_enabled": False}
+    tick = {"kind": "TICK", "run_id": "v4:test", "yielded_task_tokens": []}
     monkeypatch.setattr(auto, "_candidate_command", lambda *args: None)
     monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: pytest.fail("must not write"))
-    assert auto._materialize_one(state, b) is None
+    assert auto._plan_materialize_and_acquire_one(state, b, tick) is None
 
 
 def test_main_policy_gate_uses_proposals_without_materialization_when_not_adopted(monkeypatch):
@@ -296,15 +292,14 @@ def test_main_policy_gate_uses_proposals_without_materialization_when_not_adopte
     monkeypatch.setattr(carrier, "_load_current", lambda: state)
     monkeypatch.setattr(carrier, "_load_authority_bundle", lambda _sha: b)
     monkeypatch.setattr(auto, "_auto_materialization_policy_enabled", lambda _state: False)
-    monkeypatch.setattr(auto, "_materialize_one", lambda *_args: pytest.fail("must remain inert before private policy adoption"))
+    monkeypatch.setattr(auto, "_plan_materialize_and_acquire_one", lambda *_args: pytest.fail("must remain inert before private policy adoption"))
     monkeypatch.setattr(auto, "_proposal_fallback", lambda *_args: result)
     monkeypatch.setattr(auto, "_set_output", lambda value: outputs.append(dict(value)))
     assert auto.main() == 0
     assert outputs == [result]
 
 
-def test_materialized_candidate_is_acquired_and_final_result_is_work(monkeypatch):
-    initial = {"protocol": auto.RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": "v4:test"}
+def test_materialized_candidate_commits_once_and_final_result_is_work(monkeypatch):
     state = {
         "main_sha": "1" * 40,
         "runtime_sha": "2" * 40,
@@ -313,9 +308,17 @@ def test_materialized_candidate_is_acquired_and_final_result_is_work(monkeypatch
         "runtime_enabled": True,
         "integration_enabled": False,
     }
-    materialized_state = {**state, "runtime_sha": "4" * 40, "queue_blob": "5" * 40}
-    activation = {"repository": REPO, "candidate_pr_number": 3}
     tick = {"kind": "TICK", "run_id": "v4:test", "yielded_task_tokens": []}
+    command = {
+        "operation": "ACTIVATE_ROOT_CANDIDATE",
+        "repository": REPO,
+        "candidate_pr_number": 3,
+        "candidate_sha": HEAD,
+        "candidate_head_branch": "control/mission-agent-r2-gap-05",
+        "expected_base_branch": "main",
+        "expected_base_sha": BASE,
+    }
+    acquired_queue = {**queue(), "execution_lock": {"run_id": "v4:test", "task_id": "task", "started_at": "2026-10-04T00:00:00Z", "expires_at": "2026-10-04T01:30:00Z"}}
     work = {
         "protocol": auto.RESULT_PROTOCOL_ID,
         "result": "WORK",
@@ -325,48 +328,31 @@ def test_materialized_candidate_is_acquired_and_final_result_is_work(monkeypatch
         "action": "REVIEW_INTERNAL",
     }
     outputs = []
+    writes = []
     monkeypatch.setenv("CONTROL_V4_CARRIER_RESULT", '{"protocol":"CONTROL_V4_RUNTIME_RESULT_V1","result":"NO_WORK","run_id":"v4:test"}')
     monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", "ignored-by-test")
     monkeypatch.setattr(carrier, "_load_current", lambda: state)
     monkeypatch.setattr(carrier, "_load_authority_bundle", lambda _sha: bundle())
     monkeypatch.setattr(auto, "_auto_materialization_policy_enabled", lambda _state: True)
-    monkeypatch.setattr(auto, "_materialize_one", lambda *_args: (materialized_state, activation))
     monkeypatch.setattr(auto, "parse_public_command", lambda _raw: tick)
+    monkeypatch.setattr(auto, "_plan_materialize_and_acquire_one", lambda *_args: (acquired_queue, command, work))
     monkeypatch.setattr(carrier, "_assert_tick_not_superseded", lambda _command: None)
     monkeypatch.setattr(carrier, "_assert_tick_fresh", lambda **_kwargs: None)
-    monkeypatch.setattr(carrier, "_tick", lambda *_args, **_kwargs: (materialized_state, work))
+    monkeypatch.setattr(owner_admin, "_public_target", lambda _command: target())
+    monkeypatch.setattr(owner_admin, "validate_public_target", lambda *_args: None)
+    monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: writes.append((args, kwargs)))
     monkeypatch.setattr(auto, "_set_output", lambda value: outputs.append(dict(value)))
 
     assert auto.main() == 0
+    assert len(writes) == 1
+    assert writes[0][1]["reason"] == "auto-replenish-acquire"
     assert outputs[-1] == work
-    assert all(value.get("result") != "NO_WORK" for value in outputs)
+    assert outputs[-1]["result"] == "WORK"
 
 
 def test_no_candidate_can_publish_terminal_no_work_because_no_mutation_occurred(monkeypatch):
     initial = {"protocol": auto.RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": "v4:test"}
-    state = {"main_sha": "1" * 40, "queue": queue(), "runtime_enabled": True}
-    outputs = []
-    monkeypatch.setenv("CONTROL_V4_CARRIER_RESULT", '{"protocol":"CONTROL_V4_RUNTIME_RESULT_V1","result":"NO_WORK","run_id":"v4:test"}')
-    monkeypatch.setattr(carrier, "_load_current", lambda: state)
-    monkeypatch.setattr(carrier, "_load_authority_bundle", lambda _sha: bundle())
-    monkeypatch.setattr(auto, "_auto_materialization_policy_enabled", lambda _state: True)
-    monkeypatch.setattr(auto, "_materialize_one", lambda *_args: None)
-    monkeypatch.setattr(auto, "_proposal_fallback", lambda *_args: initial)
-    monkeypatch.setattr(auto, "_set_output", lambda value: outputs.append(dict(value)))
-
-    assert auto.main() == 0
-    assert outputs[-1] == initial
-
-
-def test_post_materialization_non_work_result_fails_closed_without_publishing_no_work(monkeypatch):
-    state = {
-        "main_sha": "1" * 40,
-        "runtime_sha": "2" * 40,
-        "queue_blob": "3" * 40,
-        "queue": queue(),
-        "runtime_enabled": True,
-        "integration_enabled": False,
-    }
+    state = {"main_sha": "1" * 40, "queue": queue(), "runtime_enabled": True, "integration_enabled": False}
     tick = {"kind": "TICK", "run_id": "v4:test", "yielded_task_tokens": []}
     outputs = []
     monkeypatch.setenv("CONTROL_V4_CARRIER_RESULT", '{"protocol":"CONTROL_V4_RUNTIME_RESULT_V1","result":"NO_WORK","run_id":"v4:test"}')
@@ -374,20 +360,14 @@ def test_post_materialization_non_work_result_fails_closed_without_publishing_no
     monkeypatch.setattr(carrier, "_load_current", lambda: state)
     monkeypatch.setattr(carrier, "_load_authority_bundle", lambda _sha: bundle())
     monkeypatch.setattr(auto, "_auto_materialization_policy_enabled", lambda _state: True)
-    monkeypatch.setattr(auto, "_materialize_one", lambda *_args: (state, {"repository": REPO}))
     monkeypatch.setattr(auto, "parse_public_command", lambda _raw: tick)
-    monkeypatch.setattr(carrier, "_assert_tick_not_superseded", lambda _command: None)
-    monkeypatch.setattr(carrier, "_assert_tick_fresh", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        carrier,
-        "_tick",
-        lambda *_args, **_kwargs: (state, {"protocol": auto.RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": "v4:test"}),
-    )
+    monkeypatch.setattr(auto, "_plan_materialize_and_acquire_one", lambda *_args: None)
+    monkeypatch.setattr(auto, "_proposal_fallback", lambda *_args: initial)
+    monkeypatch.setattr(carrier, "_write_queue_exact", lambda *args, **kwargs: pytest.fail("NO_WORK path must not write"))
     monkeypatch.setattr(auto, "_set_output", lambda value: outputs.append(dict(value)))
 
     assert auto.main() == 0
-    assert outputs[-1]["result"] == "ERROR"
-    assert all(value.get("result") != "NO_WORK" for value in outputs)
+    assert outputs == [initial]
 
 
 def test_workflow_reuses_admitted_private_write_capability_and_current_tick_fences():
