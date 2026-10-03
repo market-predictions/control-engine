@@ -89,8 +89,12 @@ jobs:
           ! grep -q '_private_post' scripts/control_v4_replenishment_snapshot.py
           grep -q 'auto_materialization_policy=MISSION_OPEN_EXACT_CANDIDATE_V1' scripts/control_v4_auto_replenish.py
           grep -q 'eligible_unmaterialized_gaps_v4' scripts/control_v4_auto_replenish.py
+          grep -q 'state.get("runtime_enabled") is not True' scripts/control_v4_auto_replenish.py
+          grep -q 'acquire_task_v4' scripts/control_v4_auto_replenish.py
+          grep -q 'safe_work_capsule' scripts/control_v4_auto_replenish.py
           grep -q '_write_queue_exact' scripts/control_v4_auto_replenish.py
-          grep -q 'reason="auto-replenish"' scripts/control_v4_auto_replenish.py
+          grep -q 'reason="auto-replenish-acquire"' scripts/control_v4_auto_replenish.py
+          grep -q 'AUTO_REPLENISH_FAIL_CLOSED' scripts/control_v4_auto_replenish.py
           grep -q 'python scripts/control_v4_auto_replenish.py' .github/workflows/control-v4-runtime-carrier.yml
           grep -q "startsWith(github.event.comment.body, 'CONTROL_V4_OWNER_ADMIN ')" .github/workflows/control-v4-authority-adoption.yml
           grep -q 'python scripts/control_v4_owner_admin.py' .github/workflows/control-v4-authority-adoption.yml
