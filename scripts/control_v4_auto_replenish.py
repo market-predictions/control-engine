@@ -8,9 +8,9 @@ auto-materialization policy and the gap already has exactly one public, open,
 mergeable same-repository owner-authored PR bound to the exact current Mission
 revision + gap.
 
-A published terminal NO_WORK remains mutation-free. If materialization succeeds,
-the same admitted TICK immediately acquires the newly materialized task through
-the existing carrier path and publishes WORK instead of NO_WORK.
+A published terminal NO_WORK remains mutation-free. If an exact candidate is
+materialized, materialization and acquisition land in one existing private CAS
+and the same admitted TICK publishes WORK instead of NO_WORK.
 """
 
 from datetime import datetime, timezone
@@ -118,18 +118,21 @@ def _candidate_command(
         "expected_base_branch": base.get("ref"),
         "expected_base_sha": base.get("sha"),
     }
-    target = owner_admin._public_target(command)
-    owner_admin.validate_public_target(command, target)
+    owner_admin.validate_public_target(command, owner_admin._public_target(command))
     return command
 
 
-def _materialize_one(state: Mapping[str, Any], bundle: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    # Runtime disablement is an authority boundary, not merely an acquisition
-    # preference. The state was freshly loaded for this step, and no candidate
-    # discovery or durable queue mutation is allowed unless that same state
-    # explicitly authorizes runtime execution.
+def _materialize_and_acquire_one(
+    state: Mapping[str, Any],
+    bundle: Any,
+    tick_command: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
     if state.get("runtime_enabled") is not True:
         return None
+    if state.get("integration_enabled") is True:
+        raise AutoReplenishError("auto replenishment requires integration disabled")
+    if tick_command.get("kind") != "TICK" or not isinstance(tick_command.get("run_id"), str):
+        raise AutoReplenishError("auto replenishment requires exact admitted TICK")
 
     queue = state["queue"]
     repositories = sorted(
@@ -145,23 +148,54 @@ def _materialize_one(state: Mapping[str, Any], bundle: Any) -> tuple[dict[str, A
             command = _candidate_command(mission, gap, bundle)
             if command is None:
                 continue
+
             approval = owner_admin.replenishment_approval_payload_v4(queue, bundle, repository)
-            next_queue = owner_admin.activate_root_candidate_v4(
+            now = datetime.now(timezone.utc)
+            materialized = owner_admin.activate_root_candidate_v4(
                 queue,
                 bundle,
                 command,
                 approval,
-                now=datetime.now(timezone.utc),
+                now=now,
             )
-            # Re-read exact public target immediately before the existing runtime
-            # CAS. The CAS itself rechecks private main/runtime/queue + TICK age.
+            before_ids = {task["task_id"] for task in queue["tasks"]}
+            new_ids = [task["task_id"] for task in materialized["tasks"] if task["task_id"] not in before_ids]
+            if len(new_ids) != 1:
+                raise AutoReplenishError("auto replenishment did not create exactly one root task")
+            task_id = new_ids[0]
+
+            acquired = runtime_carrier.acquire_task_v4(
+                materialized,
+                task_id=task_id,
+                run_id=tick_command["run_id"],
+                now=now,
+                control_runtime_enabled=True,
+                integration_enabled=False,
+            )
+            work_result = runtime_carrier.safe_work_capsule(
+                acquired,
+                task_id=task_id,
+                run_id=tick_command["run_id"],
+            )
+            if work_result.get("result") != "WORK":
+                raise AutoReplenishError("auto replenishment acquisition did not produce WORK")
+
+            # Re-prove both command currency and target identity immediately
+            # before the one durable mutation. _write_queue_exact repeats the
+            # originating-TICK age check at the atomic ref-CAS boundary.
+            runtime_carrier._assert_tick_not_superseded(tick_command)
+            runtime_carrier._assert_tick_fresh(now=datetime.now(timezone.utc))
             owner_admin.validate_public_target(command, owner_admin._public_target(command))
-            next_state = runtime_carrier._write_queue_exact(state, next_queue, reason="auto-replenish")
+            next_state = runtime_carrier._write_queue_exact(
+                state,
+                acquired,
+                reason="auto-replenish-acquire",
+            )
             print(
-                "CONTROL_V4_AUTO_REPLENISH=MATERIALIZED "
+                "CONTROL_V4_AUTO_REPLENISH=ACQUIRED "
                 f"{command['repository']}#{command['candidate_pr_number']}@{command['candidate_sha']}"
             )
-            return next_state, command
+            return next_state, work_result
     return None
 
 
@@ -188,12 +222,12 @@ def _proposal_fallback(result: Mapping[str, Any], state: Mapping[str, Any], bund
     return enriched
 
 
-def _post_materialization_error(run_id: object) -> dict[str, Any]:
+def _mutation_path_error(run_id: object) -> dict[str, Any]:
     value = run_id if isinstance(run_id, str) else "unknown"
     return {
         "protocol": RESULT_PROTOCOL_ID,
         "result": "ERROR",
-        "code": "AUTO_REPLENISH_POST_MATERIALIZATION_FAIL_CLOSED",
+        "code": "AUTO_REPLENISH_FAIL_CLOSED",
         "run_id": value,
     }
 
@@ -214,41 +248,23 @@ def main() -> int:
             _set_output(_proposal_fallback(result, state, bundle))
             return 0
 
-        # If anything fails after the mutation path becomes eligible, the
-        # workflow must never fall back to publishing the carrier's terminal
-        # NO_WORK because a private write may already have committed.
-        fail_closed_result = _post_materialization_error(result.get("run_id"))
+        public_command = parse_public_command(os.environ.get("CONTROL_V4_PUBLIC_COMMAND", ""))
+        if public_command.get("kind") != "TICK" or public_command.get("run_id") != result.get("run_id"):
+            raise AutoReplenishError("carrier NO_WORK does not bind exact admitted TICK")
+
+        # Pre-seed a public-safe fail-closed result before entering any path that
+        # can write. If transport becomes ambiguous around the CAS, workflow
+        # publication can never fall back to the carrier's original NO_WORK.
+        fail_closed_result = _mutation_path_error(result.get("run_id"))
         _set_output(fail_closed_result)
 
-        materialized = _materialize_one(state, bundle)
-        if materialized is None:
+        acquired = _materialize_and_acquire_one(state, bundle, public_command)
+        if acquired is None:
             _set_output(_proposal_fallback(result, state, bundle))
             return 0
 
-        materialized_state, _materialized_command = materialized
-        public_command = parse_public_command(os.environ.get("CONTROL_V4_PUBLIC_COMMAND", ""))
-        if public_command.get("kind") != "TICK" or public_command.get("run_id") != result.get("run_id"):
-            _set_output(fail_closed_result)
-            return 0
-
-        try:
-            runtime_carrier._assert_tick_not_superseded(public_command)
-            now = datetime.now(timezone.utc)
-            runtime_carrier._assert_tick_fresh(now=now)
-            _next_state, acquired_result = runtime_carrier._tick(public_command, materialized_state, now=now)
-        except (
-            RuntimeProtocolError,
-            V4ValidationError,
-            runtime_carrier.CarrierError,
-        ):
-            _set_output(fail_closed_result)
-            return 0
-
-        if acquired_result.get("result") != "WORK":
-            _set_output(fail_closed_result)
-            return 0
-
-        _set_output(acquired_result)
+        _next_state, work_result = acquired
+        _set_output(work_result)
         return 0
     except (
         AutoReplenishError,
