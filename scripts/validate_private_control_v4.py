@@ -50,7 +50,6 @@ NORMATIVE_DOCTRINE_PATHS = {
 HISTORICAL_AUDIT_PATHS = {COHERENCE_REPAIR_PATH}
 CURRENT_SURFACE_PATHS = NORMATIVE_DOCTRINE_PATHS | HISTORICAL_AUDIT_PATHS
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-REVIEWED_AUTOMATION_OBJECT_ID = "6a9a7e0b18b08191876c134d83cfbba2"
 REVIEWED_RUNNER_PROMPT_BLOB_SHA = CANONICAL_RUNNER_PROMPT_BLOB_SHA
 OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
     {
@@ -74,132 +73,80 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "6628a9e4c47234bd1e58611225c6fa3f236051f4",
         "2e31c866e7484c5ff6346c50603bb76a2029c331",
         "b3d671767231ec534c6e22eb7a0c6c4c2875605f",
+        "05f15520228cc659b6668e4eb39f194047d15900",
     }
 )
 REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f65c05a566539cbda7d9e75993fce8be7b5842c6"
+
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
-    "CONTROL_V4_RUNTIME_TICK",
-    "CONTROL_V4_RUNTIME_EVENT",
-    "market-predictions/control-engine",
-    "issue **#106**",
-    "MUST NOT depend on direct Scheduled access to private",
+    "execution_surface=GITHUB_ACTIONS_NATIVE",
+    "The one canonical Control V4 Runner is the trusted-main GitHub Actions workflow",
+    ".github/workflows/control-v4-native-runner.yml",
+    "It is not an LLM prompt and grants no authority by itself.",
+    "control-runtime-state:control/DISPATCH_QUEUE.json",
+    "principal_manual_relay_count=0",
     "integration_enabled=false",
-    "candidate-less `BUILD` cannot be executed safely from carrier V1 alone; submit `YIELD`",
-    "The schedule is a wake-up mechanism, not runtime state.",
-    "never reconstruct Control liveness, holder state or recovery state from public comment history",
-    "Then create one new unique `run_id` for this invocation in the exact generation-bound format, an empty invocation-local `yielded_task_tokens` set, and a new-holder acquisition count of `0`.",
-    "Immediately post one fresh initial `CONTROL_V4_RUNTIME_TICK`",
-    "Do **not** scan issue #106 history first and do not replay an older TICK or EVENT.",
-    "`NO_WORK` or `BUSY` ends this invocation without mutation.",
-    "carrier expired-lock recovery are the only cross-invocation holder-recovery mechanism",
-    "Do not replay the command and do not derive recovery state from issue history.",
-    "The next normal Scheduled invocation starts with a fresh TICK",
+    "No ChatGPT Scheduled Task, Work task, Codex automation, Guardian, second queue,",
 )
 COMMAND_BINDING_PROMPT_REQUIRED_MARKERS = (
-    "runner_command_generation=b6f42d03a917ce58",
-    "## Pre-acquisition Runner-binding fence",
-    "Before creating a `run_id` or posting any acquisition-capable TICK",
-    "zero public command writes",
-    "6a9a7e0b18b08191876c134d83cfbba2",
-    "timing_mode=exact_schedule",
-    "document_id=CONTROL_RUNNER_V4_PROMPT",
-    "status=ACTIVE_BOUND",
-    "architecture=CONTROL_AUTONOMY_ARCHITECTURE_V4",
-    "source_of_truth=GITHUB",
-    "principal_manual_relay_target=0",
-    "no second enabled Control V4 Runner object is observed",
-    "v4:6a9a7e0b18b08191876c134d83cfbba2:b6f42d03a917ce58:<32-lowercase-hex-random>",
-    "A stale invocation from an older prompt generation does not satisfy the current generation contract and MUST post no TICK.",
-    "requires a new previously unused `runner_command_generation` before adoption.",
-    "Before any private capability is created, the public workflow independently rejects any command whose current generation-bound identity is invalid and rejects any TICK whose immutable GitHub `created_at` age is outside the inclusive `0..120` second admission window.",
-    "whose `command_comment_id` equals that exact preserved GitHub command-comment id",
-    "no later same-`run_id` Control command",
-    "a TICK older than 120 seconds at transition time is rejected before `_tick()` can acquire or mutate private runtime state.",
-    "persists no transport cursor or ledger",
+    "runner_command_generation=9c7e1a4b2d6f8053",
+    "execution_surface=GITHUB_ACTIONS_NATIVE",
+    "checks out exact trusted `control-engine@main`",
+    "creates one fresh generation-bound run id",
+    "creates an exact private `control-plane` capability",
+    "performs one ordinary V4 acquisition using the existing lease/CAS primitives",
 )
 LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS = (
-    "### Live-TICK responsibility window",
-    "Every acquisition-capable TICK posted by this invocation",
-    "do not classify its result as missing, do not end the invocation, and do not abandon responsibility merely because its immutable GitHub `created_at` has passed 120 seconds",
-    "Control V4 runtime command <command_comment_id>",
-    "event is `issue_comment`",
-    "status `completed`",
-    "one final exact-command result read performed **after observing that terminal run state** still finds no correlated result",
-    "The age check alone is never sufficient",
-    "Never post a replacement TICK merely because the current one is slow.",
-    "persists no timer, cursor, retry record, scheduler state, carrier-run ledger or runtime state",
+    "The workflow wakes hourly at minute 30 using GitHub's native cron",
+    "`30 * * * *`",
+    "A failed GitHub Actions run does not disable future cron wakes.",
+    "Expired-holder recovery remains the existing canonical lease mechanism.",
 )
 LIVENESS_PROMPT_REQUIRED_MARKERS = (
-    "### Mandatory continuation with one runaway cap",
-    "at most **8 new-holder acquisitions per Scheduled invocation**",
-    "A second same-`run_id` TICK used only for immediate pre-effect revalidation of the current holder is not a new-holder acquisition.",
-    "Wait-bound work is a WORK closed by `YIELD`, `REVIEW_UNAVAILABLE`, or `EXTERNAL_REQUESTED`.",
-    "add that WORK's exact `task_token` to this invocation's `yielded_task_tokens`",
-    "Do not add task tokens after progress EVENTs `CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, or `EXTERNAL_FINDING`.",
-    "This continuation is mandatory.",
-    "Stop only after the global cap is reached",
-    "This is a new current-state acquisition query, not a replay of an earlier command.",
-    "Never carry yielded tokens or the acquisition count into another Scheduled invocation.",
-    "A fresh same-run TICK posted after a completed EVENT is later than that EVENT and may reacquire current truth",
+    "processes at most one newly acquired WORK item",
+    "There is no same-invocation multi-task continuation requirement.",
+    "One WORK per wake is the deliberate liveness/simplicity cap.",
+    "The next hourly wake re-reads current truth.",
 )
 TARGET_EFFECT_PROMPT_REQUIRED_MARKERS = (
-    "Fresh acquisition of the current holder occurred in this Scheduled invocation under its unique `run_id`",
-    "current-holder acquisition TICK",
-    "post a **second same-`run_id` TICK**",
-    "must be no more than **660 seconds old**",
-    "Later revalidation TICKs do not reset or renew this clock.",
-    "no more than **15 seconds old**",
-    "perform only the minimum fresh public target identity read and then start the effect",
-    "no additional reasoning, waiting, or unrelated work is allowed before effect start",
-    "bounded to **300 seconds or less**",
-    "The second same-`run_id` TICK is revalidation only",
-    "A fresh phase reacquisition creates a fresh acquisition identity for subsequent target effects.",
+    "A target-repository mutation is permitted only for the exact currently held",
+    "installation token scoped to that exact repository",
+    "revalidates the target immediately before the effect",
+    "requires exact readback",
+    "perform no target effect and close the holder with YIELD",
 )
 CANONICAL_EVENT_PROMPT_REQUIRED_MARKERS = (
-    "### Canonical EVENT wire contract",
-    "For every semantic EVENT, copy the correlated trusted `WORK` identity; do not transform it.",
-    "`run_id`, `task_token`, `event`, `repository`, `action`",
-    "plus `candidate` **iff the correlated WORK contained `candidate`**",
-    "copied verbatim from that exact trusted WORK",
-    "Never emit public `holder_*` fields.",
-    "Never copy `protocol`, `result`, `live_candidate`",
-    "Any EVENT that cannot be formed exactly from one correlated trusted WORK fails closed and is not sent.",
-    "A prior `REVIEW_UNAVAILABLE`/`INDETERMINATE` external review remains retryable but must not monopolize later selection",
+    "closes any holder with one accepted EVENT or fail-closed YIELD",
+    "candidate-less BUILD: YIELD.",
+    "CANDIDATE_READY",
+    "INTERNAL_REPAIR",
+    "INTERNAL_PASS",
+    "EXTERNAL_REQUESTED",
+    "EXTERNAL_FINDING",
+    "EXTERNAL_PASS",
+    "REVIEW_UNAVAILABLE",
 )
 HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS = (
-    "HOLDER CLOSEOUT OBLIGATION",
-    "### Holder closeout after WORK — atomic EVENT boundary",
-    "Every accepted semantic EVENT is an **ATOMIC HOLDER BOUNDARY**",
-    "the event transition and release of that exact holder are committed in the same private queue mutation/CAS",
-    "Under the current contract an accepted EVENT must never return `WORK`.",
-    "`READY` means the task reached READY with no holder; `YIELDED` means the EVENT transition completed and the holder was atomically released.",
-    "No normal invocation is required to retain a private holder across semantic phases.",
-    "Send exactly one `CANDIDATE_READY` EVENT using the exact `live_candidate` fields",
-    "send exactly one `YIELD` EVENT while the current holder remains valid",
-    "before any normal invocation exit after obtaining `WORK`",
-    "A missing or ambiguous EVENT result remains exceptional fail-closed transport ambiguity",
-    "never infer private holder state from public history",
+    "closes any holder with one accepted EVENT or fail-closed YIELD",
+    "Runtime queue mutation remains the existing exact private-main no-op +",
+    "runtime-ref atomic CAS",
+    "No blind retries occur after ambiguous writes.",
 )
 COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS = (
-    "## Complexity brake — mandatory blocker admission",
-    "violates an explicit current Mission acceptance criterion",
-    "Pre-existing debt on the current base is non-blocking",
-    "Speculative hardening, future extensibility/generalization",
-    "Every repair must be the smallest complete root-cause fix.",
-    "Do not add a service, state plane, queue, scheduler, protocol, framework, or general abstraction unless a concrete current requirement cannot be met otherwise.",
-    "post-repair review is bounded to the admitted finding(s), regressions introduced by that repair, and the existing acceptance criteria",
-    "Reviewer observations do not automatically become roadmap work.",
+    "Routine NO_WORK/BUSY wakes perform no",
+    "model call.",
+    "Codex is not the routine executor.",
+    "smallest authorized change",
+    "No ChatGPT Scheduled Task, Work task, Codex automation, Guardian, second queue,",
+    "retry ledger, heartbeat ledger or recovery database",
 )
 OBSOLETE_TRANSPORT_RECOVERY_MARKERS = (
-    "read only the bounded issue-#106 history",
-    "at least **120 seconds old**",
-    "recovery replay",
-    "exact same TICK body and same `run_id`",
-    "unresolved EVENT",
-    "spent for forward scheduling",
-    "5400-second unresolved-EVENT retirement clock",
-    "earliest TICK for that `run_id` remains the sole initial acquisition TICK",
-    "If an EVENT returns `WORK`, the holder remains live",
+    "one canonical ChatGPT Scheduled Control V4 Runner",
+    "Mandatory continuation with one runaway cap",
+    "at most **8 new-holder acquisitions per Scheduled invocation**",
+    "post a **second same-`run_id` TICK**",
+    "Control V4 Liveness Guardian A",
+    "Control V4 Liveness Guardian B",
 )
 HISTORICAL_COHERENCE_REQUIRED_MARKERS = (
     "status=HISTORICAL_AUDIT_EVIDENCE",
@@ -243,11 +190,6 @@ def require_zero_relay_count(value: Mapping[str, Any]) -> None:
     relay = value.get("principal_manual_relay_count")
     if not isinstance(relay, int) or isinstance(relay, bool) or relay != 0:
         raise ValidationError("principal_manual_relay_count must be exact integer zero")
-
-
-def require_reviewed_automation_object_id(value: object) -> None:
-    if value != REVIEWED_AUTOMATION_OBJECT_ID:
-        raise ValidationError("Runner automation object differs from exact reviewed V4-30 object")
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -387,27 +329,27 @@ def validate_current_surface(root: Path, entries) -> None:
 
 def _validate_prompt_trust(prompt_text: str, prompt_oid: str) -> None:
     if prompt_oid in OBSOLETE_RUNNER_PROMPT_BLOB_SHAS:
-        raise ValidationError("obsolete Runner prompt is not trusted by the current stateless transport contract")
+        raise ValidationError("obsolete Runner contract is not trusted by the current native workflow contract")
     if prompt_oid != REVIEWED_RUNNER_PROMPT_BLOB_SHA:
         raise ValidationError("Runner prompt blob differs from exact trusted reviewed V4 prompt contract")
     if any(marker not in prompt_text for marker in STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks required state-first transport markers")
+        raise ValidationError("current Runner contract lacks required native authority markers")
     if any(marker not in prompt_text for marker in COMMAND_BINDING_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks required pre-acquisition command-binding/correlation markers")
+        raise ValidationError("current Runner contract lacks required native binding markers")
     if any(marker not in prompt_text for marker in LIVE_TICK_RESPONSIBILITY_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks required live-TICK responsibility markers")
+        raise ValidationError("current Runner contract lacks required native wake/liveness markers")
     if any(marker not in prompt_text for marker in LIVENESS_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks minimal invocation-liveness markers")
+        raise ValidationError("current Runner contract lacks one-WORK invocation-liveness markers")
     if any(marker not in prompt_text for marker in TARGET_EFFECT_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks target-effect freshness markers")
+        raise ValidationError("current Runner contract lacks exact target-effect markers")
     if any(marker not in prompt_text for marker in CANONICAL_EVENT_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks canonical EVENT markers")
+        raise ValidationError("current Runner contract lacks event semantics markers")
     if any(marker not in prompt_text for marker in HOLDER_CLOSEOUT_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks holder-closeout markers")
+        raise ValidationError("current Runner contract lacks holder-closeout markers")
     if any(marker not in prompt_text for marker in COMPLEXITY_BRAKE_PROMPT_REQUIRED_MARKERS):
-        raise ValidationError("current Runner prompt lacks mandatory complexity-brake markers")
+        raise ValidationError("current Runner contract lacks simplicity/cost-boundary markers")
     if any(marker in prompt_text for marker in OBSOLETE_TRANSPORT_RECOVERY_MARKERS):
-        raise ValidationError("current Runner prompt retains obsolete public-history recovery semantics")
+        raise ValidationError("current Runner contract retains obsolete ChatGPT-scheduled semantics")
 
 
 def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
@@ -433,8 +375,14 @@ def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
     require_zero_relay_count(config)
     if config.get("protocol_id") != "CONTROL_RUNNER_V4" or config.get("runner_id") != "CONTROL_V4_RUNNER":
         raise ValidationError("Runner config identity invalid")
-    if config.get("execution_surface") != "CHATGPT_SCHEDULED" or config.get("prompt_path") != RUNNER_PROMPT_PATH:
+    if config.get("execution_surface") != "GITHUB_ACTIONS_NATIVE" or config.get("prompt_path") != RUNNER_PROMPT_PATH:
         raise ValidationError("Runner execution/prompt identity invalid")
+    if config.get("workflow_path") != ".github/workflows/control-v4-native-runner.yml":
+        raise ValidationError("Runner native workflow path invalid")
+    if config.get("workflow_repository") != "market-predictions/control-engine" or config.get("workflow_ref") != "main":
+        raise ValidationError("Runner native workflow binding invalid")
+    if config.get("runner_command_generation") != "9c7e1a4b2d6f8053":
+        raise ValidationError("Runner generation invalid")
 
     prompt_text = _text(root, entries, RUNNER_PROMPT_PATH)
     _, prompt_oid = _blob(root, entries, RUNNER_PROMPT_PATH)
@@ -442,23 +390,28 @@ def validate_runtime_and_runner(root: Path, entries) -> dict[str, Any]:
     if config.get("prompt_blob_sha") != prompt_oid:
         raise ValidationError("Runner config does not bind the exact trusted reviewed prompt blob")
     if "status=CANDIDATE_INERT" in prompt_text or "status=CANDIDATE" in prompt_text:
-        raise ValidationError("active Runner prompt retains candidate/inert lifecycle metadata")
+        raise ValidationError("active Runner contract retains candidate/inert lifecycle metadata")
 
-    if config.get("schedule") != {"timing_mode": "exact_schedule", "timezone": "Europe/Amsterdam", "rrule": "FREQ=HOURLY;BYMINUTE=30;BYSECOND=0"}:
-        raise ValidationError("Runner schedule differs from reviewed V4 binding")
-    require_reviewed_automation_object_id(config.get("automation_object_id"))
-    if config.get("automation_object_binding_status") != "BOUND":
-        raise ValidationError("Runner automation object is not bound")
-    if config.get("scheduled_credential_binding_status") != "PLATFORM_MANAGED_NO_STABLE_CREDENTIAL_ID_EXPOSED":
-        raise ValidationError("Runner scheduled credential binding status invalid")
-    if config.get("effective_capability_binding_status") != "BOUND_TO_EXACT_SCHEDULED_OBJECT_TOOL_SURFACE":
-        raise ValidationError("Runner effective capability binding invalid")
-    if config.get("scheduled_capability_observation") != {
-        "scheduler_automation_admin": "PLATFORM_EXPOSED_ACCEPTED",
-        "protection_rules_admin": "UNAVAILABLE_OBSERVED_V4_30",
-        "positive_git_cas_proof": "PROVEN_V4_30",
+    if config.get("schedule") != {
+        "timing_mode": "GITHUB_CRON",
+        "timezone_display": "Europe/Amsterdam",
+        "cron_utc": "30 * * * *",
     }:
-        raise ValidationError("Runner scheduled capability observation differs from current reviewed V4 binding")
+        raise ValidationError("Runner schedule differs from reviewed native V4 binding")
+    if config.get("automation_object_binding_status") != "NATIVE_WORKFLOW_BOUND":
+        raise ValidationError("Runner native workflow binding status invalid")
+    if config.get("scheduled_credential_binding_status") != "CONTROL_GITHUB_APP_EXACT_REPOSITORY_TOKENS":
+        raise ValidationError("Runner native credential binding status invalid")
+    if config.get("effective_capability_binding_status") != "TRUSTED_MAIN_WORKFLOW_PLUS_EXACT_REPOSITORY_CAPABILITIES":
+        raise ValidationError("Runner native capability binding invalid")
+    worker = config.get("semantic_worker")
+    if worker != {
+        "routine_heartbeat_model_calls": 0,
+        "provider_boundary": "FREELLMAPI",
+        "worker_source_repository": "market-predictions/agent",
+        "worker_mode": "EPHEMERAL_ON_DEMAND_PUBLIC_TARGET_FACTS_ONLY",
+    }:
+        raise ValidationError("Runner semantic worker binding invalid")
     return runtime
 
 
