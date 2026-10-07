@@ -246,7 +246,6 @@ def acquire() -> int:
     command = _set_tick_env(run_id)
     try:
         state = carrier._load_current()
-        carrier._assert_tick_not_superseded(command)
         carrier._assert_tick_fresh(now=_now())
         state, result = carrier._tick(command, state, now=_now())
 
@@ -256,7 +255,6 @@ def acquire() -> int:
                 planned = auto_replenish._plan_materialize_and_acquire_one(state, bundle, command)
                 if planned is not None:
                     acquired_queue, candidate_command, work_result = planned
-                    carrier._assert_tick_not_superseded(command)
                     carrier._assert_tick_fresh(now=_now())
                     state = carrier._write_queue_exact(
                         state,
