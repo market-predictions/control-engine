@@ -283,8 +283,10 @@ def acquire() -> int:
     _output("run_id", run_id)
     if result.get("result") == "WORK":
         repository = result["repository"]
+        owner, name = repository.split("/", 1)
         _output("repository", repository)
-        _output("repository_name", repository.split("/", 1)[1])
+        _output("repository_owner", owner)
+        _output("repository_name", name)
         _output("action", result["action"])
         _output("semantic", "true" if result["action"] in {"REVIEW_INTERNAL", "REPAIR"} else "false")
     print(json.dumps(result, sort_keys=True))
