@@ -26,7 +26,7 @@ EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
 TICK_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_TICK\n"
 EVENT_NEWLINE_PREFIX = "CONTROL_V4_RUNTIME_EVENT\n"
 PENDING_DRIFT_BLOCKER = "MISSION_REVISION_DISCIPLINE_VIOLATION_PENDING"
-CANONICAL_RUNNER_PROMPT_BLOB_SHA = "05f15520228cc659b6668e4eb39f194047d15900"
+CANONICAL_RUNNER_PROMPT_BLOB_SHA = "3ee3710d1475ea9c988599402fe876197df8f8bb"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -264,7 +264,7 @@ def validate_runtime_binding(
         raise RuntimeProtocolError("runner config blob binding invalid")
     if runner_config.get("protocol_id") != "CONTROL_RUNNER_V4" or runner_config.get("runner_id") != "CONTROL_V4_RUNNER":
         raise RuntimeProtocolError("runner config identity invalid")
-    if runner_config.get("execution_surface") != "CHATGPT_SCHEDULED":
+    if runner_config.get("execution_surface") != "GITHUB_ACTIONS_NATIVE":
         raise RuntimeProtocolError("runner execution surface invalid")
     if runner_config.get("automation_object_binding_status") != "BOUND":
         raise RuntimeProtocolError("runner automation binding invalid")
