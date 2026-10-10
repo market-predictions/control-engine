@@ -930,7 +930,7 @@ def validate_v41_interactive_tick_start(
     if parsed["kind"] != "TICK":
         raise RuntimeProtocolError("interactive grant is not an acquisition TICK")
     run_id = parsed["run_id"]
-    match = re.fullmatch(r"v41:([1-9][0-9]*):([0-9a-f]{16}):([0-9a-f]{32})", run_id)
+    match = re.fullmatch(r"v41:([1-9][0-9]*):([0-9a-f]{16})", run_id)
     if match is None or match.group(2) != current_generation:
         raise RuntimeProtocolError("interactive TICK not bound to adopted generation")
     start_id = int(match.group(1))
