@@ -288,6 +288,15 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - name: Revalidate native owner origin immediately before private token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" |
+            python3 -c 'import json, os, sys; from datetime import datetime, timezone; from control_engine.v4_runtime_protocol import validate_v41_human_start_probe; validate_v41_human_start_probe(json.load(sys.stdin), expected_comment_id=int(os.environ["COMMENT_ID"]), now=datetime.now(timezone.utc))'
       - name: Obtain read-only scoped private capability
         id: private-read-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
