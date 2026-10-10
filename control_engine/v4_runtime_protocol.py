@@ -15,6 +15,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from control_engine.v4_contracts import (
+    V4ValidationError,
     finish_passed_review_v4,
     validate_queue_v4,
 )
@@ -794,3 +795,98 @@ def assert_public_safe(value: object) -> None:
 def compact_public_result(value: Mapping[str, Any]) -> str:
     assert_public_safe(value)
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+# Read-only interactive diagnostic; it never becomes a trusted TICK/EVENT.
+def plan_interactive_pulse_v4(
+    queue: Mapping[str, Any],
+    *,
+    runtime_enabled: bool,
+    integration_enabled: bool,
+    live_candidate: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a diagnostic action, never an executable V4 authorization.
+
+    Every result explicitly denies Control mutations. Even TARGET_EXACT means
+    only that the public candidate matches the queue snapshot supplied here;
+    existing generation/holder/lease/freshness/CAS gates remain mandatory.
+    """
+    if type(runtime_enabled) is not bool or type(integration_enabled) is not bool:
+        raise V4ValidationError("PULSE requires exact current boolean authority")
+    validate_queue_v4(queue)
+
+    def result(status: str, task: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        answer: dict[str, Any] = {
+            "status": status,
+            "control_event_authorized": False,
+            "target_effect_authorized": False,
+        }
+        if task is not None:
+            answer["task_id"] = task["task_id"]
+            answer["repository"] = task["repository"]
+            answer["phase"] = task["phase"]
+            if task.get("candidate") is not None:
+                answer["candidate"] = dict(task["candidate"])
+        return answer
+
+    if not runtime_enabled:
+        return result("RUNTIME_DISABLED")
+    if integration_enabled:
+        return result("INTEGRATION_HOLD")
+    if queue["execution_lock"] is not None:
+        # An expired lease still requires the canonical runtime recovery path.
+        return result("HOLDER_PRESENT_NO_INTERACTIVE_ACQUISITION")
+
+    # The fixed string is a pure selector input, NOT a command, runtime identity,
+    # issued lease, or trusted runner generation.
+    task_id = select_task_id_v4(
+        queue, run_id="interactive-pulse-readonly-selector", integration_enabled=False
+    )
+    if task_id is None:
+        return result("NO_ELIGIBLE_QUEUED_TASK")
+    task = next(item for item in queue["tasks"] if item["task_id"] == task_id)
+    candidate = task.get("candidate")
+    if candidate is None:
+        if task.get("phase") == "BUILD":
+            return result("BUILD_REQUIRES_INTERACTIVE_BINDING", task)
+        return result("NO_CANDIDATE_CURRENT_TASK", task)
+    if live_candidate is None:
+        return result("FRESH_TARGET_READ_REQUIRED", task)
+    if not isinstance(live_candidate, Mapping):
+        raise V4ValidationError("fresh target candidate evidence invalid")
+    if dict(live_candidate) != dict(candidate):
+        return result("CANDIDATE_DRIFT_REQUIRES_GOVERNED_RECONCILIATION", task)
+    return result("TARGET_EXACT_INTERACTIVE_BINDING_REQUIRED", task)
+
+    
+def validate_v41_human_start_probe(
+    comment: Mapping[str, Any],
+    *,
+    expected_comment_id: int,
+    now: datetime,
+) -> None:
+    """Verify a GitHub REST-read owner-origin probe; never grant V4 authority.
+
+    `performed_via_github_app is None` separates ordinary owner credentials
+    from the connected ChatGPT/Work GitHub App, not from all possible owner PATs.
+    This deliberately does NOT issue a run_id, holder, command or lease.
+    """
+    if not isinstance(comment, Mapping):
+        raise RuntimeProtocolError("PULSE probe GitHub comment invalid")
+    if type(expected_comment_id) is not int or expected_comment_id <= 0:
+        raise RuntimeProtocolError("PULSE probe webhook identity invalid")
+    if type(comment.get("id")) is not int or comment["id"] != expected_comment_id:
+        raise RuntimeProtocolError("PULSE probe immutable comment identity mismatch")
+    if comment.get("body") != "CONTROL_V41_HUMAN_START_PROBE":
+        raise RuntimeProtocolError("PULSE probe body not exact")
+    if comment.get("issue_url") != "https://api.github.com/repos/market-predictions/control-engine/issues/106":
+        raise RuntimeProtocolError("PULSE probe issue identity invalid")
+    user = comment.get("user")
+    if not isinstance(user, Mapping) or user.get("login") != "market-predictions":
+        raise RuntimeProtocolError("PULSE probe owner identity invalid")
+    if "performed_via_github_app" not in comment or comment["performed_via_github_app"] is not None:
+        raise RuntimeProtocolError("PULSE probe originated from app or attribution is missing")
+    created = _parse_ts(comment.get("created_at"))
+    seconds = (_utc(now) - created).total_seconds()
+    if not 0 <= seconds <= 120:
+        raise RuntimeProtocolError("PULSE probe outside fresh owner-start window")

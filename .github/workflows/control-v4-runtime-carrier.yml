@@ -209,3 +209,63 @@ jobs:
       - name: Fail workflow after safe error publication
         if: ${{ steps.carrier.outputs.ok != 'true' }}
         run: exit 1
+
+  human-start-probe:
+    # Diagnostic only. A genuine owner GitHub UI/PAT comment has no GitHub App
+    # attribution. ChatGPT Chat and Work share an app and must both fail here.
+    if: >-
+      ${{
+        github.repository == 'market-predictions/control-engine' &&
+        github.ref == 'refs/heads/main' &&
+        github.actor == 'market-predictions' &&
+        github.triggering_actor == 'market-predictions' &&
+        github.event.action == 'created' &&
+        github.event.issue.number == 106 &&
+        github.event.issue.pull_request == null &&
+        github.event.comment.body == 'CONTROL_V41_HUMAN_START_PROBE'
+      }}
+    permissions:
+      contents: read
+      issues: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - name: Independently read back immutable GitHub comment provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          import json
+          import os
+          import urllib.request
+
+          from control_engine.v4_runtime_protocol import validate_v41_human_start_probe
+
+          comment_id = int(os.environ["COMMENT_ID"])
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['REPO']}/issues/comments/{comment_id}",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "control-v41-human-start-probe",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              comment = json.load(response)
+          validate_v41_human_start_probe(
+              comment, expected_comment_id=comment_id, now=datetime.now(timezone.utc)
+          )
+          print("CONTROL_V41_HUMAN_START_PROBE=OWNER_NON_APP_FRESH")
+          print("CONTROL_V41_CONTROL_EVENT_AUTHORIZED=false")
+          PY
