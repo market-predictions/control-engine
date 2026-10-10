@@ -277,6 +277,13 @@ def test_private_readiness_job_uses_existing_owner_proof_and_no_mutating_capabil
     assert "CONTROL_PLANE_TOKEN" not in probe
     assert "    needs: human-start-probe" in preview
     assert "needs.human-start-probe.result == 'success'" in preview
+    recheck = "name: Revalidate native owner origin immediately before private token"
+    token = "name: Obtain read-only scoped private capability"
+    assert preview.index(recheck) < preview.index(token)
+    assert 'gh api "repos/${REPO}/issues/comments/${COMMENT_ID}"' in preview
+    assert "validate_v41_human_start_probe(json.load(sys.stdin)" in preview
+    assert "now=datetime.now(timezone.utc)" in preview
+    assert "GH_TOKEN: ${{ github.token }}" in preview
     assert "permission-contents: read" in preview
     assert "repositories: control-plane" in preview
     for forbidden in ("permission-contents: write", "issues: write", "_write_queue_exact(",
