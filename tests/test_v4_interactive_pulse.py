@@ -226,3 +226,142 @@ def test_pilot_doc_never_publishes_private_live_queue_identity():
     assert "Live task `" not in doc
     assert "queue candidate `" not in doc
     assert "MISSION--" not in doc
+
+
+# Candidate-only admission proof. No tests may issue an actual Control TICK.
+GENERATION = "1234abcd5678ef90"
+RUN = f"v41:777:{GENERATION}"
+
+
+def _future_owner_start():
+    return {
+        "id": 777,
+        "body": "CONTROL_V41_HUMAN_START",
+        "user": {"login": "market-predictions"},
+        "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
+        "created_at": "2026-10-10T15:49:00Z",
+        "performed_via_github_app": None,
+    }
+
+
+def _future_tick():
+    import json
+    return {
+        "id": 778,
+        "body": "CONTROL_V4_RUNTIME_TICK " + json.dumps(
+            {"run_id": RUN, "yielded_task_tokens": []}
+        ),
+        "user": {"login": "market-predictions"},
+        "issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/106",
+        "created_at": "2026-10-10T15:49:30Z",
+        "performed_via_github_app": {"slug": "chatgpt-codex-connector"},
+    }
+
+
+def _admit(owner=None, tick=None, *, generation=GENERATION, enabled=True, now=PROBE_NOW):
+    from control_engine.v4_runtime_protocol import validate_v41_interactive_tick_start
+    return validate_v41_interactive_tick_start(
+        _future_owner_start() if owner is None else owner,
+        _future_tick() if tick is None else tick,
+        current_generation=generation,
+        interactive_mode_enabled=enabled,
+        now=now,
+    )
+
+
+def test_future_interactive_tick_proves_only_owner_consent_not_chat_origin():
+    owner, tick = _future_owner_start(), _future_tick()
+    orig_owner, orig_tick = deepcopy(owner), deepcopy(tick)
+    assert _admit(owner, tick) == RUN
+    assert owner == orig_owner and tick == orig_tick
+    assert RUN == "v41:777:1234abcd5678ef90"
+
+
+@pytest.mark.parametrize("generation,enabled", [
+    (GENERATION, False), (GENERATION, 1), ("b6f42d03a917ce58", False),
+    ("broken", True), ("1234ABCD5678EF90", True), ("", True), (None, True),
+])
+def test_future_interactive_start_requires_explicit_private_generation(generation, enabled):
+    with pytest.raises(RuntimeProtocolError):
+        _admit(generation=generation, enabled=enabled)
+
+
+@pytest.mark.parametrize("change", [
+    {"id": 779},
+    {"id": True},
+    {"body": "CONTROL_V41_HUMAN_START_PROBE"},
+    {"body": "CONTROL_V41_HUMAN_START "},
+    {"created_at": "2026-10-10T15:47:00Z"},
+    {"created_at": "2026-10-10T15:50:01Z"},
+    {"performed_via_github_app": {"slug": "chatgpt-codex-connector"}},
+    {"performed_via_github_app": {"slug": "other"}},
+    {"user": {"login": "other"}},
+    {"issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/107"},
+])
+def test_future_owner_consent_rejects_wrong_start_identity_or_expiration(change):
+    with pytest.raises(RuntimeProtocolError):
+        _admit(owner={**_future_owner_start(), **change})
+
+
+@pytest.mark.parametrize("change", [
+    {"id": 0}, {"id": True},
+    {"created_at": "2026-10-10T15:48:59Z"},
+    {"created_at": "2026-10-10T15:47:00Z"},
+    {"created_at": "2026-10-10T15:50:01Z"},
+    {"performed_via_github_app": None},
+    {"performed_via_github_app": {"slug": "another-app"}},
+    {"user": {"login": "other"}},
+    {"issue_url": "https://api.github.com/repos/market-predictions/control-engine/issues/103"},
+])
+def test_future_tick_rejects_app_spoofing_time_reversal_and_wrong_issue(change):
+    with pytest.raises(RuntimeProtocolError):
+        _admit(tick={**_future_tick(), **change})
+
+
+@pytest.mark.parametrize("run_id", [
+    "v41:777:1234abcd5678ef90:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "v41:778:1234abcd5678ef90",
+    "v41:0777:1234abcd5678ef90",
+    "v41:777:b6f42d03a917ce58",
+    "v4:6a9a7e0b18b08191876c134d83cfbba2:b6f42d03a917ce58:0123456789abcdef0123456789abcdef",
+    "v41:777:1234abcd5678ef90-extra",
+])
+def test_future_tick_run_id_is_single_start_bound_generation(run_id):
+    import json
+    tick = _future_tick()
+    tick["body"] = "CONTROL_V4_RUNTIME_TICK " + json.dumps({"run_id": run_id})
+    with pytest.raises(RuntimeProtocolError):
+        _admit(tick=tick)
+
+
+def test_future_start_rejects_event_without_current_grant():
+    import json
+    tick = _future_tick()
+    tick["body"] = "CONTROL_V4_RUNTIME_EVENT " + json.dumps({
+        "run_id": RUN, "task_token": "a" * 64,
+        "event": "YIELD", "repository": "market-predictions/agent",
+        "action": "REPAIR",
+    })
+    with pytest.raises(RuntimeProtocolError):
+        _admit(tick=tick)
+
+
+def test_future_start_evidence_must_be_present_and_immutable():
+    from control_engine.v4_runtime_protocol import validate_v41_interactive_tick_start
+    with pytest.raises(RuntimeProtocolError):
+        validate_v41_interactive_tick_start(
+            None, _future_tick(), current_generation=GENERATION,
+            interactive_mode_enabled=True, now=PROBE_NOW,
+        )
+    tick = _future_tick()
+    del tick["performed_via_github_app"]
+    with pytest.raises(RuntimeProtocolError):
+        _admit(tick=tick)
+
+
+def test_interactive_start_validation_not_wired_to_production_workflow():
+    workflow = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text()
+    assert "validate_v41_interactive_tick_start" not in workflow
+    assert "CONTROL_V41_HUMAN_START_PROBE" in workflow
+    assert "github.event.comment.body == 'CONTROL_V41_HUMAN_START_PROBE'" in workflow
+    assert "CONTROL_V41_HUMAN_START" not in workflow.replace("CONTROL_V41_HUMAN_START_PROBE", "")
