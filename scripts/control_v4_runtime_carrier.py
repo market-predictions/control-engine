@@ -42,6 +42,10 @@ from control_engine.v4_runtime_protocol import (
     strict_json_object,
     task_token,
     validate_runtime_binding,
+    validate_v41_interactive_config,
+    validate_v41_interactive_tick_start,
+    validate_v41_interactive_event_start,
+    V41_INTERACTIVE_GENERATION,
     yield_holder_v4,
 )
 from control_engine.v4_safety import (
@@ -285,6 +289,7 @@ def _load_current() -> dict[str, Any]:
         runner_config_blob_sha=runner_blob,
         prompt_blob_sha=prompt_blob,
     )
+    interactive_enabled, interactive_generation = validate_v41_interactive_config(runner_config)
     bundle = _load_authority_bundle(main_sha)
     queue, queue_blob = _json_file(QUEUE_PATH, runtime_sha)
     validate_queue_v4(queue)
@@ -297,6 +302,8 @@ def _load_current() -> dict[str, Any]:
         "queue": queue,
         "runtime_enabled": runtime_enabled,
         "integration_enabled": integration_enabled,
+        "interactive_enabled": interactive_enabled,
+        "interactive_generation": interactive_generation,
     }
 
 
@@ -319,6 +326,66 @@ def _assert_tick_fresh(*, now: datetime) -> None:
     age_seconds = (current - created_at).total_seconds()
     if not 0 <= age_seconds <= TICK_MAX_AGE_SECONDS:
         raise StaleEventError("TICK command stale at transition")
+
+
+def _assert_v41_public_origin(command: Mapping[str, Any], *, now: datetime) -> None:
+    """Re-read both trusted REST comments, including on pre-ref-CAS.
+
+    Reuses the ordinary carrier public read token, never private capability.
+    This proves a short-lived owner delegation, NOT ChatGPT-vs-Work origin.
+    """
+    run_id = command.get("run_id")
+    if not isinstance(run_id, str) or not run_id.startswith("v41:"):
+        raise StaleEventError("interactive command run identity invalid")
+    fragments = run_id.split(":")
+    if len(fragments) != 3 or not fragments[1].isdigit() or fragments[1].startswith("0"):
+        raise StaleEventError("interactive owner comment id invalid")
+    owner_comment_id = int(fragments[1])
+    current_id, current_at = _tick_command_identity()
+    if current_id <= 0:
+        raise StaleEventError("interactive current comment id invalid")
+    headers = _public_command_headers()
+    current_comment = _request_json(
+        f"{API}/repos/{PUBLIC_COMMAND_REPOSITORY}/issues/comments/{current_id}",
+        headers=headers,
+    )
+    owner_comment = _request_json(
+        f"{API}/repos/{PUBLIC_COMMAND_REPOSITORY}/issues/comments/{owner_comment_id}",
+        headers=headers,
+    )
+    if not isinstance(current_comment, Mapping) or current_comment.get("id") != current_id:
+        raise StaleEventError("interactive current REST comment mismatch")
+    if current_comment.get("body") != os.environ.get("CONTROL_V4_PUBLIC_COMMAND"):
+        raise StaleEventError("interactive command webhook REST body mismatch")
+    if current_comment.get("created_at") != current_at.isoformat().replace("+00:00", "Z"):
+        raise StaleEventError("interactive command webhook REST age mismatch")
+    if not isinstance(owner_comment, Mapping):
+        raise StaleEventError("interactive owner REST evidence missing")
+    if command["kind"] == "TICK":
+        validated = validate_v41_interactive_tick_start(
+            owner_comment, current_comment,
+            current_generation=V41_INTERACTIVE_GENERATION,
+            interactive_mode_enabled=True, now=now,
+        )
+    elif command["kind"] == "EVENT":
+        validated = validate_v41_interactive_event_start(
+            owner_comment, current_comment,
+            current_generation=V41_INTERACTIVE_GENERATION,
+            interactive_mode_enabled=True, now=now,
+        )
+    else:
+        raise StaleEventError("interactive command kind invalid")
+    if validated != run_id:
+        raise StaleEventError("interactive REST command identity mismatch")
+
+
+def _assert_v41_private_binding(command: Mapping[str, Any], state: Mapping[str, Any]) -> None:
+    run_id = command.get("run_id")
+    if isinstance(run_id, str) and run_id.startswith("v41:"):
+        if state.get("interactive_enabled") is not True:
+            raise RuntimeProtocolError("interactive private Runner binding is disabled")
+        if state.get("interactive_generation") != V41_INTERACTIVE_GENERATION:
+            raise RuntimeProtocolError("interactive private Runner generation mismatched")
 
 
 def _assert_tick_not_superseded(command: Mapping[str, Any]) -> None:
@@ -368,6 +435,8 @@ def _assert_current_command_fresh_at_ref_cas(source_queue: Mapping[str, Any]) ->
         command = parse_public_command(raw_command)
     except RuntimeProtocolError as exc:
         raise CarrierError("current public command unavailable at private ref CAS") from exc
+    if isinstance(command.get("run_id"), str) and command["run_id"].startswith("v41:"):
+        _assert_v41_public_origin(command, now=datetime.now(timezone.utc))
     if command.get("kind") == "TICK":
         _assert_tick_fresh(now=datetime.now(timezone.utc))
         return
@@ -848,6 +917,9 @@ def main() -> int:
 
     try:
         state = _load_current()
+        _assert_v41_private_binding(command, state)
+        if isinstance(command.get("run_id"), str) and command["run_id"].startswith("v41:"):
+            _assert_v41_public_origin(command, now=datetime.now(timezone.utc))
         if command["kind"] == "TICK":
             _assert_tick_not_superseded(command)
             now = datetime.now(timezone.utc)
