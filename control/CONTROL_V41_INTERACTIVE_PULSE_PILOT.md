@@ -127,8 +127,12 @@ candidate independently, and emits only an allowlisted **coarse advisory**:
 `INTERACTIVE_BINDING_REQUIRED`, `NO_SELECTABLE_WORK`, or `NOT_READY`.
 
 The probe still never accesses private capability. The dependent readiness
-job is skipped if owner provenance fails. No private identity, Mission,
-candidate, task ID, queue hash, PR number, or other private state may
+job is skipped if owner provenance fails. Immediately before minting the
+read token, it independently rereads the exact GitHub owner comment and checks
+the original 120-second age/identity/app-origin contract again. A delayed or
+individually rerun job must fail closed rather than reuse a stale dependency.
+No private identity, Mission, candidate, task ID, queue hash, PR number,
+or other private state may
 appear in the public log. Transient read error fails closed. Readiness
 is an observation, not a grant or reservation, and cannot justify TICK,
 EVENT, lease issuance or target effects. An actual semantically active
