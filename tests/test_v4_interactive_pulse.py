@@ -226,3 +226,61 @@ def test_pilot_doc_never_publishes_private_live_queue_identity():
     assert "Live task `" not in doc
     assert "queue candidate `" not in doc
     assert "MISSION--" not in doc
+
+
+def test_public_v41_readiness_declassifies_private_plan_only():
+    from control_engine.v4_runtime_protocol import public_v41_pulse_readiness
+
+    private = plan(queue(), live_candidate=CANDIDATE)
+    private["task_id"] = "DO_NOT_PUBLISH_PRIVATE_TASK"
+    private["candidate"] = {"candidate_sha": "private"}
+    result = public_v41_pulse_readiness(private)
+    assert result == {
+        "protocol": "CONTROL_V41_READINESS_V1",
+        "result": "INTERACTIVE_BINDING_REQUIRED",
+        "control_event_authorized": False,
+        "target_effect_authorized": False,
+    }
+    assert "DO_NOT_PUBLISH_PRIVATE_TASK" not in str(result)
+    assert "candidate_sha" not in str(result)
+
+
+def test_public_v41_readiness_is_non_authoritative_and_fail_closed():
+    from control_engine.v4_runtime_protocol import public_v41_pulse_readiness
+
+    assert public_v41_pulse_readiness(plan(queue(locked=True)))["result"] == "NOT_READY"
+    empty = queue()
+    empty["tasks"] = []
+    assert public_v41_pulse_readiness(plan(empty))["result"] == "NO_SELECTABLE_WORK"
+    build = plan(queue(candidate=False))
+    assert public_v41_pulse_readiness(build)["result"] == "INTERACTIVE_BINDING_REQUIRED"
+    for unsafe in (True, None, 1):
+        with pytest.raises(RuntimeProtocolError):
+            public_v41_pulse_readiness({
+                "status": "TARGET_EXACT_INTERACTIVE_BINDING_REQUIRED",
+                "control_event_authorized": unsafe,
+                "target_effect_authorized": False,
+            })
+    unknown = public_v41_pulse_readiness({
+        "status": "UNKNOWN",
+        "control_event_authorized": False,
+        "target_effect_authorized": False,
+    })
+    assert unknown["result"] == "NOT_READY"
+
+
+def test_private_readiness_job_uses_existing_owner_proof_and_no_mutating_capability():
+    text = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text()
+    probe = text.split("  human-start-probe:", 1)[1].split("  owner-readiness:", 1)[0]
+    preview = text.split("  owner-readiness:", 1)[1]
+    assert "create-github-app-token" not in probe
+    assert "CONTROL_PLANE_TOKEN" not in probe
+    assert "    needs: human-start-probe" in preview
+    assert "needs.human-start-probe.result == 'success'" in preview
+    assert "permission-contents: read" in preview
+    assert "repositories: control-plane" in preview
+    for forbidden in ("permission-contents: write", "issues: write", "_write_queue_exact(",
+                      "_private_post(", "CONTROL_V4_RUNTIME_EVENT", "workflow_dispatch:",
+                      "print(private_plan)", "print(queue)", "print(current)"):
+        assert forbidden not in preview
+    assert "CONTROL_V41_ADVISORY_ONLY=true" in preview

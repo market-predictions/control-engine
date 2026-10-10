@@ -890,3 +890,31 @@ def validate_v41_human_start_probe(
     seconds = (_utc(now) - created).total_seconds()
     if not 0 <= seconds <= 120:
         raise RuntimeProtocolError("PULSE probe outside fresh owner-start window")
+
+
+def public_v41_pulse_readiness(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Reduce PRIVATE read-only diagnostics to a public-safe advisory.
+
+    No private task fields, repository, candidate identity, or authority
+    evidence cross this result surface; it never grants a holder or effect.
+    """
+    if (
+        plan.get("control_event_authorized") is not False
+        or plan.get("target_effect_authorized") is not False
+    ):
+        raise RuntimeProtocolError("PULSE readiness requires non-authoritative plan")
+    status = plan.get("status")
+    if status in {"TARGET_EXACT_INTERACTIVE_BINDING_REQUIRED", "BUILD_REQUIRES_INTERACTIVE_BINDING"}:
+        outcome = "INTERACTIVE_BINDING_REQUIRED"
+    elif status == "NO_ELIGIBLE_QUEUED_TASK":
+        outcome = "NO_SELECTABLE_WORK"
+    else:
+        outcome = "NOT_READY"
+    result = {
+        "protocol": "CONTROL_V41_READINESS_V1",
+        "result": outcome,
+        "control_event_authorized": False,
+        "target_effect_authorized": False,
+    }
+    assert_public_safe(result)
+    return result

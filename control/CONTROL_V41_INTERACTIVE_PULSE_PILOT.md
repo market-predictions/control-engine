@@ -115,3 +115,22 @@ not a claim that a ChatGPT-written issue comment proves interactive origin.
 
 No unattended Work use, API-billed LLM provider, or owner self-approval is
 introduced.
+
+
+## Native owner-start read-only readiness (candidate)
+
+After a *successfully proven* native owner-origin start, an additional job
+in the **same** GitHub workflow may obtain a scoped **read-only** private
+Control-plane token. It reuses the existing trusted V4 `_load_current`
+authority/queue validation and current task selector, reads the public PR
+candidate independently, and emits only an allowlisted **coarse advisory**:
+`INTERACTIVE_BINDING_REQUIRED`, `NO_SELECTABLE_WORK`, or `NOT_READY`.
+
+The probe still never accesses private capability. The dependent readiness
+job is skipped if owner provenance fails. No private identity, Mission,
+candidate, task ID, queue hash, PR number, or other private state may
+appear in the public log. Transient read error fails closed. Readiness
+is an observation, not a grant or reservation, and cannot justify TICK,
+EVENT, lease issuance or target effects. An actual semantically active
+PULSE remains blocked pending positive owner proof, a separately reviewed
+interactive execution binding and successful end-to-end verification.

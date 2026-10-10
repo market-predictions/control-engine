@@ -269,3 +269,74 @@ jobs:
           print("CONTROL_V41_HUMAN_START_PROBE=OWNER_NON_APP_FRESH")
           print("CONTROL_V41_CONTROL_EVENT_AUTHORIZED=false")
           PY
+
+
+  owner-readiness:
+    # Private state is read only after a successful GitHub-owner-native proof.
+    # No human proof => no private capability. Preview is NOT Control authority.
+    needs: human-start-probe
+    if: ${{ needs.human-start-probe.result == 'success' }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - name: Obtain read-only scoped private capability
+        id: private-read-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: read
+      - name: Derive public-safe advisory from validated private state
+        env:
+          CONTROL_PLANE_TOKEN: ${{ steps.private-read-token.outputs.token }}
+        run: |
+          python3 - <<'PY'
+          import sys
+          from control_engine.v4_runtime_protocol import (
+              plan_interactive_pulse_v4, public_v41_pulse_readiness, select_task_id_v4,
+          )
+          from control_engine.v4_runtime_protocol import RuntimeProtocolError
+          from scripts import control_v4_runtime_carrier as carrier
+
+          try:
+              state = carrier._load_current()
+              queue = state["queue"]
+              live = None
+              if state["runtime_enabled"] and not state["integration_enabled"] and queue["execution_lock"] is None:
+                  selected = select_task_id_v4(
+                      queue, run_id="v41-read-only-advisory", integration_enabled=False
+                  )
+                  if selected is not None:
+                      current = next(x for x in queue["tasks"] if x["task_id"] == selected)
+                      candidate = current.get("candidate")
+                      if candidate is not None:
+                          try:
+                              live = carrier._target_pr_candidate(current["repository"], candidate["candidate_pr_number"])
+                          except (carrier.CarrierError, RuntimeProtocolError):
+                              live = None
+
+              private_plan = plan_interactive_pulse_v4(
+                  queue,
+                  runtime_enabled=state["runtime_enabled"],
+                  integration_enabled=state["integration_enabled"],
+                  live_candidate=live,
+              )
+              advisory = public_v41_pulse_readiness(private_plan)
+          except Exception:
+              print("CONTROL_V41_READINESS=FAIL_CLOSED")
+              sys.exit(1)
+          print("CONTROL_V41_READINESS=" + advisory["result"])
+          print("CONTROL_V41_CONTROL_EVENT_AUTHORIZED=false")
+          print("CONTROL_V41_ADVISORY_ONLY=true")
+          PY
