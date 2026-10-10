@@ -278,6 +278,7 @@ jobs:
     if: ${{ needs.human-start-probe.result == 'success' }}
     permissions:
       contents: read
+      issues: read
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
