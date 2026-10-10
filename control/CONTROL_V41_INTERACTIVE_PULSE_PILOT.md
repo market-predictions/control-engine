@@ -115,3 +115,40 @@ not a claim that a ChatGPT-written issue comment proves interactive origin.
 
 No unattended Work use, API-billed LLM provider, or owner self-approval is
 introduced.
+
+
+## Next candidate: one-native-start → one interactive invocation (NOT ADOPTED)
+
+The positive GitHub-native user-origin proof completed 2026-10-10:
+[owner comment 6100966605](https://github.com/market-predictions/control-engine/issues/106#issuecomment-6100966605)
+was read back as account-owned, non-GitHub-App-attributed and fresh.
+[GitHub Actions 38077228100](https://github.com/market-predictions/control-engine/actions/runs/38077228100)
+succeeded with `OWNER_NON_APP_FRESH`. No V4 runtime command or holder was issued.
+The prior negative ChatGPT-app probe also correctly failed closed.
+
+For a future *real* interactive grant, keep the older diagnostic marker inert.
+The owner must explicitly post a **different exact command**
+`CONTROL_V41_HUMAN_START` from the native GitHub UI. A subsequent connected
+GitHub-app acquisition TICK must use deterministic
+`run_id=v41:<owner_comment_id>:<new_private_generation_16_hex>`.
+No per-TICK random identifier is permitted: one native start binds to exactly
+one logical invocation run identity, including its same-run revalidations.
+
+The new pure `validate_v41_interactive_tick_start` validates both original
+GitHub REST comments (owner-start + app-attributed TICK), exact issue, account,
+GitHub App slug, generation, order, and 120-second start/TICK freshness.
+It refuses execution unless `interactive_mode_enabled=True` is supplied by
+**separately adopted and exact-bound private authority**. This is admission
+planning, not GitHub app provenance attestation: ChatGPT chat and Work share
+the same app identity. The owner grant is a bounded capability delegation,
+**not** proof of which ChatGPT interface generated the TICK, nor a semantic PASS.
+
+This PR deliberately does **not** wire the new validator into the carrier or
+make an EVENT admission change, issue private GitHub capabilities, acquire a
+holder, rotate the real generation, or alter the Scheduled Runner. Private
+Runner config, prompt contract, pre-effect revalidation and atomic CAS still
+require an independent public/private cutover design, exact-head review and
+positive end-to-end proof before any production V4.1 adoption.
+
+A fresh owner start must be created for the first actual productive trial; the
+diagnostic comment cannot be reused or upgraded retroactively.
