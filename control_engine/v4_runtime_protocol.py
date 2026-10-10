@@ -864,6 +864,7 @@ def validate_v41_human_start_probe(
     *,
     expected_comment_id: int,
     now: datetime,
+    expected_body: str = "CONTROL_V41_HUMAN_START_PROBE",
 ) -> None:
     """Verify a GitHub REST-read owner-origin probe; never grant V4 authority.
 
@@ -877,7 +878,7 @@ def validate_v41_human_start_probe(
         raise RuntimeProtocolError("PULSE probe webhook identity invalid")
     if type(comment.get("id")) is not int or comment["id"] != expected_comment_id:
         raise RuntimeProtocolError("PULSE probe immutable comment identity mismatch")
-    if comment.get("body") != "CONTROL_V41_HUMAN_START_PROBE":
+    if comment.get("body") != expected_body:
         raise RuntimeProtocolError("PULSE probe body not exact")
     if comment.get("issue_url") != "https://api.github.com/repos/market-predictions/control-engine/issues/106":
         raise RuntimeProtocolError("PULSE probe issue identity invalid")
@@ -890,3 +891,60 @@ def validate_v41_human_start_probe(
     seconds = (_utc(now) - created).total_seconds()
     if not 0 <= seconds <= 120:
         raise RuntimeProtocolError("PULSE probe outside fresh owner-start window")
+
+
+def validate_v41_interactive_tick_start(
+    owner_comment: Mapping[str, Any],
+    tick_comment: Mapping[str, Any],
+    *,
+    current_generation: str,
+    interactive_mode_enabled: bool,
+    now: datetime,
+) -> str:
+    """Validate a one-invocation owner grant for a future interactive TICK.
+
+    This is pure/inert protocol support, NOT adopted carrier admission. A caller
+    must independently GET both immutable comments from GitHub *before* creating
+    a private token and bind a freshly reviewed private interactive generation.
+    ChatGPT Chat and Work have the same GitHub App identity: the grant attests
+    OWNER consent, not ChatGPT conversation origin or semantic correctness.
+    """
+    if interactive_mode_enabled is not True:
+        raise RuntimeProtocolError("interactive generation not privately adopted")
+    if not isinstance(current_generation, str) or re.fullmatch(r"[0-9a-f]{16}", current_generation) is None:
+        raise RuntimeProtocolError("interactive generation identity invalid")
+    if not isinstance(tick_comment, Mapping) or not isinstance(owner_comment, Mapping):
+        raise RuntimeProtocolError("interactive TICK comment evidence unavailable")
+    tick_id = tick_comment.get("id")
+    if type(tick_id) is not int or tick_id <= 0:
+        raise RuntimeProtocolError("interactive TICK immutable identity invalid")
+    if tick_comment.get("issue_url") != "https://api.github.com/repos/market-predictions/control-engine/issues/106":
+        raise RuntimeProtocolError("interactive TICK issue identity invalid")
+    tick_user = tick_comment.get("user")
+    app = tick_comment.get("performed_via_github_app")
+    if not isinstance(tick_user, Mapping) or tick_user.get("login") != "market-predictions":
+        raise RuntimeProtocolError("interactive TICK owner identity invalid")
+    if not isinstance(app, Mapping) or app.get("slug") != "chatgpt-codex-connector":
+        raise RuntimeProtocolError("interactive TICK app identity invalid")
+    parsed = parse_public_command(tick_comment.get("body"))
+    if parsed["kind"] != "TICK":
+        raise RuntimeProtocolError("interactive grant is not an acquisition TICK")
+    run_id = parsed["run_id"]
+    match = re.fullmatch(r"v41:([1-9][0-9]*):([0-9a-f]{16}):([0-9a-f]{32})", run_id)
+    if match is None or match.group(2) != current_generation:
+        raise RuntimeProtocolError("interactive TICK not bound to adopted generation")
+    start_id = int(match.group(1))
+    validate_v41_human_start_probe(
+        owner_comment,
+        expected_comment_id=start_id,
+        now=now,
+        expected_body="CONTROL_V41_HUMAN_START",
+    )
+    start_at = _parse_ts(owner_comment["created_at"])
+    tick_at = _parse_ts(tick_comment.get("created_at"))
+    time_now = _utc(now)
+    if not start_at <= tick_at <= time_now:
+        raise RuntimeProtocolError("interactive TICK predates native owner grant")
+    if not 0 <= (time_now - tick_at).total_seconds() <= 120:
+        raise RuntimeProtocolError("interactive TICK immutable age invalid")
+    return run_id
