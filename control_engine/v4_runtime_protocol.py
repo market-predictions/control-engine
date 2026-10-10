@@ -287,6 +287,7 @@ def validate_runtime_binding(
     )
     if not isinstance(prompt_text, str) or any(marker not in prompt_text for marker in required_markers):
         raise RuntimeProtocolError("runner prompt identity invalid")
+    validate_v41_interactive_config(runner_config)
     return runtime_enabled, integration_enabled
 
 
@@ -947,4 +948,83 @@ def validate_v41_interactive_tick_start(
         raise RuntimeProtocolError("interactive TICK predates native owner grant")
     if not 0 <= (time_now - tick_at).total_seconds() <= 120:
         raise RuntimeProtocolError("interactive TICK immutable age invalid")
+    return run_id
+
+
+# A never-before-used, reviewed public admission generation. Private Runner
+# configuration MUST independently bind and enable this exact generation.
+V41_INTERACTIVE_GENERATION = "de7634ac5e901b82"
+
+
+def validate_v41_interactive_config(runner_config: Mapping[str, Any]) -> tuple[bool, str | None]:
+    """Read one optional binding on the existing private Runner, not a new Runner."""
+    if "interactive_binding" not in runner_config:
+        return False, None
+    binding = runner_config["interactive_binding"]
+    if not isinstance(binding, Mapping) or set(binding) != {"enabled", "generation"}:
+        raise RuntimeProtocolError("interactive Runner binding key set invalid")
+    if type(binding["enabled"]) is not bool:
+        raise RuntimeProtocolError("interactive Runner switch invalid")
+    generation = binding["generation"]
+    if generation != V41_INTERACTIVE_GENERATION:
+        raise RuntimeProtocolError("interactive Runner generation is not trusted")
+    return binding["enabled"], generation
+
+
+def validate_v41_interactive_event_start(
+    owner_comment: Mapping[str, Any],
+    event_comment: Mapping[str, Any],
+    *,
+    current_generation: str,
+    interactive_mode_enabled: bool,
+    now: datetime,
+) -> str:
+    """Owner-bound EVENT admission before private capability, never review PASS.
+
+    Unlike an acquisition TICK, an EVENT can close a holder after the 120s
+    start window, but never beyond the immutable 5400s V4 lease horizon.
+    The carrier must ALSO prove the exact current private holder and candidate.
+    """
+    if interactive_mode_enabled is not True or current_generation != V41_INTERACTIVE_GENERATION:
+        raise RuntimeProtocolError("interactive EVENT generation is not enabled")
+    if not isinstance(owner_comment, Mapping) or not isinstance(event_comment, Mapping):
+        raise RuntimeProtocolError("interactive EVENT evidence absent")
+    if type(event_comment.get("id")) is not int or event_comment["id"] <= 0:
+        raise RuntimeProtocolError("interactive EVENT comment identity invalid")
+    if event_comment.get("issue_url") != "https://api.github.com/repos/market-predictions/control-engine/issues/106":
+        raise RuntimeProtocolError("interactive EVENT issue identity invalid")
+    user, app = event_comment.get("user"), event_comment.get("performed_via_github_app")
+    if not isinstance(user, Mapping) or user.get("login") != "market-predictions":
+        raise RuntimeProtocolError("interactive EVENT account invalid")
+    if not isinstance(app, Mapping) or app.get("slug") != "chatgpt-codex-connector":
+        raise RuntimeProtocolError("interactive EVENT app invalid")
+    command = parse_public_command(event_comment.get("body"))
+    if command["kind"] != "EVENT":
+        raise RuntimeProtocolError("interactive EVENT command type invalid")
+    run_id = command["run_id"]
+    match = re.fullmatch(r"v41:([1-9][0-9]*):([0-9a-f]{16})", run_id)
+    if match is None or match.group(2) != current_generation:
+        raise RuntimeProtocolError("interactive EVENT run generation invalid")
+    start_id = int(match.group(1))
+    # Exact immutable owner evidence; only freshness differs from initial TICK.
+    if type(owner_comment.get("id")) is not int or owner_comment["id"] != start_id:
+        raise RuntimeProtocolError("interactive EVENT owner start mismatch")
+    if owner_comment.get("body") != "CONTROL_V41_HUMAN_START":
+        raise RuntimeProtocolError("interactive EVENT owner grant body invalid")
+    if owner_comment.get("issue_url") != "https://api.github.com/repos/market-predictions/control-engine/issues/106":
+        raise RuntimeProtocolError("interactive EVENT owner issue invalid")
+    native_user = owner_comment.get("user")
+    if not isinstance(native_user, Mapping) or native_user.get("login") != "market-predictions":
+        raise RuntimeProtocolError("interactive EVENT native owner invalid")
+    if "performed_via_github_app" not in owner_comment or owner_comment["performed_via_github_app"] is not None:
+        raise RuntimeProtocolError("interactive EVENT owner was not native")
+    owner_at = _parse_ts(owner_comment.get("created_at"))
+    event_at = _parse_ts(event_comment.get("created_at"))
+    current = _utc(now)
+    if not owner_at <= event_at <= current:
+        raise RuntimeProtocolError("interactive EVENT order invalid")
+    if not 0 <= (current - owner_at).total_seconds() <= 5400:
+        raise RuntimeProtocolError("interactive EVENT owner grant expired")
+    if not 0 <= (current - event_at).total_seconds() <= 120:
+        raise RuntimeProtocolError("interactive EVENT command stale")
     return run_id
