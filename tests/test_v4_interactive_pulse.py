@@ -223,6 +223,6 @@ def test_human_start_diagnostic_has_no_private_token_or_mutating_ingress():
 
 def test_pilot_doc_never_publishes_private_live_queue_identity():
     doc = Path("control/CONTROL_V41_INTERACTIVE_PULSE_PILOT.md").read_text()
-    assert "Live task \`" not in doc
-    assert "queue candidate \`" not in doc
+    assert "Live task `" not in doc
+    assert "queue candidate `" not in doc
     assert "MISSION--" not in doc
