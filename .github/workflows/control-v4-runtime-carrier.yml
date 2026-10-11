@@ -324,6 +324,7 @@ jobs:
           owner: market-predictions
           repositories: agent
           permission-issues: write
+          permission-pull-requests: write
 
       - name: Bind one fresh native GitHub run to one Control acquisition
         env:
