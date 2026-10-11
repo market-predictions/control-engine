@@ -212,7 +212,7 @@ def test_probe_requires_explicit_app_attribution_and_exact_webhook_identity():
 def test_human_start_diagnostic_has_no_private_token_or_mutating_ingress():
     workflow = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text()
     assert "  human-start-probe:" in workflow
-    probe = workflow.split("  human-start-probe:", 1)[1]
+    probe = workflow.split("  human-start-probe:", 1)[1].split("\n  interactive-resume:", 1)[0]
     assert "github.event.comment.body == 'CONTROL_V41_HUMAN_START_PROBE'" in probe
     assert "      issues: read" in probe
     assert "CONTROL_V41_CONTROL_EVENT_AUTHORIZED=false" in probe
