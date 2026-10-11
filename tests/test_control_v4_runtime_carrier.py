@@ -9,12 +9,12 @@ def _source() -> str:
     return Path(carrier.__file__).read_text(encoding="utf-8")
 
 
-def test_runtime_carrier_is_owner_main_issue106_only_with_no_scheduler_or_dispatch_surface() -> None:
+def test_runtime_carrier_preserves_owner_main_issue106_and_native_manual_resume() -> None:
     text = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text(encoding="utf-8")
     assert "issues: write" in text
     assert "contents: read" in text
     assert "schedule:" not in text
-    assert "workflow_dispatch:" not in text
+    assert "\n  workflow_dispatch:\n" in text
     assert "issue_comment:" in text
     assert "github.event.issue.number == 106" in text
     assert "github.actor == 'market-predictions'" in text
