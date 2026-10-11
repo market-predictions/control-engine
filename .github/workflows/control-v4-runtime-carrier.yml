@@ -287,7 +287,7 @@ jobs:
         github.run_attempt == 1
       }}
     runs-on: ubuntu-latest
-    timeout-minutes: 85
+    timeout-minutes: 60
     permissions:
       contents: read
       issues: read
@@ -363,7 +363,6 @@ jobs:
           import json
           import os
           import time
-          from datetime import datetime, timezone
           from urllib.request import Request, urlopen
 
           root = "https://api.github.com/repos/market-predictions/agent/issues"
@@ -385,7 +384,8 @@ jobs:
                       "protocol": "CONTROL_INTERACTIVE_WAKE_V2", "owner_run_id": run,
                       "repository": "market-predictions/agent", "pr_number": 3}):
               raise SystemExit("untrusted wake source")
-          deadline = time.monotonic() + 75 * 60
+          # The Agent app token is valid for one hour; fail before that boundary.
+          deadline = time.monotonic() + 50 * 60
           while time.monotonic() < deadline:
               comments = get(f"{root}/3/comments?per_page=100")
               relays = {c["id"] for c in comments
@@ -414,7 +414,7 @@ jobs:
                       print("CONTROL_WORK_READY_COMMENT_ID=" + str(c["id"]))
                       raise SystemExit(0)
               time.sleep(15)
-          raise SystemExit("Work did not report readiness within 75m; no Control holder acquired")
+          raise SystemExit("Work did not report readiness within 50m; no Control holder acquired")
           PY
 
       - name: Create exact private runtime capability
