@@ -559,6 +559,15 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             "run_id": command["run_id"],
         }
 
+    # Native workflow_dispatch authorizes one acquisition. A later public
+    # TICK with the same manual run_id may only revalidate its live holder.
+    if command["run_id"].startswith("v41:gh:") and os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        existing = state["queue"].get("execution_lock")
+        if (not isinstance(existing, Mapping)
+                or existing.get("run_id") != command["run_id"]
+                or datetime.fromisoformat(existing["expires_at"].replace("Z", "+00:00")) <= now):
+            raise StaleEventError("manual TICK requires existing unexpired holder")
+
     queue = state["queue"]
     lock = queue.get("execution_lock")
     recovery_pending = False
