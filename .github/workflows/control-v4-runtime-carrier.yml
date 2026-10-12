@@ -460,6 +460,7 @@ jobs:
         id: handoff
         env:
           WORK_JSON: ${{ steps.carrier.outputs.result_json }}
+          OWNER_RUN_ID: ${{ github.run_id }}
           AGENT_TOKEN: ${{ steps.agent-token.outputs.token }}
           READY_COMMENT_ID: ${{ steps.ready.outputs.ready_comment_id }}
           WAKE_COMMENT_ID: ${{ steps.wake.outputs.wake_comment_id }}
@@ -467,14 +468,29 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           from urllib.request import Request, urlopen
           work = json.loads(os.environ["WORK_JSON"])
-          candidate = work.get("candidate") or {}
-          if (work.get("result") != "WORK" or
+          candidate = work.get("candidate")
+          owner_run_id = int(os.environ["OWNER_RUN_ID"])
+          candidate_keys = {
+              "candidate_sha", "candidate_pr_number", "candidate_head_branch",
+              "expected_base_branch", "expected_base_sha",
+          }
+          if (work.get("protocol") != "CONTROL_V4_RUNTIME_RESULT_V1" or
+                  work.get("result") != "WORK" or
+                  work.get("run_id") != f"v41:gh:{owner_run_id}" or
+                  not re.fullmatch(r"[0-9a-f]{64}", str(work.get("task_token", ""))) or
                   work.get("repository") != "market-predictions/agent" or
-                  work.get("action") != "REPAIR" or
-                  candidate.get("candidate_pr_number") != 3):
-              raise SystemExit("MVP only supports authorized Agent PR #3 REPAIR")
+                  work.get("action") not in {"REPAIR", "REVIEW_INTERNAL"} or
+                  not isinstance(candidate, dict) or
+                  set(candidate) != candidate_keys or
+                  candidate.get("candidate_pr_number") != 3 or
+                  candidate.get("candidate_head_branch") != "control/mission-agent-r2-gap-05" or
+                  candidate.get("expected_base_branch") != "main" or
+                  not re.fullmatch(r"[0-9a-f]{40}", str(candidate.get("candidate_sha", ""))) or
+                  not re.fullmatch(r"[0-9a-f]{40}", str(candidate.get("expected_base_sha", "")))):
+              raise SystemExit("unsupported or stale Agent PR #3 Control work identity")
           payload = {"ready_comment_id": int(os.environ["READY_COMMENT_ID"]),
                      "source_comment_id": int(os.environ["WAKE_COMMENT_ID"]),
                      "work": work}
