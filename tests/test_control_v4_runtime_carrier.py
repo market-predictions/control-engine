@@ -20,6 +20,20 @@ def test_runtime_carrier_preserves_owner_main_issue106_and_native_manual_resume(
     assert "github.actor == 'market-predictions'" in text
 
 
+def test_interactive_resume_handoff_is_bound_to_exact_agent_task_and_supported_action() -> None:
+    workflow = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text(encoding="utf-8")
+    handoff = workflow.split("      - name: Publish fresh Control WORK grant to already running Work", 1)[1]
+    handoff = handoff.split("      - name: Release holder if Work handoff failed", 1)[0]
+    assert 'work.get("protocol") != "CONTROL_V4_RUNTIME_RESULT_V1"' in handoff
+    assert 'work.get("run_id") != f"v41:gh:{owner_run_id}"' in handoff
+    assert 're.fullmatch(r"[0-9a-f]{64}", str(work.get("task_token", "")))' in handoff
+    assert 'work.get("action") not in {"REPAIR", "REVIEW_INTERNAL"}' in handoff
+    assert 'candidate.get("candidate_head_branch") != "control/mission-agent-r2-gap-05"' in handoff
+    assert 'candidate.get("expected_base_branch") != "main"' in handoff
+    assert 're.fullmatch(r"[0-9a-f]{40}", str(candidate.get("candidate_sha", "")))' in handoff
+    assert 're.fullmatch(r"[0-9a-f]{40}", str(candidate.get("expected_base_sha", "")))' in handoff
+
+
 def test_strict_parser_accepts_canonical_multiline_tick_and_event_and_existing_space_framing() -> None:
     run_id = 'v4:6a9a7e0b18b08191876c134d83cfbba2:bdabf8391bbd1a6c:0123456789abcdef0123456789abcdef'
     tick_json = '{"run_id":"' + run_id + '","yielded_task_tokens":[]}'
