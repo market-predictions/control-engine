@@ -39,7 +39,8 @@ def test_interactive_resume_handoff_is_bound_to_exact_agent_task_and_supported_a
     assert 'c.get("user", {}).get("login") != "market-predictions"' in readiness
     assert 'c.get("performed_via_github_app") or {}).get("slug") != "chatgpt-codex-connector"' in readiness
     assert "no Control holder acquired" in readiness
-    assert workflow.index("      - name: Wait for interactive ChatGPT readiness") < workflow.index("      - name: Create exact private runtime capability")
+    interactive = workflow.split("  interactive-resume:", 1)[1]
+    assert interactive.index("      - name: Wait for interactive ChatGPT readiness") < interactive.index("      - name: Create exact private runtime capability")
 
     assert 're.fullmatch(r"[0-9a-f]{40}", str(candidate.get("candidate_sha", "")))' in handoff
     assert 're.fullmatch(r"[0-9a-f]{40}", str(candidate.get("expected_base_sha", "")))' in handoff
