@@ -22,14 +22,25 @@ def test_runtime_carrier_preserves_owner_main_issue106_and_native_manual_resume(
 
 def test_interactive_resume_handoff_is_bound_to_exact_agent_task_and_supported_action() -> None:
     workflow = Path(".github/workflows/control-v4-runtime-carrier.yml").read_text(encoding="utf-8")
-    handoff = workflow.split("      - name: Publish fresh Control WORK grant to already running Work", 1)[1]
-    handoff = handoff.split("      - name: Release holder if Work handoff failed", 1)[0]
+    handoff = workflow.split("      - name: Publish fresh Control WORK grant to ready ChatGPT", 1)[1]
+    handoff = handoff.split("      - name: Release holder if ChatGPT handoff failed", 1)[0]
     assert 'work.get("protocol") != "CONTROL_V4_RUNTIME_RESULT_V1"' in handoff
     assert 'work.get("run_id") != f"v41:gh:{owner_run_id}"' in handoff
     assert 're.fullmatch(r"[0-9a-f]{64}", str(work.get("task_token", "")))' in handoff
-    assert 'work.get("action") not in {"REPAIR", "REVIEW_INTERNAL"}' in handoff
+    assert 'work.get("action") not in {"REPAIR", "REVIEW_INTERNAL",' in handoff
+    assert '"REQUEST_EXTERNAL_REVIEW", "RECONCILE_EXTERNAL_REVIEW"}' in handoff
     assert 'candidate.get("candidate_head_branch") != "control/mission-agent-r2-gap-05"' in handoff
     assert 'candidate.get("expected_base_branch") != "main"' in handoff
+    assert "CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013" in workflow
+    assert "CONTROL_WORK_POC_REQUEST_20261009" not in workflow
+    readiness = workflow.split("      - name: Wait for interactive ChatGPT readiness without holding Control lease", 1)[1]
+    readiness = readiness.split("      - name: Create exact private runtime capability", 1)[0]
+    assert '"CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013", "CONTROL_INTERACTIVE_WAKE_V2"' in readiness
+    assert 'c.get("user", {}).get("login") != "market-predictions"' in readiness
+    assert 'c.get("performed_via_github_app") or {}).get("slug") != "chatgpt-codex-connector"' in readiness
+    assert "no Control holder acquired" in readiness
+    assert workflow.index("      - name: Wait for interactive ChatGPT readiness") < workflow.index("      - name: Create exact private runtime capability")
+
     assert 're.fullmatch(r"[0-9a-f]{40}", str(candidate.get("candidate_sha", "")))' in handoff
     assert 're.fullmatch(r"[0-9a-f]{40}", str(candidate.get("expected_base_sha", "")))' in handoff
 
