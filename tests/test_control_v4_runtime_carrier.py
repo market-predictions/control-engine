@@ -31,11 +31,11 @@ def test_interactive_resume_handoff_is_bound_to_exact_agent_task_and_supported_a
     assert '"REQUEST_EXTERNAL_REVIEW", "RECONCILE_EXTERNAL_REVIEW"}' in handoff
     assert 'candidate.get("candidate_head_branch") != "control/mission-agent-r2-gap-05"' in handoff
     assert 'candidate.get("expected_base_branch") != "main"' in handoff
-    assert "CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013" in workflow
-    assert "CONTROL_WORK_POC_REQUEST_20261009" not in workflow
+    assert "CONTROL_WORK_POC_REQUEST_20261009" in workflow
+    assert "CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013" not in workflow
     readiness = workflow.split("      - name: Wait for interactive ChatGPT readiness without holding Control lease", 1)[1]
     readiness = readiness.split("      - name: Create exact private runtime capability", 1)[0]
-    assert '"CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013", "CONTROL_INTERACTIVE_WAKE_V2"' in readiness
+    assert '"CONTROL_WORK_POC_REQUEST_20261009", "CONTROL_INTERACTIVE_WAKE_V2"' in readiness
     assert 'c.get("user", {}).get("login") != "market-predictions"' in readiness
     assert 'c.get("performed_via_github_app") or {}).get("slug") != "chatgpt-codex-connector"' in readiness
     assert "no Control holder acquired" in readiness
