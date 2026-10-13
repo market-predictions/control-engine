@@ -333,7 +333,7 @@ jobs:
                      "owner_run_id": run,
                      "repository": "market-predictions/agent",
                      "pr_number": 3}
-          body = ("CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013\n"
+          body = ("CONTROL_WORK_POC_REQUEST_20261009\n"
                   "CONTROL_INTERACTIVE_WAKE_V2\n"
                   + json.dumps(payload, sort_keys=True, separators=(",", ":")))
           req = Request(
@@ -379,7 +379,7 @@ jobs:
           if (original.get("user", {}).get("login") != "control-runtime-actuator[bot]"
                   or (original.get("performed_via_github_app") or {}).get("slug") != "control-runtime-actuator"
                   or len(lines) != 3 or lines[:2] != [
-                      "CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013", "CONTROL_INTERACTIVE_WAKE_V2"]
+                      "CONTROL_WORK_POC_REQUEST_20261009", "CONTROL_INTERACTIVE_WAKE_V2"]
                   or json.loads(lines[2]) != {
                       "protocol": "CONTROL_INTERACTIVE_WAKE_V2", "owner_run_id": run,
                       "repository": "market-predictions/agent", "pr_number": 3}):
