@@ -1,5 +1,7 @@
 # Control V4 — Interactive PULSE pilot (V4.1 candidate, NOT adopted)
 
+> **HISTORICAL / NOT ADOPTED.** This is the former `[control] PULSE` pilot, **not the current startup command or MVP acceptance gate**. The principal adopted `control-go` with ChatGPT as the engineer, GitHub Actions as CI and Codex as the independent reviewer on 2026-10-13. See the [canonical private Operating Model](https://github.com/market-predictions/control-plane/blob/main/control/CONTROL_OPERATING_MODEL.md). The original pilot and tests remain provenance; they do **not** issue interactive holder/queue authority. The Scheduled Runner, Work trigger and push Watch are not active prerequisites.
+
 Status: **read-only pilot candidate**. Existing V4 authority, canonical Scheduled
 Runner generation, private runtime queue, lease, CI/review and CAS stay unchanged.
 This file is a companion to the current V4 architecture, not a new authority.
