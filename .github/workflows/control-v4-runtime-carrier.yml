@@ -316,7 +316,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - name: Wake Work without claiming a private holder
+      - name: Wake interactive ChatGPT without claiming a private holder
         id: wake
         env:
           AGENT_TOKEN: ${{ steps.agent-token.outputs.token }}
@@ -333,7 +333,7 @@ jobs:
                      "owner_run_id": run,
                      "repository": "market-predictions/agent",
                      "pr_number": 3}
-          body = ("CONTROL_WORK_POC_REQUEST_20261009\n"
+          body = ("CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013\n"
                   "CONTROL_INTERACTIVE_WAKE_V2\n"
                   + json.dumps(payload, sort_keys=True, separators=(",", ":")))
           req = Request(
@@ -346,13 +346,13 @@ jobs:
           with urlopen(req, timeout=25) as response:
               posted = json.load(response)
           if posted.get("body") != body or type(posted.get("id")) is not int:
-              raise SystemExit("Work wake publication not confirmed")
+              raise SystemExit("ChatGPT wake publication not confirmed")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
               f.write(f"wake_comment_id={posted['id']}\n")
-          print("CONTROL_WORK_WAKE_COMMENT_ID=" + str(posted["id"]))
+          print("CONTROL_CHATGPT_WAKE_COMMENT_ID=" + str(posted["id"]))
           PY
 
-      - name: Wait for Work readiness without holding Control lease
+      - name: Wait for interactive ChatGPT readiness without holding Control lease
         id: ready
         env:
           AGENT_TOKEN: ${{ steps.agent-token.outputs.token }}
@@ -379,11 +379,11 @@ jobs:
           if (original.get("user", {}).get("login") != "control-runtime-actuator[bot]"
                   or (original.get("performed_via_github_app") or {}).get("slug") != "control-runtime-actuator"
                   or len(lines) != 3 or lines[:2] != [
-                      "CONTROL_WORK_POC_REQUEST_20261009", "CONTROL_INTERACTIVE_WAKE_V2"]
+                      "CONTROL_INTERACTIVE_CHATGPT_REQUEST_20261013", "CONTROL_INTERACTIVE_WAKE_V2"]
                   or json.loads(lines[2]) != {
                       "protocol": "CONTROL_INTERACTIVE_WAKE_V2", "owner_run_id": run,
                       "repository": "market-predictions/agent", "pr_number": 3}):
-              raise SystemExit("untrusted wake source")
+              raise SystemExit("untrusted interactive ChatGPT wake source")
           # The Agent app token is valid for one hour; fail before that boundary.
           deadline = time.monotonic() + 50 * 60
           while time.monotonic() < deadline:
@@ -411,10 +411,10 @@ jobs:
                           and v["relay_comment_id"] in relays):
                       with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
                           f.write(f"ready_comment_id={c['id']}\n")
-                      print("CONTROL_WORK_READY_COMMENT_ID=" + str(c["id"]))
+                      print("CONTROL_CHATGPT_READY_COMMENT_ID=" + str(c["id"]))
                       raise SystemExit(0)
               time.sleep(15)
-          raise SystemExit("Work did not report readiness within 50m; no Control holder acquired")
+          raise SystemExit("Interactive ChatGPT did not report readiness within 50m; no Control holder acquired")
           PY
 
       - name: Create exact private runtime capability
@@ -455,7 +455,7 @@ jobs:
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
         run: python scripts/control_v4_runtime_carrier.py
 
-      - name: Publish fresh Control WORK grant to already running Work
+      - name: Publish fresh Control WORK grant to ready ChatGPT
         if: ${{ steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"WORK"') }}
         id: handoff
         env:
@@ -482,7 +482,8 @@ jobs:
                   work.get("run_id") != f"v41:gh:{owner_run_id}" or
                   not re.fullmatch(r"[0-9a-f]{64}", str(work.get("task_token", ""))) or
                   work.get("repository") != "market-predictions/agent" or
-                  work.get("action") not in {"REPAIR", "REVIEW_INTERNAL"} or
+                  work.get("action") not in {"REPAIR", "REVIEW_INTERNAL",
+                                                 "REQUEST_EXTERNAL_REVIEW", "RECONCILE_EXTERNAL_REVIEW"} or
                   not isinstance(candidate, dict) or
                   set(candidate) != candidate_keys or
                   candidate.get("candidate_pr_number") != 3 or
@@ -507,10 +508,10 @@ jobs:
               posted = json.load(response)
           if posted.get("body") != body or type(posted.get("id")) is not int:
               raise SystemExit("Work grant not confirmed")
-          print("CONTROL_INTERACTIVE_WORK_GRANT_ID=" + str(posted["id"]))
+          print("CONTROL_INTERACTIVE_CHATGPT_GRANT_ID=" + str(posted["id"]))
           PY
 
-      - name: Release holder if Work handoff failed
+      - name: Release holder if ChatGPT handoff failed
         if: ${{ always() && steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"WORK"') && steps.handoff.outcome != 'success' }}
         env:
           PYTHONPATH: ${{ github.workspace }}
