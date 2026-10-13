@@ -1,27 +1,35 @@
 # Control Engine
 
-Public deterministic Control library, validation surface and bounded private-state carrier.
+Deterministic Control validation, GitHub transport and guarded private-state carrier. **Not an AI programmer or a second Control authority.**
 
-## V4 boundary
+## Current operating policy (adopted 2026-10-13)
 
-`market-predictions/control-engine` owns **no semantic Control runtime authority** and persists no private Control runtime state. Canonical Mission authority and mutable runtime state remain solely in private `market-predictions/control-plane`.
+The principal-approved [Control Operating Model](https://github.com/market-predictions/control-plane/blob/main/control/CONTROL_OPERATING_MODEL.md) in the **private** Control Plane is the canonical human-facing policy:
 
-The recurring ChatGPT Control Runner remains the one semantic Runner. Scheduled invocations transport typed TICK/EVENT commands through the owner-bound public issue-command surface; the reviewed deterministic `control-v4-runtime-carrier.yml` carrier applies only deterministic private queue transitions to `control-runtime-state:control/DISPATCH_QUEUE.json`.
+- **`control-go`** starts work in an active ChatGPT Control project chat. ChatGPT is the **primary developer**, not Codex or Work.
+- Existing **GitHub Actions** performs the applicable project tests/CI.
+- **Codex GitHub Code Review** is the independent exact-head reviewer. Codex Cloud environments for Codex **code implementation** are not a prerequisite for ordinary review; each target repository still needs actual review access.
+- **Work** is optional for specific browser or cross-application requirements. It is not part of the routine critical path.
+- The **Scheduled ChatGPT Runner and retired Guardians are disabled**, and push notifications are off by principal choice. They must not be re-enabled as an assumed fix for earlier unattended GitHub write restrictions.
+- This is **INTERACTIVE_WORKING**, **not yet SEMI_AUTONOMOUS_LIVE**: the trusted interactive holder/candidate-reconciliation and semantic closeout step through current Control authority is still unproven. A direct ChatGPT GitHub edit is not a Control TICK/EVENT or a holder claim.
 
-For the bounded **interactive/mobile V4.1** path, an owner-started GitHub Actions run first posts an Agent PR #3 wake event **without acquiring a private holder**. The same owner run accepts only a correlated Work readiness response, then creates the private capability, acquires once through the unchanged runtime carrier, and sends the fresh WORK capsule back to that already-running Work invocation. An absent or late readiness response ends without acquiring a holder. The ordinary Scheduled Runner and its current-generation command path are unchanged; target writes still require their existing same-run TICK, freshness, target-identity and CAS fences. This is not evidence of a completed productive Work cycle until the live repair and semantic EVENT are verified.
+Project-specific stack failures (such as Agent's Hermes/FreeLLMAPI live model check) are not outages of Control infrastructure. A required failing test still blocks **that project's** acceptance; it never justifies a fabricated PASS.
 
-Runtime writes use one exact atomic GraphQL `updateRefs` compare-and-swap. That mutation simultaneously fences private `main` at the expected authority SHA and advances `control-runtime-state` from the exact expected old SHA to one new commit. A successful mutation response is the definitive commit acknowledgement. Command freshness, authority, queue and old-ref checks occur before or inside that boundary. The carrier deliberately performs no fallible post-CAS readback that could convert a durable successful queue mutation into `ERROR`; each later command reloads and validates canonical private truth afresh.
+## V4 runtime security boundary — still binding
 
-TICK is deliberately small: recover an expired holder when required, select/acquire one eligible task, atomically persist ownership, and return the bounded public-safe `WORK` capsule. It performs no target-repository or pull-request network verification after ownership has been acquired. Target/candidate checks live at semantic EVENT boundaries where they can govern a state transition. EVENT transitions preserve exact holder identity and release accepted holders atomically with the semantic queue change.
+`market-predictions/control-engine` owns **no semantic Control authority** and persists **no private queue**. Mission, repository and runtime authority remain in `market-predictions/control-plane@main`; the only mutable runtime queue is `control-runtime-state:control/DISPATCH_QUEUE.json`.
 
-After a successful canonical `NO_WORK`, a separate read-only discovery step may project already-authorized, currently eligible unmaterialized OPEN Mission work as opaque `replenishment_proposals`. Discovery does not mutate the queue or Mission authority and cannot create a candidate or task. The existing exact owner-authored `CONTROL_V4_REPLENISH_APPROVAL` plus `ACTIVATE_ROOT_CANDIDATE` path remains the sole task-materialization route.
+Existing V4 guarded transitions enforce exact task/holder, nonrenewable lease, fresh public TICK, authenticated command/result correlation, exact PR/head/base, atomic private-main no-op + runtime-ref GraphQL compare-and-swap and atomic EVENT holder release. `integration_enabled=false` remains a protected merge hold; owner-authorized integration is a separate action. Public issue #106 is transport/audit **only**.
 
-Public issue comments are transport/audit evidence only. They are never a queue, Mission, status plane or authority source. Runtime responses contain only a bounded public-safe projection and opaque task token; raw private queue, Mission, acceptance, authority and review-state content is never mirrored into this repository or public issue transport.
+The legacy Scheduled Runner uses typed TICK/EVENT messages when enabled; the currently suspended `workflow_dispatch` interactive-resume job contains an owner-start + Work WAKE/READY/WORK handoff. These are technical capabilities/historical references, **not** instructions to make Work or the Scheduled Runner a required dependency of the adopted interactive operating policy. Their existence does not prove that the unimplemented ChatGPT interactive authority handoff works.
 
-The former V3.1 runtime workflow remains retired. Retained V3.1 kernel, migration and validation code exists only while concrete current dependencies remain. Obsolete V4-40 freeze helpers and the superseded post-CAS retry/readback mechanism are not current runtime code.
+V4 replenishment remains bounded by current Mission, repo authority, dependency and exact owner-authored candidate PR eligibility. No phantom BUILD task or synthetic PR is allowed. Never invent a new Mission, bypass an approval or fabricate a queue status for a dashboard.
 
-The V4 runtime carrier remains activation-bounded to `integration_enabled=false`; target integration remains fail-closed until a separate reviewed carrier extension is justified. There is still one private queue, one Scheduled semantic Runner and no provider fallback, broker, database, second scheduler, retry ledger or second state plane.
+No parallel Runner/queue/broker/Guardian/retry ledger or duplicate state plane. Existing carrier code remains subject to current V4 protocol validations and tests.
 
-Generic Mission creation, autonomous scope invention and candidate-less BUILD execution, including `[control] task overige: ...` outside already-committed eligible Mission scope, remain separate product decisions and are not implemented by replenishment discovery.
+## Documentation
 
-See `docs/PUBLIC_PRIVATE_BOUNDARY_V4.md` for the complete V4 public/private boundary, `docs/CONTROL_V4_REPLENISHMENT_DISCOVERY.md` for the discovery/approval boundary and rollback path, and `docs/CONTROL_V4_STABILIZATION_2026_09_09.md` for the stabilization record.
+- [Private canonical Control System Index](https://github.com/market-predictions/control-plane/blob/main/control/SYSTEM_INDEX.md) and [Operating Model](https://github.com/market-predictions/control-plane/blob/main/control/CONTROL_OPERATING_MODEL.md): actual user interaction and authority hierarchy.
+- [Public/private boundary](docs/PUBLIC_PRIVATE_BOUNDARY_V4.md): enforced technical trust and CAS controls.
+- [Interactive PULSE pilot](control/CONTROL_V41_INTERACTIVE_PULSE_PILOT.md): **historical, non-adopted pilot**, not the current command.
+- [Replenishment history](docs/CONTROL_V4_REPLENISHMENT_DISCOVERY.md) and [stabilization record](docs/CONTROL_V4_STABILIZATION_2026_09_09.md): technical background; current queue/authority always need live readback.
