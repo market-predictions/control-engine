@@ -40,7 +40,6 @@ def test_direct_path_uses_existing_carrier_and_no_second_authority():
         "Work readiness",
         "AGENT_TOKEN",
         "permission-pull-requests: write",
-        "CONTROL_V4_RUNTIME_EVENT",
         "CONTROL_V4_RUNTIME_TICK_AUTO",
         "CONTROL_RUNTIME_AUTHORITY_V4.json",
         "CONTROL_RUNNER_V4.json",
@@ -56,3 +55,12 @@ def test_handover_is_one_transport_receipt_not_a_semantic_pass():
     assert "issues/106/comments" in job
     assert "INTERNAL_PASS" not in job
     assert "EXTERNAL_PASS" not in job
+
+
+def test_failed_receipt_publication_releases_existing_holder():
+    job = _job()
+    assert 'id: handover' in job
+    assert 'steps.handover.outcome != \'success\'' in job
+    assert '"CONTROL_V4_RUNTIME_EVENT "' in job
+    assert 'command["event"] = "YIELD"' in job
+    assert 'from scripts.control_v4_runtime_carrier import main' in job
