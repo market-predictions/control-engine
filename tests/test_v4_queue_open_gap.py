@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tests.test_v4_auto_replenish import bundle, queue, REPO
+from test_v4_auto_replenish import bundle, queue, REPO
 from scripts import control_v4_queue_open_gap as materialize
 
 NOW = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)
