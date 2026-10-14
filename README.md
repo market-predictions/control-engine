@@ -13,6 +13,23 @@ The principal-approved [Control Operating Model](https://github.com/market-predi
 - The **Scheduled ChatGPT Runner and retired Guardians are disabled**, and push notifications are off by principal choice. They must not be re-enabled as an assumed fix for earlier unattended GitHub write restrictions.
 - This is **INTERACTIVE_WORKING**, **not yet SEMI_AUTONOMOUS_LIVE**: the trusted interactive holder/candidate-reconciliation and semantic closeout step through current Control authority is still unproven. A direct ChatGPT GitHub edit is not a Control TICK/EVENT or a holder claim.
 
+### Mission-driven task replenishment (candidate pending review)
+
+The native owner-started `control-go` path now proposes to materialize
+**at most one** dependency-eligible, unmaterialized `OPEN` gap from the
+*currently authorized Mission and repository authority* as ordinary
+`QUEUED / BUILD / candidate=null`. The same canonical V4 private queue,
+validator and main/runtime atomic CAS are reused. Normal task priority and
+the existing Agent task are not changed. No PR is manufactured.
+
+This is **not** authority to promote new analysis findings into Mission
+scope: analyses may inform a reviewed Mission update, after which current
+OPEN gaps are eligible for queue replenishment. No new queue, service,
+scheduler, autonomous background worker or bypass is introduced.
+
+The feature is not live until the reviewed PR is merged and a native
+owner-started run confirms one queue append (with readback).
+
 ### Native owner-started direct handover (candidate, not yet live-proven)
 
 The existing **Control V4 Runtime Carrier** GitHub Actions workflow now offers
