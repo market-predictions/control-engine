@@ -13,6 +13,27 @@ The principal-approved [Control Operating Model](https://github.com/market-predi
 - The **Scheduled ChatGPT Runner and retired Guardians are disabled**, and push notifications are off by principal choice. They must not be re-enabled as an assumed fix for earlier unattended GitHub write restrictions.
 - This is **INTERACTIVE_WORKING**, **not yet SEMI_AUTONOMOUS_LIVE**: the trusted interactive holder/candidate-reconciliation and semantic closeout step through current Control authority is still unproven. A direct ChatGPT GitHub edit is not a Control TICK/EVENT or a holder claim.
 
+### Native owner-started direct handover (candidate, not yet live-proven)
+
+The existing **Control V4 Runtime Carrier** GitHub Actions workflow now offers
+`Run workflow → mode: control-go` as the default native owner start.
+It invokes the unchanged guarded V4 carrier exactly once, then publishes a
+`CONTROL_INTERACTIVE_HANDOVER_V1` receipt on Control Engine issue #106.
+ChatGPT Control can read that receipt in the active chat and continue work,
+using the existing governed project PR and Codex review.
+
+This is a **human-started** flow: a GitHub Actions event cannot wake an
+inactive ChatGPT conversation. The receipt is transport, not a semantic
+review verdict, a permanent claim, or authority to bypass a current lease.
+An accepted Control EVENT still requires the existing live holder,
+candidate and private CAS checks. The job attempts a guarded YIELD if
+handover publication fails. `mode: legacy-work` retains the historical
+optional Work pilot, but is not the default.
+
+Do not mark this mode SEMI_AUTONOMOUS_LIVE until exact-head CI,
+independent review, merge, an actual owner-dispatch/receipt readback,
+and a real guarded task transition are proven.
+
 Project-specific stack failures (such as Agent's Hermes/FreeLLMAPI live model check) are not outages of Control infrastructure. A required failing test still blocks **that project's** acceptance; it never justifies a fabricated PASS.
 
 ## V4 runtime security boundary — still binding

@@ -5,6 +5,15 @@ on:
   issue_comment:
     types: [created]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Control start mode"
+        required: true
+        default: control-go
+        type: choice
+        options:
+          - control-go
+          - legacy-work
 
 permissions:
   contents: read
@@ -281,6 +290,7 @@ jobs:
       ${{
         github.repository == 'market-predictions/control-engine' &&
         github.event_name == 'workflow_dispatch' &&
+        inputs.mode == 'legacy-work' &&
         github.ref == 'refs/heads/main' &&
         github.actor == 'market-predictions' &&
         github.triggering_actor == 'market-predictions' &&
@@ -532,3 +542,177 @@ jobs:
               'CONTROL_V4_RUNTIME_EVENT ' + json.dumps(event, separators=(',', ':')))
           main()
           PY
+
+  interactive-control-start:
+    # Native owner dispatch, direct existing V4 CAS carrier, no Work dependency.
+    if: >-
+      ${{
+        github.repository == 'market-predictions/control-engine' &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.mode == 'control-go' &&
+        github.ref == 'refs/heads/main' &&
+        github.actor == 'market-predictions' &&
+        github.triggering_actor == 'market-predictions' &&
+        github.run_attempt == 1
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout trusted Control Engine main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing carrier dependency
+        run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - name: Create existing bounded private runtime capability
+        id: private-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: write
+      - name: Bind one native run to one fresh Control task acquisition
+        env:
+          OWNER_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          import json
+          import os
+          run = int(os.environ["OWNER_RUN_ID"])
+          if run <= 0:
+              raise SystemExit("invalid owner run identity")
+          command = "CONTROL_V4_RUNTIME_TICK " + json.dumps(
+              {"run_id": f"v41:gh:{run}"}, separators=(",", ":"))
+          created = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"CONTROL_V4_PUBLIC_COMMAND={command}\n")
+              env.write(f"CONTROL_V4_PUBLIC_COMMAND_ID={run}\n")
+              env.write(f"CONTROL_V4_PUBLIC_COMMAND_CREATED_AT={created}\n")
+          PY
+      - name: Acquire via existing authority, lease and atomic CAS checks
+        id: carrier
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
+        run: python scripts/control_v4_runtime_carrier.py
+      - name: Publish bounded handover to ChatGPT Control
+        id: handover
+        if: ${{ steps.carrier.outputs.ok == 'true' && steps.carrier.outputs.result_json != '' }}
+        env:
+          RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          result = json.loads(os.environ["RESULT_JSON"])
+          if result.get("run_id") != f"v41:gh:{os.environ['OWNER_RUN_ID']}":
+              raise SystemExit("handover run identity mismatch")
+          if result.get("result") not in {"WORK", "BUSY", "NO_WORK", "UNSUPPORTED"}:
+              raise SystemExit("unsupported handover result")
+          # This is a transport receipt, not a trusted semantic review verdict.
+          body = "CONTROL_INTERACTIVE_HANDOVER_V1\n" + json.dumps(
+              result, sort_keys=True, separators=(",", ":"))
+          from datetime import datetime, timedelta, timezone
+          import urllib.error
+          import time
+
+          url = f"https://api.github.com/repos/{os.environ['REPOSITORY']}/issues/106/comments"
+          headers = {
+              "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+          since = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
+
+          def verify_existing():
+              from urllib.parse import urlencode
+              query = urlencode({"since": since, "per_page": 100})
+              req = urllib.request.Request(url + "?" + query, headers=headers)
+              with urllib.request.urlopen(req, timeout=25) as response:
+                  comments = json.load(response)
+              if not isinstance(comments, list) or len(comments) >= 100:
+                  raise RuntimeError("handover reconciliation not bounded")
+              matches = [item for item in comments if (
+                  item.get("body") == body
+                  and item.get("user", {}).get("login") == "github-actions[bot]"
+                  and (item.get("performed_via_github_app") or {}).get("slug") == "github-actions"
+                  and type(item.get("id")) is int
+              )]
+              if len(matches) > 1:
+                  raise RuntimeError("duplicate handover receipts")
+              return matches[0]["id"] if matches else None
+
+          try:
+              req = urllib.request.Request(
+                  url, data=json.dumps({"body": body}).encode("utf-8"),
+                  headers=headers, method="POST")
+              with urllib.request.urlopen(req, timeout=25) as response:
+                  posted = json.load(response)
+              if posted.get("body") != body or type(posted.get("id")) is not int:
+                  raise RuntimeError("handover POST acknowledgement invalid")
+              receipt_id = posted["id"]
+          except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError):
+              # Ambiguous POST: resolve exact immutable receipt before releasing holder.
+              # If readback is unavailable, let the existing lease expire safely.
+              try:
+                  receipt_id = verify_existing()
+              except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError):
+                  raise SystemExit("handover uncertain; preserve holder until lease expiry")
+              if receipt_id is None:
+                  with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                      output.write("safe_to_yield=true\n")
+                  raise SystemExit("handover absent after bounded readback")
+          print("CONTROL_INTERACTIVE_HANDOVER_COMMENT_ID=" + str(receipt_id))
+          PY
+      - name: Release holder if handover publication failed
+        if: ${{ always() && steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"WORK"') && steps.carrier.outputs.result_json != '' && steps.carrier.outcome == 'success' && steps.handover.outcome != 'success' && steps.handover.outputs.safe_to_yield == 'true' }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
+          WORK_JSON: ${{ steps.carrier.outputs.result_json }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from scripts.control_v4_runtime_carrier import main
+          capsule = json.loads(os.environ["WORK_JSON"])
+          command = {key: capsule[key] for key in (
+              "run_id", "task_token", "repository", "action")}
+          if "candidate" in capsule:
+              command["candidate"] = capsule["candidate"]
+          command["event"] = "YIELD"
+          os.environ["CONTROL_V4_PUBLIC_COMMAND"] = (
+              "CONTROL_V4_RUNTIME_EVENT " + json.dumps(command, separators=(",", ":")))
+          import tempfile
+          with tempfile.NamedTemporaryFile(mode="r+", encoding="utf-8") as result_file:
+              os.environ["GITHUB_OUTPUT"] = result_file.name
+              if main() != 0:
+                  raise SystemExit("holder release carrier failed")
+              result_file.seek(0)
+              lines = dict(line.strip().split("=", 1) for line in result_file if "=" in line)
+          if lines.get("ok") != "true":
+              raise SystemExit("holder release not confirmed")
+          result = json.loads(lines.get("result_json", "{}"))
+          if result.get("result") != "YIELDED" or result.get("run_id") != capsule["run_id"]:
+              raise SystemExit("holder release returned no matching YIELDED result")
+          PY
+      - name: Fail closed on carrier rejection or handover publication failure
+        if: ${{ steps.carrier.outputs.ok != 'true' }}
+        run: exit 1
