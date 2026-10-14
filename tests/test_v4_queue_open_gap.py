@@ -31,6 +31,14 @@ def test_authorized_open_gap_materializes_candidate_less_build():
     assert materialize.plan_one(next_queue, bundle(), now=NOW) is None
 
 
+def test_gap_repository_exact_casing_is_preserved():
+    b = bundle()
+    b.missions[0]["repository"] = REPO.upper()
+    planned = materialize.plan_one(queue(), b, now=NOW)
+    assert planned is not None
+    assert planned[0]["tasks"][0]["repository"] == REPO
+
+
 def test_locked_queue_never_materializes():
     q = queue()
     q["execution_lock"] = {
@@ -52,7 +60,7 @@ def test_control_go_queues_before_existing_carrier_claim():
     assert job.index("Bind one native run to one fresh Control task acquisition") < job.index(
         "python scripts/control_v4_queue_open_gap.py"
     ) < job.index("python scripts/control_v4_runtime_carrier.py")
-    assert "CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}" in job
+    assert job.index("Refresh TICK freshness after bounded queue append") > job.index(\n        "python scripts/control_v4_queue_open_gap.py"\n    )\n    assert job.index("Refresh TICK freshness after bounded queue append") < job.index(\n        "python scripts/control_v4_runtime_carrier.py"\n    )\n    assert "CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}" in job
     script = Path("scripts/control_v4_queue_open_gap.py").read_text()
     assert "carrier._write_queue_exact(" in script
     assert "assert_v4_queue_bound_to_authority(" in script
