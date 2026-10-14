@@ -607,6 +607,7 @@ jobs:
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
         run: python scripts/control_v4_runtime_carrier.py
       - name: Publish bounded handover to ChatGPT Control
+        id: handover
         if: ${{ steps.carrier.outputs.ok == 'true' && steps.carrier.outputs.result_json != '' }}
         env:
           RESULT_JSON: ${{ steps.carrier.outputs.result_json }}
@@ -642,6 +643,28 @@ jobs:
           if posted.get("body") != body or type(posted.get("id")) is not int:
               raise SystemExit("handover readback failed")
           print("CONTROL_INTERACTIVE_HANDOVER_COMMENT_ID=" + str(posted["id"]))
+          PY
+      - name: Release holder if handover publication failed
+        if: ${{ always() && steps.carrier.outputs.ok == 'true' && contains(steps.carrier.outputs.result_json, '"result":"WORK"') && steps.carrier.outputs.result_json != '' && steps.carrier.outcome == 'success' && steps.handover.outcome != 'success' }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
+          WORK_JSON: ${{ steps.carrier.outputs.result_json }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from scripts.control_v4_runtime_carrier import main
+          capsule = json.loads(os.environ["WORK_JSON"])
+          command = {key: capsule[key] for key in (
+              "run_id", "task_token", "repository", "action")}
+          if "candidate" in capsule:
+              command["candidate"] = capsule["candidate"]
+          command["event"] = "YIELD"
+          os.environ["CONTROL_V4_PUBLIC_COMMAND"] = (
+              "CONTROL_V4_RUNTIME_EVENT " + json.dumps(command, separators=(",", ":")))
+          main()
           PY
       - name: Fail closed on carrier rejection or handover publication failure
         if: ${{ steps.carrier.outputs.ok != 'true' }}
