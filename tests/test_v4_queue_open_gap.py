@@ -62,9 +62,11 @@ def test_control_go_queues_before_existing_carrier_claim():
     ) < job.index("python scripts/control_v4_runtime_carrier.py")
     assert job.index("Refresh TICK freshness after bounded queue append") > job.index(
         "python scripts/control_v4_queue_open_gap.py"
-    )\n    assert job.index("Refresh TICK freshness after bounded queue append") < job.index(
+    )
+    assert job.index("Refresh TICK freshness after bounded queue append") < job.index(
         "python scripts/control_v4_runtime_carrier.py"
-    )\n    assert "CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}" in job
+    )
+    assert "CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}" in job
     script = Path("scripts/control_v4_queue_open_gap.py").read_text()
     assert "carrier._write_queue_exact(" in script
     assert "assert_v4_queue_bound_to_authority(" in script
