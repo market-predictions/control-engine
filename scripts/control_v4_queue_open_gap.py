@@ -9,9 +9,8 @@ No candidate PR, new Mission scope, secondary queue, or review verdict.
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from control_engine.v4_contracts import (
-    assert_v4_queue_bound_to_authority, validate_queue_v4, v4_root_task_id,
-)
+from control_engine.v4_authority_io import assert_v4_queue_bound_to_authority
+from control_engine.v4_contracts import validate_queue_v4, v4_root_task_id
 from scripts import control_v4_owner_admin as admin
 from scripts import control_v4_runtime_carrier as carrier
 
