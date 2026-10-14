@@ -580,6 +580,12 @@ jobs:
           owner: market-predictions
           repositories: control-plane
           permission-contents: write
+      - name: Queue one existing authorized Mission gap
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_ENGINE_TOKEN: ${{ github.token }}
+        run: python scripts/control_v4_queue_open_gap.py
       - name: Bind one native run to one fresh Control task acquisition
         env:
           OWNER_RUN_ID: ${{ github.run_id }}
