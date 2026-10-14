@@ -676,7 +676,7 @@ jobs:
                   raise SystemExit("handover uncertain; preserve holder until lease expiry")
               if receipt_id is None:
                   with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                      output.write("safe_to_yield=true\\n")
+                      output.write("safe_to_yield=true\n")
                   raise SystemExit("handover absent after bounded readback")
           print("CONTROL_INTERACTIVE_HANDOVER_COMMENT_ID=" + str(receipt_id))
           PY
