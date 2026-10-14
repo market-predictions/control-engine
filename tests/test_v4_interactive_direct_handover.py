@@ -64,3 +64,11 @@ def test_failed_receipt_publication_releases_existing_holder():
     assert '"CONTROL_V4_RUNTIME_EVENT "' in job
     assert 'command["event"] = "YIELD"' in job
     assert 'from scripts.control_v4_runtime_carrier import main' in job
+
+def test_holder_release_failure_is_reported_not_silently_accepted():
+    job = _job().split("      - name: Release holder if handover publication failed", 1)[1]
+    assert 'lines.get("ok") != "true"' in job
+    assert 'result.get("result") != "YIELDED"' in job
+    assert 'result.get("run_id") != capsule["run_id"]' in job
+    assert 'raise SystemExit("holder release not confirmed")' in job
+    assert 'raise SystemExit("holder release returned no matching YIELDED result")' in job
