@@ -605,6 +605,15 @@ jobs:
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
         run: python scripts/control_v4_queue_open_gap.py
+      - name: Refresh TICK freshness after bounded queue append
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          import os
+          fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"CONTROL_V4_PUBLIC_COMMAND_CREATED_AT={fresh}\n")
+          PY
       - name: Acquire via existing authority, lease and atomic CAS checks
         id: carrier
         env:
