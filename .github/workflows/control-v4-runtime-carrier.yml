@@ -664,7 +664,18 @@ jobs:
           command["event"] = "YIELD"
           os.environ["CONTROL_V4_PUBLIC_COMMAND"] = (
               "CONTROL_V4_RUNTIME_EVENT " + json.dumps(command, separators=(",", ":")))
-          main()
+          import tempfile
+          with tempfile.NamedTemporaryFile(mode="r+", encoding="utf-8") as result_file:
+              os.environ["GITHUB_OUTPUT"] = result_file.name
+              if main() != 0:
+                  raise SystemExit("holder release carrier failed")
+              result_file.seek(0)
+              lines = dict(line.strip().split("=", 1) for line in result_file if "=" in line)
+          if lines.get("ok") != "true":
+              raise SystemExit("holder release not confirmed")
+          result = json.loads(lines.get("result_json", "{}"))
+          if result.get("result") != "YIELDED" or result.get("run_id") != capsule["run_id"]:
+              raise SystemExit("holder release returned no matching YIELDED result")
           PY
       - name: Fail closed on carrier rejection or handover publication failure
         if: ${{ steps.carrier.outputs.ok != 'true' }}
