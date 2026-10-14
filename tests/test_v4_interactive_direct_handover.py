@@ -72,3 +72,18 @@ def test_holder_release_failure_is_reported_not_silently_accepted():
     assert 'result.get("run_id") != capsule["run_id"]' in job
     assert 'raise SystemExit("holder release not confirmed")' in job
     assert 'raise SystemExit("holder release returned no matching YIELDED result")' in job
+
+
+def test_ambiguous_handover_is_reconciled_before_release():
+    job = _job()
+    publication = job.split("      - name: Publish bounded handover", 1)[1].split(
+        "      - name: Release holder", 1)[0]
+    release = job.split("      - name: Release holder", 1)[1]
+    assert "def verify_existing():" in publication
+    assert 'item.get("body") == body' in publication
+    assert 'item.get("performed_via_github_app")' in publication
+    assert 'receipt_id = verify_existing()' in publication
+    assert 'if receipt_id is None:' in publication
+    assert 'output.write("safe_to_yield=true' in publication
+    assert "handover uncertain; preserve holder until lease expiry" in publication
+    assert "steps.handover.outputs.safe_to_yield == 'true'" in release
