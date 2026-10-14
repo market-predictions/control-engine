@@ -34,7 +34,7 @@ def plan_one(queue, bundle, *, now):
             "mission_contract_blob_sha": bundle.mission_blob_shas[mission["mission_id"]],
             "repository_authority_blob_sha": bundle.authority_blob_shas[repository.lower()],
             "gap_id": gap["gap_id"],
-            "repository": repository,
+            "repository": gap["repository"],
             "acceptance": list(gap["acceptance"]),
             "integration_policy": gap["integration_policy"],
             "review_policy": gap["review_policy"],
