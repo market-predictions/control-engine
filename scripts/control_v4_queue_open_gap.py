@@ -8,20 +8,24 @@ No candidate PR, new Mission scope, secondary queue, or review verdict.
 """
 from copy import deepcopy
 from datetime import datetime, timezone
+import os
 
+from control_engine.v4_runtime_protocol import CORE_EXCLUDED_REPOSITORIES
 from control_engine.v4_authority_io import assert_v4_queue_bound_to_authority
 from control_engine.v4_contracts import validate_queue_v4, v4_root_task_id
 from scripts import control_v4_owner_admin as admin
 from scripts import control_v4_runtime_carrier as carrier
 
 
-def plan_one(queue, bundle, *, now):
+def plan_one(queue, bundle, *, now, excluded_repositories=frozenset()):
     validate_queue_v4(queue)
     assert_v4_queue_bound_to_authority(queue, bundle)
     if queue["execution_lock"] is not None:
         return None
     repositories = sorted({m["repository"] for m in bundle.missions})
     for repository in repositories:
+        if repository.lower() in excluded_repositories:
+            continue
         eligible = admin.eligible_unmaterialized_gaps_v4(queue, bundle, repository)
         if not eligible:
             continue
@@ -64,7 +68,15 @@ def main():
         print("CONTROL_MISSION_QUEUE=BUSY")
         return 0
     bundle = carrier._load_authority_bundle(state["main_sha"])
-    proposed = plan_one(state["queue"], bundle, now=datetime.now(timezone.utc))
+    proposed = plan_one(
+        state["queue"], bundle, now=datetime.now(timezone.utc),
+        excluded_repositories=(
+            CORE_EXCLUDED_REPOSITORIES
+            if os.environ.get("CONTROL_V4_CORE_FLOW") == "true"
+            and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+            else frozenset()
+        ),
+    )
     if proposed is None:
         print("CONTROL_MISSION_QUEUE=NO_ELIGIBLE_OPEN_GAP")
         return 0
