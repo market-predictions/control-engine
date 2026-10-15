@@ -71,3 +71,14 @@ def test_control_go_queues_before_existing_carrier_claim():
     assert "carrier._write_queue_exact(" in script
     assert "assert_v4_queue_bound_to_authority(" in script
     assert "eligible_unmaterialized_gaps_v4(" in script
+
+
+def test_core_replenishment_does_not_requeue_excluded_agent_mission():
+    q = queue()
+    b = bundle()
+    assert materialize.plan_one(
+        q, b, now=NOW, excluded_repositories=frozenset({REPO}),
+    ) is None
+    assert q["tasks"] == []
+    # A separately requested Agent operation retains original eligibility.
+    assert materialize.plan_one(q, b, now=NOW) is not None
