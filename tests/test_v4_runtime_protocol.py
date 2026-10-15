@@ -487,3 +487,28 @@ def test_integration_disabled_skips_active_integrate_and_ready_auto() -> None:
     )
     q = {"version": "4.0", "principal_manual_relay_count": 0, "execution_lock": None, "migration_facts": [], "tasks": [integrate, ready, queued]}
     assert select_task_id_v4(q, run_id="r", integration_enabled=False) == queued["task_id"]
+
+
+def test_native_core_selection_skips_optional_agent_without_changing_legacy_priority() -> None:
+    agent = task(
+        "MISSION--M--2026-09-06-r1--G1",
+        status="ACTIVE", phase="REPAIR", candidate_value=candidate(),
+    )
+    agent["repository"] = "market-predictions/agent"
+    other = distinct_task(
+        task("MISSION--M2--2026-09-06-r2--G2", status="QUEUED", phase="BUILD",
+             review_policy="INTERNAL", candidate_value=None),
+        mission="M2", revision="2026-09-06-r2", blob="f" * 40, gap="G2",
+    )
+    other["repository"] = "market-predictions/weekly-etf"
+    q = {"version": "4.0", "principal_manual_relay_count": 0,
+         "execution_lock": None, "migration_facts": [], "tasks": [agent, other]}
+    assert select_task_id_v4(q, run_id="legacy-run", integration_enabled=False) == agent["task_id"]
+    assert select_task_id_v4(
+        q, run_id="native-control-go", integration_enabled=False,
+        excluded_repositories=frozenset({"market-predictions/agent"}),
+    ) == other["task_id"]
+    assert select_task_id_v4(
+        q, run_id="native-control-go", integration_enabled=False,
+        excluded_repositories=frozenset({"market-predictions/agent", "market-predictions/weekly-etf"}),
+    ) is None

@@ -21,6 +21,11 @@ from control_engine.v4_contracts import (
 )
 
 
+# The interactive Control core must not implicitly run the separate Agent
+# framework project. Its Hermes/FreeLLMAPI acceptance stays project-local.
+# Explicit/legacy V4 task selection is unchanged.
+CORE_EXCLUDED_REPOSITORIES = frozenset({"market-predictions/agent"})
+
 RESULT_PROTOCOL_ID = "CONTROL_V4_RUNTIME_RESULT_V1"
 TICK_PREFIX = "CONTROL_V4_RUNTIME_TICK "
 EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
@@ -434,6 +439,7 @@ def select_task_id_v4(
     run_id: str,
     yielded_task_tokens: Sequence[str] = (),
     integration_enabled: bool,
+    excluded_repositories: frozenset[str] = frozenset(),
 ) -> str | None:
     validate_queue_v4(queue)
     if queue.get("execution_lock") is not None:
@@ -441,7 +447,10 @@ def select_task_id_v4(
     yielded = set(yielded_task_tokens)
 
     def available(task: Mapping[str, Any]) -> bool:
-        return task_token(task, run_id) not in yielded
+        return (
+            task["repository"].lower() not in excluded_repositories
+            and task_token(task, run_id) not in yielded
+        )
 
     for task in queue["tasks"]:
         if available(task) and task["status"] == "ACTIVE" and not _retryable_external_wait(task):

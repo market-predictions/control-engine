@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping
 from control_engine.v4_authority_io import V4AuthorityBundle, assert_v4_queue_bound_to_authority
 from control_engine.v4_contracts import V4ValidationError, acquire_task_v4, validate_authority_set, validate_queue_v4
 from control_engine.v4_runtime_protocol import (
+    CORE_EXCLUDED_REPOSITORIES,
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
@@ -626,6 +627,15 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             run_id=command["run_id"],
             yielded_task_tokens=command.get("yielded_task_tokens", []),
             integration_enabled=False,
+            # Only the principal-started native control-go job narrows scope.
+            # Issue-comment TICK/EVENT and historical runners retain their policy.
+            excluded_repositories=(
+                CORE_EXCLUDED_REPOSITORIES
+                if os.environ.get("CONTROL_V4_CORE_FLOW") == "true"
+                and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                and command["run_id"].startswith("v41:gh:")
+                else frozenset()
+            ),
         )
         if task_id is None:
             result = {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
