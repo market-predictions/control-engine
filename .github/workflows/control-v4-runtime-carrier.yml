@@ -557,6 +557,9 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Core engineering is independent of the optional Agent/Hermes project.
+    env:
+      CONTROL_V4_CORE_FLOW: 'true'
     permissions:
       contents: read
       issues: write
