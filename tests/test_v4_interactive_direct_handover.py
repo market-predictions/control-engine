@@ -87,3 +87,21 @@ def test_ambiguous_handover_is_reconciled_before_release():
     assert 'output.write("safe_to_yield=true' in publication
     assert "handover uncertain; preserve holder until lease expiry" in publication
     assert "steps.handover.outputs.safe_to_yield == 'true'" in release
+
+
+def test_owner_core_flow_excludes_agent_but_leaves_event_and_legacy_paths_intact():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    job = _job()
+    assert "CONTROL_V4_CORE_FLOW: 'true'" in job
+    assert "CONTROL_V4_CORE_FLOW: 'true'" not in source.split(
+        "\n  interactive-control-start:\n", 1
+    )[0]
+    from control_engine.v4_runtime_protocol import CORE_EXCLUDED_REPOSITORIES
+    from scripts import control_v4_runtime_carrier as carrier
+    from scripts import control_v4_queue_open_gap as queue_open_gap
+
+    assert CORE_EXCLUDED_REPOSITORIES == frozenset({"market-predictions/agent"})
+    assert "CONTROL_V4_CORE_FLOW" in carrier._tick.__code__.co_consts or (
+        "CONTROL_V4_CORE_FLOW" in __import__("inspect").getsource(carrier._tick)
+    )
+    assert "CONTROL_V4_CORE_FLOW" in __import__("inspect").getsource(queue_open_gap.main)
