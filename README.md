@@ -11,9 +11,16 @@ The principal-approved [Control Operating Model](https://github.com/market-predi
 - **Codex GitHub Code Review** is the independent exact-head reviewer. Codex Cloud environments for Codex **code implementation** are not a prerequisite for ordinary review; each target repository still needs actual review access.
 - **Work** is optional for specific browser or cross-application requirements. It is not part of the routine critical path.
 - The **Scheduled ChatGPT Runner and retired Guardians are disabled**, and push notifications are off by principal choice. They must not be re-enabled as an assumed fix for earlier unattended GitHub write restrictions.
-- This is **INTERACTIVE_WORKING**, **not yet SEMI_AUTONOMOUS_LIVE**: the trusted interactive holder/candidate-reconciliation and semantic closeout step through current Control authority is still unproven. A direct ChatGPT GitHub edit is not a Control TICK/EVENT or a holder claim.
+- **Interactive Control holder/event path proven (2026-10-15):** native owner run `38712403129` published a handover; the valid `INTERNAL_REPAIR` EVENT atomically transitioned Agent task to `ACTIVE/REPAIR` and released the holder. This proves governed rejection/closeout, **not** accepted end-to-end project delivery.
 
-### Mission-driven task replenishment (candidate pending review)
+
+### Core-flow scope (Agent/Hermes excluded by default)
+
+The native `mode: control-go` path is Control engineering/orchestration, **not the Agent-framework product**. To avoid recurring false Control gates, it skips `market-predictions/agent` both when queuing new authorized Mission gaps and when selecting existing tasks. Its previous Agent task remains unchanged in the canonical queue and can be handled separately when explicitly requested; neither Agent CI nor any required Agent acceptance check is suppressed. The historical event/legacy paths do not inherit this selection filter. All tasks in scope still use the original V4 private authority, holder, lease, CAS, review, and integration holds.
+
+**This excludes the optional Agent/Hermes product from default task selection; it does not disable legitimate project acceptance checks or claim the Agent project is fixed.**
+
+### Mission-driven task replenishment (implemented 2026-10-14)
 
 The native owner-started `control-go` path now proposes to materialize
 **at most one** dependency-eligible, unmaterialized `OPEN` gap from the
@@ -27,10 +34,9 @@ scope: analyses may inform a reviewed Mission update, after which current
 OPEN gaps are eligible for queue replenishment. No new queue, service,
 scheduler, autonomous background worker or bypass is introduced.
 
-The feature is not live until the reviewed PR is merged and a native
-owner-started run confirms one queue append (with readback).
+The authorized queue append was verified on 2026-10-14: WRO-GAP-50 was appended as `QUEUED/BUILD`; no second queue was introduced.
 
-### Native owner-started direct handover (candidate, not yet live-proven)
+### Native owner-started direct handover (start and guarded review rejection verified)
 
 The existing **Control V4 Runtime Carrier** GitHub Actions workflow now offers
 `Run workflow → mode: control-go` as the default native owner start.
