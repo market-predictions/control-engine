@@ -16,7 +16,8 @@ CANDIDATE = {
 }
 
 
-def summary(*, sha=SHA, status="completed", findings=False, unresolved=False, author="chatgpt-codex-connector[bot]"):
+def summary(*, sha=SHA, status="completed", findings=False, unresolved=False,
+            author="chatgpt-codex-connector[bot]", user_id=199175422):
     value = {
         "code_review": {
             "commit_sha": sha,
@@ -26,7 +27,7 @@ def summary(*, sha=SHA, status="completed", findings=False, unresolved=False, au
         }
     }
     return {
-        "user": {"login": author},
+        "user": {"login": author, "id": user_id},
         "body": "<!-- codex-review-state:v1 " + json.dumps(value) + " -->",
     }
 
@@ -75,6 +76,43 @@ def test_prior_head_and_spoofed_comments_never_prove_review(monkeypatch):
         summary(author="other-user"),
     ])
     assert result["codex"] == "STALE_REVIEW"
+
+
+
+def test_recycled_bot_login_mismatched_user_id_never_proves_review(monkeypatch):
+    result = read(monkeypatch, comments=[summary(user_id=12345)])
+    assert result["codex"] == "NOT_OBSERVED"
+
+
+def test_malformed_marker_alongside_clean_marker_fails_closed(monkeypatch):
+    bot = summary()
+    bad = summary()
+    bad["body"] = "<!-- codex-review-state:v1 {broken-json} -->"
+    result = read(monkeypatch, comments=[bot, bad])
+    assert result["codex"] == "UNKNOWN"
+
+
+def test_missing_sha_or_duplicate_json_keys_fail_closed(monkeypatch):
+    bad = summary()
+    bad["body"] = '<!-- codex-review-state:v1 {"code_review":{"status":"completed"}} -->'
+    duplicate = summary()
+    duplicate["body"] = (
+        '<!-- codex-review-state:v1 {"code_review":{"commit_sha":"' + SHA
+        + '","commit_sha":"' + SHA
+        + '","status":"completed","has_any_findings":false,'
+        + '"has_unresolved_findings":false}} -->'
+    )
+    result = read(monkeypatch, comments=[summary(), bad, duplicate])
+    assert result["codex"] == "UNKNOWN"
+
+
+def test_truncated_marker_and_invalid_user_shape_cannot_certify(monkeypatch):
+    bad = summary()
+    bad["body"] = "<!-- codex-review-state:v1 {"
+    not_bot = summary()
+    not_bot["user"] = "chatgpt-codex-connector[bot]"
+    result = read(monkeypatch, comments=[summary(), bad, not_bot])
+    assert result["codex"] == "UNKNOWN"
 
 
 def test_changed_candidate_short_circuits_before_all_network(monkeypatch):
