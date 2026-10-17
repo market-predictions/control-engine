@@ -1037,7 +1037,11 @@ def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
         candidate_in_current_base = (
             integration_sha != command["expected_base_sha"]
             and is_ancestor(integration_sha, current_base_sha)
-            and is_ancestor(command["expected_base_sha"], integration_sha)
+            and (
+                is_ancestor(command["expected_base_sha"], integration_sha)
+                if integration_sha == merge_sha
+                else is_ancestor(command["expected_base_sha"], current_base_sha)
+            )
         )
     return {
         "repository": repository,
