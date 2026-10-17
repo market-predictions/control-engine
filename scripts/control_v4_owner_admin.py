@@ -1011,13 +1011,37 @@ def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     current_base_sha = _branch_head(repository, command["expected_base_branch"], private=False)
     merged = pr.get("merged_at") is not None
     candidate_in_current_base = False
-    if command["operation"] in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"}:
-        comparison = _public_get(f"repos/{repository}/compare/{command['candidate_sha']}...{current_base_sha}")
-        merge_base = ((comparison.get("merge_base_commit") or {}).get("sha")) if isinstance(comparison, Mapping) else None
+    if command["operation"] in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"} and merged:
+        # GitHub owns the exact PR -> integration-commit binding. Squash and
+        # rebase create new SHAs; only use the original head if no valid
+        # integration SHA is available. Never fall back after a valid but
+        # non-contained integration SHA (e.g. history rewrite).
+        merge_sha = pr.get("merge_commit_sha")
+        integration_sha = (
+            merge_sha if isinstance(merge_sha, str) and SHA_RE.fullmatch(merge_sha)
+            else command["candidate_sha"]
+        )
+        # The reviewed base must be in the actual integration history too;
+        # this rejects force-pushes onto an unrelated target history.
+        def is_ancestor(ancestor: str, descendant: str) -> bool:
+            comparison = _public_get(
+                f"repos/{repository}/compare/{ancestor}...{descendant}"
+            )
+            return (
+                isinstance(comparison, Mapping)
+                and (comparison.get("merge_base_commit") or {}).get("sha") == ancestor
+                and comparison.get("status") in {"ahead", "identical"}
+                and comparison.get("behind_by") == 0
+            )
+
         candidate_in_current_base = (
-            merge_base == command["candidate_sha"]
-            and comparison.get("status") in {"ahead", "identical"}
-            and comparison.get("behind_by") == 0
+            integration_sha != command["expected_base_sha"]
+            and is_ancestor(integration_sha, current_base_sha)
+            and (
+                is_ancestor(command["expected_base_sha"], integration_sha)
+                if integration_sha == merge_sha
+                else is_ancestor(command["expected_base_sha"], current_base_sha)
+            )
         )
     return {
         "repository": repository,
