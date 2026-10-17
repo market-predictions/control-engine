@@ -57,6 +57,18 @@ scheduler, autonomous background worker or bypass is introduced.
 
 The authorized queue append was verified on 2026-10-14: WRO-GAP-50 was appended as `QUEUED/BUILD`; no second queue was introduced.
 
+### Owner-controlled finalization after squash merge
+
+The existing `FINALIZE_INTEGRATED` Control owner-admin operation accepts an
+exact reviewed PR merged by GitHub's normal merge, squash or rebase method.
+For rewritten merge histories it checks the PR-bound `merge_commit_sha`
+against the **current target base branch** via GitHub ancestry. A merged flag,
+unrelated commit, stale candidate head or unadvanced target branch alone never
+grants `DONE`. Exact queue candidate identity, protected owner command,
+private-main/runtime atomic CAS and `HOLD_AFTER_PASS` are unchanged.
+GitHub's squash merge is *not* automatic Control task finalization; an explicit
+owner-admin closeout is still required.
+
 ### Native owner-started direct handover (start and guarded review rejection verified)
 
 The existing **Control V4 Runtime Carrier** GitHub Actions workflow now offers
