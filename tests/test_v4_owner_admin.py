@@ -546,10 +546,36 @@ def test_normal_merge_original_head_ancestry_remains_supported(monkeypatch):
             }
         if path == f"repos/{REPO}/compare/{CANDIDATE}...{'2' * 40}":
             return {"merge_base_commit": {"sha": CANDIDATE}, "status": "ahead", "behind_by": 0}
-        if path == f"repos/{REPO}/compare/{BASE}...{CANDIDATE}":
+        if path == f"repos/{REPO}/compare/{BASE}...{'2' * 40}":
             return {"merge_base_commit": {"sha": BASE}, "status": "ahead", "behind_by": 0}
         raise AssertionError(path)
 
     monkeypatch.setattr(owner_admin, "_public_get", public_get)
     monkeypatch.setattr(owner_admin, "_branch_head", lambda *a, **kw: "2" * 40)
     validate_public_target(finalize_command(), owner_admin._public_target(finalize_command()))
+
+
+def test_normal_merge_requires_reviewed_base_on_current_branch(monkeypatch):
+    # Exact PR head may be merged from a branch forked before BASE; both
+    # original head and reviewed base must be present in *current* main.
+    def public_get(path):
+        if path == f"repos/{REPO}":
+            return {"full_name": REPO, "private": False}
+        if path == f"repos/{REPO}/pulls/1":
+            return {
+                "state": "closed", "merged_at": "2026-10-17T14:16:42Z",
+                "merge_commit_sha": None,
+                "head": {"sha": CANDIDATE, "ref": "bootstrap/agent-r1-gap"},
+                "base": {"sha": BASE, "ref": "main"},
+            }
+        if path == f"repos/{REPO}/compare/{CANDIDATE}...{'2' * 40}":
+            return {"merge_base_commit": {"sha": CANDIDATE}, "status": "ahead", "behind_by": 0}
+        if path == f"repos/{REPO}/compare/{BASE}...{'2' * 40}":
+            return {"merge_base_commit": {"sha": "4" * 40}, "status": "diverged", "behind_by": 2}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(owner_admin, "_public_get", public_get)
+    monkeypatch.setattr(owner_admin, "_branch_head", lambda *a, **kw: "2" * 40)
+    target = owner_admin._public_target(finalize_command())
+    with pytest.raises(OwnerAdminError, match="not contained"):
+        validate_public_target(finalize_command(), target)
