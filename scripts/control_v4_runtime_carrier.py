@@ -25,6 +25,7 @@ from control_engine.v4_runtime_protocol import (
     CORE_EXCLUDED_REPOSITORIES,
     EXTERNAL_REVIEW_BOT_LOGIN,
     EXTERNAL_REVIEW_BOT_USER_ID,
+    INTERACTIVE_RUN_ID_RE,
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
@@ -72,6 +73,10 @@ API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
 INTEGRATED_TARGET_BLOCKER = "TARGET_PR_INTEGRATED_RECONCILIATION_REQUIRED"
 CLOSED_TARGET_BLOCKER = "TARGET_PR_CLOSED_RECONCILIATION_REQUIRED"
+INTERACTIVE_CONTINUATION_EVENTS = frozenset({
+    "CANDIDATE_READY", "INTERNAL_PASS", "INTERNAL_REPAIR",
+    "EXTERNAL_REQUESTED", "EXTERNAL_FINDING",
+})
 
 
 class CarrierError(RuntimeError):
@@ -658,7 +663,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
 
     # Native workflow_dispatch authorizes one acquisition. A later public
     # TICK with the same manual run_id may only revalidate its live holder.
-    if command["run_id"].startswith("v41:gh:") and os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+    if command["run_id"].startswith(("v41:gh:", "v41:control-go:")) and os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
         existing = state["queue"].get("execution_lock")
         if (not isinstance(existing, Mapping)
                 or existing.get("run_id") != command["run_id"]
@@ -729,7 +734,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
                 CORE_EXCLUDED_REPOSITORIES
                 if os.environ.get("CONTROL_V4_CORE_FLOW") == "true"
                 and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-                and command["run_id"].startswith("v41:gh:")
+                and command["run_id"].startswith(("v41:gh:", "v41:control-go:"))
                 else frozenset()
             ),
         )
@@ -827,7 +832,9 @@ def _release_event_holder_boundary(queue: Mapping[str, Any], command: Mapping[st
 def _event_result(queue: Mapping[str, Any], command: Mapping[str, Any]) -> dict[str, Any]:
     current = next(item for item in queue["tasks"] if item["task_id"] == command["task_id"])
     if queue.get("execution_lock") is not None:
-        raise RuntimeProtocolError("accepted EVENT retained execution lock")
+        if INTERACTIVE_RUN_ID_RE.fullmatch(command["run_id"]) is None:
+            raise RuntimeProtocolError("accepted legacy EVENT retained execution lock")
+        return safe_work_capsule(queue, task_id=command["task_id"], run_id=command["run_id"])
     return {
         "protocol": RESULT_PROTOCOL_ID,
         "result": "READY" if current.get("status") == "READY" else "YIELDED",
@@ -944,7 +951,22 @@ def _event(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) 
     else:  # pragma: no cover
         raise RuntimeProtocolError("unsupported event")
 
-    next_queue = _release_event_holder_boundary(next_queue, command)
+    current = next(item for item in next_queue["tasks"] if item["task_id"] == command["task_id"])
+    if (
+        INTERACTIVE_RUN_ID_RE.fullmatch(command["run_id"]) is not None
+        and event in INTERACTIVE_CONTINUATION_EVENTS
+        and current.get("status") == "ACTIVE"
+        and current.get("phase") in {"REVIEW", "REPAIR"}
+        and current.get("blocker") is None
+    ):
+        # Continue only the already-held task. In particular EXTERNAL_REQUESTED
+        # normally releases its holder; native active sessions may observe its
+        # result briefly. Restore the exact original lock, never a new lease.
+        assert_event_identity(queue, command, now=now)
+        next_queue = {**next_queue, "execution_lock": dict(queue["execution_lock"])}
+        validate_queue_v4(next_queue)
+    else:
+        next_queue = _release_event_holder_boundary(next_queue, command)
     result = _event_result(next_queue, command)
     if next_queue != queue:
         state = _write_queue_exact(state, next_queue, reason=event.lower().replace("_", "-"))

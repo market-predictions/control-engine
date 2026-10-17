@@ -65,7 +65,7 @@ jobs:
           import os
           import re
 
-          from control_engine.v4_runtime_protocol import RuntimeProtocolError, parse_public_command
+          from control_engine.v4_runtime_protocol import INTERACTIVE_RUN_ID_RE, RuntimeProtocolError, parse_public_command
 
           EXPECTED_RUN_ID = re.compile(
               r"^v4:6a9a7e0b18b08191876c134d83cfbba2:b6f42d03a917ce58:[0-9a-f]{32}$"
@@ -86,6 +86,7 @@ jobs:
               raise SystemExit("command admission timestamp must be timezone-aware")
 
           admitted = (EXPECTED_RUN_ID.fullmatch(command["run_id"]) is not None
+                      or INTERACTIVE_RUN_ID_RE.fullmatch(command["run_id"]) is not None
                       or MANUAL_RUN_ID.fullmatch(command["run_id"]) is not None)
           reason = "PASS" if admitted else "RUNNER_GENERATION_MISMATCH"
 
@@ -595,7 +596,7 @@ jobs:
           if run <= 0:
               raise SystemExit("invalid owner run identity")
           command = "CONTROL_V4_RUNTIME_TICK " + json.dumps(
-              {"run_id": f"v41:gh:{run}"}, separators=(",", ":"))
+              {"run_id": f"v41:control-go:{run}"}, separators=(",", ":"))
           created = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
               env.write(f"CONTROL_V4_PUBLIC_COMMAND={command}\n")
@@ -638,7 +639,7 @@ jobs:
           import os
           import urllib.request
           result = json.loads(os.environ["RESULT_JSON"])
-          if result.get("run_id") != f"v41:gh:{os.environ['OWNER_RUN_ID']}":
+          if result.get("run_id") != f"v41:control-go:{os.environ['OWNER_RUN_ID']}":
               raise SystemExit("handover run identity mismatch")
           if result.get("result") not in {"WORK", "BUSY", "NO_WORK", "UNSUPPORTED"}:
               raise SystemExit("unsupported handover result")

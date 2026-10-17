@@ -26,6 +26,10 @@ from control_engine.v4_contracts import (
 # Explicit/legacy V4 task selection is unchanged.
 CORE_EXCLUDED_REPOSITORIES = frozenset({"market-predictions/agent"})
 
+# Only new native control-go starts opt into same-task continuation. Historical
+# v41:gh starts (including the Work pilot) retain atomic EVENT release semantics.
+INTERACTIVE_RUN_ID_RE = re.compile(r"^v41:control-go:[1-9][0-9]{5,19}$")
+
 # Shared immutable Codex GitHub App identity; owner-admin and advisory readback.
 EXTERNAL_REVIEW_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 EXTERNAL_REVIEW_BOT_USER_ID = 199175422

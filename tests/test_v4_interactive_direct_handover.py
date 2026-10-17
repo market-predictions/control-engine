@@ -30,7 +30,7 @@ def test_direct_path_uses_existing_carrier_and_no_second_authority():
     job = _job()
     assert "python scripts/control_v4_runtime_carrier.py" in job
     assert "CONTROL_V4_RUNTIME_TICK" in job
-    assert "v41:gh:" in job
+    assert "v41:control-go:" in job
     assert "CONTROL_INTERACTIVE_HANDOVER_V1" in job
     assert "steps.carrier.outputs.result_json" in job
     assert "steps.private-token.outputs.token" in job
