@@ -20,6 +20,27 @@ The native `mode: control-go` path is Control engineering/orchestration, **not t
 
 **This excludes the optional Agent/Hermes product from default task selection; it does not disable legitimate project acceptance checks or claim the Agent project is fixed.**
 
+
+### Review feedback on the next Control handover
+
+For an already-governed `ACTIVE / REVIEW` task with an exact candidate PR,
+the existing owner-started `control-go` carrier reads the live public
+GitHub Codex summary and current commit check-runs **before acquiring the
+holder**. The normal `CONTROL_INTERACTIVE_HANDOVER_V1` receipt includes a
+small `review_observation` with the exact head, Codex progress/findings and
+observed CI state. Stale heads, missing data, ambiguous comments and GitHub
+errors are reported as unknown or stale, never as success. Only the verified
+Codex bot's summary for the exact head is eligible for a no-findings
+observation; previous-commit results do not carry forward.
+
+This is **read-only advisory metadata**, not a new queue state, external
+review attestation, independent approval, or authorization to send, integrate
+or mark a task `PASS`. Current owner/holder/lease/event/CAS and separate CI,
+acceptance and merge gates remain unchanged. ChatGPT must still read GitHub
+afresh when resuming; no background wake-up or repeated review request is
+implied. Existing `BUILD` tasks without a bound candidate do not receive
+review observations until the normal `CANDIDATE_READY` transition.
+
 ### Mission-driven task replenishment (implemented 2026-10-14)
 
 The native owner-started `control-go` path now proposes to materialize
