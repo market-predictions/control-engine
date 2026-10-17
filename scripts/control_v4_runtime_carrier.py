@@ -23,6 +23,8 @@ from control_engine.v4_authority_io import V4AuthorityBundle, assert_v4_queue_bo
 from control_engine.v4_contracts import V4ValidationError, acquire_task_v4, validate_authority_set, validate_queue_v4
 from control_engine.v4_runtime_protocol import (
     CORE_EXCLUDED_REPOSITORIES,
+    EXTERNAL_REVIEW_BOT_LOGIN,
+    EXTERNAL_REVIEW_BOT_USER_ID,
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
@@ -532,6 +534,100 @@ def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
     }
 
 
+
+def _read_review_observation(
+    repository: str,
+    candidate: Mapping[str, Any],
+    live_candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Advisory GitHub readback for an exact, already-selected PR.
+
+    Never grants a V4 verdict, writes a queue, requests another review or
+    treats a Codex comment as an authority event. Failures stay UNKNOWN.
+    """
+    result: dict[str, Any] = {
+        "candidate_sha": candidate["candidate_sha"],
+        "codex": "UNKNOWN",
+        "ci": "UNKNOWN",
+        "advisory_only": True,
+    }
+    if dict(candidate) != dict(live_candidate):
+        result["codex"] = "STALE_CANDIDATE"
+        return result
+
+    pr = candidate["candidate_pr_number"]
+    try:
+        comments = _public_get(f"repos/{repository}/issues/{pr}/comments?per_page=100")
+        if isinstance(comments, list) and len(comments) < 100:
+            summaries: list[Mapping[str, Any]] = []
+            malformed_marker = False
+            marker = "<!-- codex-review-state:v1 "
+            for comment in comments:
+                if not isinstance(comment, Mapping):
+                    continue
+                user = comment.get("user")
+                if (
+                    not isinstance(user, Mapping)
+                    or user.get("login") != EXTERNAL_REVIEW_BOT_LOGIN
+                    or user.get("id") != EXTERNAL_REVIEW_BOT_USER_ID
+                ):
+                    continue
+                for line in str(comment.get("body") or "").splitlines():
+                    line = line.strip()
+                    if not line.startswith(marker):
+                        continue
+                    if not line.endswith(" -->"):
+                        malformed_marker = True
+                        continue
+                    try:
+                        payload = strict_json_object(line[len(marker):-4])
+                        review = payload.get("code_review")
+                        if (
+                            not isinstance(review, Mapping)
+                            or not isinstance(review.get("commit_sha"), str)
+                            or len(review["commit_sha"]) != 40
+                            or any(char not in "0123456789abcdef" for char in review["commit_sha"])
+                            or review.get("status") not in {"running", "completed"}
+                        ):
+                            malformed_marker = True
+                        else:
+                            summaries.append(review)
+                    except (ValueError, TypeError, AttributeError):
+                        malformed_marker = True
+            exact = [v for v in summaries if v.get("commit_sha") == candidate["candidate_sha"]]
+            if malformed_marker or len(exact) > 1:
+                result["codex"] = "UNKNOWN"
+            elif len(exact) == 1:
+                review = exact[0]
+                if review.get("status") == "running":
+                    result["codex"] = "RUNNING"
+                elif review.get("status") == "completed":
+                    if review.get("has_any_findings") is False and review.get("has_unresolved_findings") is False:
+                        result["codex"] = "COMPLETED_NO_FINDINGS"
+                    elif review.get("has_any_findings") is True or review.get("has_unresolved_findings") is True:
+                        result["codex"] = "COMPLETED_FINDINGS"
+            elif not summaries:
+                result["codex"] = "NOT_OBSERVED"
+            else:
+                result["codex"] = "STALE_REVIEW"
+    except (CarrierError, ValueError, TypeError, KeyError):
+        pass
+
+    try:
+        checks = _public_get(f"repos/{repository}/commits/{candidate['candidate_sha']}/check-runs?per_page=100")
+        runs = checks.get("check_runs") if isinstance(checks, Mapping) else None
+        if isinstance(runs, list) and 0 < len(runs) < 100:
+            if any(c.get("status") != "completed" for c in runs if isinstance(c, Mapping)):
+                result["ci"] = "RUNNING"
+            elif all(isinstance(c, Mapping) and c.get("conclusion") == "success" for c in runs):
+                result["ci"] = "OBSERVED_CHECKS_GREEN"
+            else:
+                result["ci"] = "OBSERVED_CHECKS_NOT_GREEN"
+    except (CarrierError, ValueError, TypeError, KeyError):
+        pass
+    return result
+
+
 def _park_terminal_target(queue: Mapping[str, Any], *, task_id: str, blocker: str, now: datetime) -> dict[str, Any]:
     validate_queue_v4(queue)
     if blocker not in {INTEGRATED_TARGET_BLOCKER, CLOSED_TARGET_BLOCKER}:
@@ -668,6 +764,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             _assert_public_target_repository(task["repository"])
         break
 
+    # Collect only an advisory snapshot before acquisition/CAS, so a later
+    # GitHub read cannot strand the newly acquired holder.
+    observation = (
+        _read_review_observation(task["repository"], candidate, observed)
+        if isinstance(candidate, Mapping) and task.get("phase") == "REVIEW"
+        else None
+    )
     acquired = acquire_task_v4(
         queue,
         task_id=task_id,
@@ -682,6 +785,8 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         run_id=command["run_id"],
         live_candidate=live_candidate,
     )
+    if observation is not None:
+        work_result["review_observation"] = observation
     reason_parts: list[str] = []
     if recovery_pending:
         reason_parts.append("expired-lock-recovery")

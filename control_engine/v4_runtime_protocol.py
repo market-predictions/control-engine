@@ -26,6 +26,10 @@ from control_engine.v4_contracts import (
 # Explicit/legacy V4 task selection is unchanged.
 CORE_EXCLUDED_REPOSITORIES = frozenset({"market-predictions/agent"})
 
+# Shared immutable Codex GitHub App identity; owner-admin and advisory readback.
+EXTERNAL_REVIEW_BOT_LOGIN = "chatgpt-codex-connector[bot]"
+EXTERNAL_REVIEW_BOT_USER_ID = 199175422
+
 RESULT_PROTOCOL_ID = "CONTROL_V4_RUNTIME_RESULT_V1"
 TICK_PREFIX = "CONTROL_V4_RUNTIME_TICK "
 EVENT_PREFIX = "CONTROL_V4_RUNTIME_EVENT "
