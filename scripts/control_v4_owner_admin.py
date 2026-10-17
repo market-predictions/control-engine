@@ -1011,33 +1011,34 @@ def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     current_base_sha = _branch_head(repository, command["expected_base_branch"], private=False)
     merged = pr.get("merged_at") is not None
     candidate_in_current_base = False
-    if command["operation"] in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"}:
-        # A squash/rebase merge changes the commit ID, so the original PR
-        # head need not be an ancestor of main. GitHub's PR-bound merge SHA
-        # must itself be an ancestor of the *current* target branch.
-        merge_commit_sha = pr.get("merge_commit_sha")
-        if merged and isinstance(merge_commit_sha, str) and SHA_RE.fullmatch(merge_commit_sha):
+    if command["operation"] in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"} and merged:
+        # GitHub owns the exact PR -> integration-commit binding. Squash and
+        # rebase create new SHAs; only use the original head if no valid
+        # integration SHA is available. Never fall back after a valid but
+        # non-contained integration SHA (e.g. history rewrite).
+        merge_sha = pr.get("merge_commit_sha")
+        integration_sha = (
+            merge_sha if isinstance(merge_sha, str) and SHA_RE.fullmatch(merge_sha)
+            else command["candidate_sha"]
+        )
+        # The reviewed base must be in the actual integration history too;
+        # this rejects force-pushes onto an unrelated target history.
+        def is_ancestor(ancestor: str, descendant: str) -> bool:
             comparison = _public_get(
-                f"repos/{repository}/compare/{merge_commit_sha}...{current_base_sha}"
+                f"repos/{repository}/compare/{ancestor}...{descendant}"
             )
-            candidate_in_current_base = (
+            return (
                 isinstance(comparison, Mapping)
-                and (comparison.get("merge_base_commit") or {}).get("sha") == merge_commit_sha
-                and comparison.get("status") in {"ahead", "identical"}
-                and comparison.get("behind_by") == 0
-                and merge_commit_sha != command["expected_base_sha"]
-            )
-        # Keep support for historical ordinary merges if GitHub's merge SHA
-        # is temporarily unavailable. Never accept ancestry without a
-        # merged exact PR (validated again by validate_public_target).
-        if not candidate_in_current_base:
-            comparison = _public_get(f"repos/{repository}/compare/{command['candidate_sha']}...{current_base_sha}")
-            candidate_in_current_base = (
-                isinstance(comparison, Mapping)
-                and (comparison.get("merge_base_commit") or {}).get("sha") == command["candidate_sha"]
+                and (comparison.get("merge_base_commit") or {}).get("sha") == ancestor
                 and comparison.get("status") in {"ahead", "identical"}
                 and comparison.get("behind_by") == 0
             )
+
+        candidate_in_current_base = (
+            integration_sha != command["expected_base_sha"]
+            and is_ancestor(integration_sha, current_base_sha)
+            and is_ancestor(command["expected_base_sha"], integration_sha)
+        )
     return {
         "repository": repository,
         "state": pr.get("state"),
