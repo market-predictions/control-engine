@@ -23,6 +23,8 @@ from control_engine.v4_authority_io import V4AuthorityBundle, assert_v4_queue_bo
 from control_engine.v4_contracts import V4ValidationError, acquire_task_v4, validate_authority_set, validate_queue_v4
 from control_engine.v4_runtime_protocol import (
     CORE_EXCLUDED_REPOSITORIES,
+    EXTERNAL_REVIEW_BOT_LOGIN,
+    EXTERNAL_REVIEW_BOT_USER_ID,
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
@@ -557,23 +559,45 @@ def _read_review_observation(
     try:
         comments = _public_get(f"repos/{repository}/issues/{pr}/comments?per_page=100")
         if isinstance(comments, list) and len(comments) < 100:
-            summaries = []
+            summaries: list[Mapping[str, Any]] = []
+            malformed_marker = False
             marker = "<!-- codex-review-state:v1 "
             for comment in comments:
-                if not isinstance(comment, Mapping) or (comment.get("user") or {}).get("login") != "chatgpt-codex-connector[bot]":
+                if not isinstance(comment, Mapping):
+                    continue
+                user = comment.get("user")
+                if (
+                    not isinstance(user, Mapping)
+                    or user.get("login") != EXTERNAL_REVIEW_BOT_LOGIN
+                    or user.get("id") != EXTERNAL_REVIEW_BOT_USER_ID
+                ):
                     continue
                 for line in str(comment.get("body") or "").splitlines():
                     line = line.strip()
-                    if line.startswith(marker) and line.endswith(" -->"):
-                        try:
-                            payload = json.loads(line[len(marker):-4])
-                            review = payload.get("code_review")
-                            if isinstance(review, Mapping):
-                                summaries.append(review)
-                        except (ValueError, TypeError, AttributeError):
-                            continue
+                    if not line.startswith(marker):
+                        continue
+                    if not line.endswith(" -->"):
+                        malformed_marker = True
+                        continue
+                    try:
+                        payload = strict_json_object(line[len(marker):-4])
+                        review = payload.get("code_review")
+                        if (
+                            not isinstance(review, Mapping)
+                            or not isinstance(review.get("commit_sha"), str)
+                            or len(review["commit_sha"]) != 40
+                            or any(char not in "0123456789abcdef" for char in review["commit_sha"])
+                            or review.get("status") not in {"running", "completed"}
+                        ):
+                            malformed_marker = True
+                        else:
+                            summaries.append(review)
+                    except (ValueError, TypeError, AttributeError):
+                        malformed_marker = True
             exact = [v for v in summaries if v.get("commit_sha") == candidate["candidate_sha"]]
-            if len(exact) == 1:
+            if malformed_marker or len(exact) > 1:
+                result["codex"] = "UNKNOWN"
+            elif len(exact) == 1:
                 review = exact[0]
                 if review.get("status") == "running":
                     result["codex"] = "RUNNING"
@@ -584,7 +608,7 @@ def _read_review_observation(
                         result["codex"] = "COMPLETED_FINDINGS"
             elif not summaries:
                 result["codex"] = "NOT_OBSERVED"
-            elif not exact:
+            else:
                 result["codex"] = "STALE_REVIEW"
     except (CarrierError, ValueError, TypeError, KeyError):
         pass
