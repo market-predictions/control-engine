@@ -55,7 +55,11 @@ from control_engine.v4_contracts import (
     validate_carry_forward_evidence,
     validate_queue_v4,
 )
-from control_engine.v4_runtime_protocol import strict_json_object
+from control_engine.v4_runtime_protocol import (
+    EXTERNAL_REVIEW_BOT_LOGIN,
+    EXTERNAL_REVIEW_BOT_USER_ID,
+    strict_json_object,
+)
 
 
 PREFIX = "CONTROL_V4_OWNER_ADMIN "
@@ -65,8 +69,6 @@ PUBLIC_REPOSITORY = "market-predictions/control-engine"
 PUBLIC_AUDIT_ISSUE = 106
 PRINCIPAL_LOGIN = "market-predictions"
 PRINCIPAL_USER_ID = 267922695
-EXTERNAL_REVIEW_BOT_LOGIN = "chatgpt-codex-connector[bot]"
-EXTERNAL_REVIEW_BOT_USER_ID = 199175422
 RUNTIME_BRANCH = "control-runtime-state"
 QUEUE_PATH = "control/DISPATCH_QUEUE.json"
 MISSION_DIR = "control/missions"
