@@ -20,7 +20,7 @@ Git history is the mutation audit trail. There is no second queue, database, ret
 
 ## One Runner, bounded transport
 
-The one recurring ChatGPT `Control V4 Runner` is the semantic executor. It emits owner-bound typed TICK/EVENT commands through public issue #106. Public comments are transport/audit evidence only; they never become queue, Mission, holder, lease, status or runtime state.
+The active interactive Operating Model uses ChatGPT in the owner-started chat as the semantic executor. The historical recurring ChatGPT `Control V4 Runner` is disabled. Both use owner-bound typed TICK/EVENT transport through public issue #106 when authorized. Public comments are transport/audit evidence only; they never become queue, Mission, holder, lease, status or runtime state.
 
 The trusted public carrier obtains only the scoped private capability required to apply deterministic queue transitions. Public results contain only a bounded safe projection and opaque task token; private Mission/acceptance/authority/queue/lock content is not mirrored publicly.
 
@@ -78,14 +78,34 @@ bind exact WORK identity
   -> verify current holder/lease/candidate semantics
   -> perform target/candidate read only when that event requires it
   -> compute semantic transition
-  -> transition + holder release in one queue image
+  -> transition + holder disposition in one queue image
   -> atomic CAS
-  -> READY or YIELDED
+  -> precomputed WORK, READY or YIELDED
 ```
 
 Review/candidate events re-resolve the live target PR when current target identity can affect the transition. Candidate drift wins over an incoming review event and returns the task to REPAIR while releasing the holder in that same queue CAS.
 
-Every accepted semantic EVENT is an atomic holder boundary. It never returns a new WORK capsule directly.
+Scheduled and historical `v41:gh:` EVENTs remain atomic transition-and-release
+boundaries returning only READY/YIELDED. New native `control-go` starts use the
+distinct exact `v41:control-go:<run id>` identity. Under its existing live holder,
+`CANDIDATE_READY`, `INTERNAL_PASS`, `INTERNAL_REPAIR`, `EXTERNAL_REQUESTED` and
+`EXTERNAL_FINDING` can return the existing WORK capsule for the next phase of the
+same task. This applies only while the transitioned task is ACTIVE in REVIEW or
+REPAIR with no blocker. Its original `execution_lock` is copied unchanged, never
+reacquired or extended; result construction precedes the same single CAS.
+
+YIELD, REVIEW_UNAVAILABLE, READY, candidate drift and blocked/no-progress outcomes
+release the holder. Retention gives no authority to another task or to integration.
+The active chat must YIELD before normal exit or after at most 180 seconds of
+waiting in that invocation. Unexpected termination relies on existing fixed-lease
+expiry/recovery. A new native start is needed after release or expiry. Neither a
+new persistent grant nor a task/queue schema change is involved.
+
+If an EVENT result is missing, read current private queue truth and revalidate the
+same unexpired holder with a fresh TICK before continuing. Do not blindly replay
+the EVENT. This is recovery from current state, not reconstruction from public
+comment history. All existing source-queue, authority, lease and atomic CAS
+checks remain mandatory, including the final lease check immediately before CAS.
 
 ## Command freshness and correlation
 

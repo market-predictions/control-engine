@@ -38,6 +38,7 @@ LEGACY_CURRENT_PATHS = {
     "schemas/repository_authority_v31.schema.json",
 }
 NORMATIVE_DOCTRINE_PATHS = {
+    "control/CONTROL_OPERATING_MODEL.md",
     "control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
     "control/CONTROL_V4_REALIZATION_RUNBOOK.md",
     "control/CONTROL_V4_ROADMAP.md",
@@ -76,7 +77,7 @@ OBSOLETE_RUNNER_PROMPT_BLOB_SHAS = frozenset(
         "b3d671767231ec534c6e22eb7a0c6c4c2875605f",
     }
 )
-REVIEWED_SYSTEM_INDEX_BLOB_SHA = "f65c05a566539cbda7d9e75993fce8be7b5842c6"
+REVIEWED_SYSTEM_INDEX_BLOB_SHA = "7d62d2196e87c09fd76e2595f0a23be5c8ede047"
 STATELESS_TRANSPORT_PROMPT_REQUIRED_MARKERS = (
     "CONTROL_V4_RUNTIME_TICK",
     "CONTROL_V4_RUNTIME_EVENT",
@@ -472,7 +473,7 @@ def validate_system_index(raw: bytes, runtime: Mapping[str, Any], *, index_oid: 
         raise ValidationError("SYSTEM_INDEX is not strict UTF-8") from exc
 
     required = {
-        "# Control — Canonical System Index V4",
+        "# Control — Canonical System Index",
         "architecture=control/CONTROL_AUTONOMY_ARCHITECTURE_V4.md",
         "runtime=control-runtime-state:control/DISPATCH_QUEUE.json",
         "global_safety=control/CONTROL_RUNTIME_AUTHORITY_V4.json",

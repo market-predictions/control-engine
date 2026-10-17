@@ -21,6 +21,28 @@ The native `mode: control-go` path is Control engineering/orchestration, **not t
 **This excludes the optional Agent/Hermes product from default task selection; it does not disable legitimate project acceptance checks or claim the Agent project is fixed.**
 
 
+### Native same-task continuation (implementation candidate; live proof pending)
+
+New `mode: control-go` starts use `v41:control-go:<GitHub run id>`. A validated
+progress EVENT can return ordinary `WORK` for the next phase of the **same task**,
+retaining the exact original lock, start time and expiry in its one atomic CAS.
+No new acquisition, queue field, permission grant or lease renewal is introduced.
+The new run identity prevents old `v41:gh:` handovers and the optional Work pilot
+from unexpectedly receiving a retained holder; their EVENT release behavior and
+the Scheduled Runner contract are unchanged.
+
+`YIELD`, `REVIEW_UNAVAILABLE`, `READY`, a blocked/no-progress result and candidate
+drift release the holder. An active chat may briefly observe CI/Codex completion;
+after at most 180 seconds of waiting in that invocation, or before ending the
+turn, it must YIELD while the holder is valid. Original target-effect freshness
+clocks still apply. Public same-run TICKs can revalidate a retained holder, but
+cannot acquire a task after release or expiry. A later invocation therefore uses
+the existing native start and reloads current evidence instead of repeating work.
+
+Implementation tests are not production activation evidence. The paired private
+Operating Model defines the reviewed interaction; do not claim live completion
+until a real native start and correlated same-holder phase chain are observed.
+
 ### Review feedback on the next Control handover
 
 For an already-governed `ACTIVE / REVIEW` task with an exact candidate PR,
