@@ -453,3 +453,93 @@ def test_existing_adoption_workflow_keeps_admin_and_adoption_commands_separate()
     assert "python scripts/control_v4_owner_admin.py" in text
     assert "permission-contents: write" in text
     assert "CONTROL_V4_OWNER_COMMAND" in text
+
+
+
+# Squash/rebase merges have a GitHub-assigned integration SHA distinct from
+# the reviewed PR head. Owner finalization must prove exact PR identity AND
+# ancestry of that integration SHA on the current target branch.
+def _squash_target(monkeypatch, *, merge_sha="1" * 40, contained=True,
+                   status="ahead", behind_by=0, merged=True, pr_head=CANDIDATE,
+                   current_base="2" * 40):
+    requested = []
+
+    def public_get(path):
+        requested.append(path)
+        if path == f"repos/{REPO}":
+            return {"full_name": REPO, "private": False}
+        if path == f"repos/{REPO}/pulls/1":
+            return {
+                "state": "closed" if merged else "open",
+                "merged_at": "2026-10-17T14:16:42Z" if merged else None,
+                "merge_commit_sha": merge_sha,
+                "head": {"sha": pr_head, "ref": "bootstrap/agent-r1-gap"},
+                "base": {"sha": BASE, "ref": "main"},
+            }
+        if path == f"repos/{REPO}/compare/{merge_sha}...{current_base}":
+            return {
+                "merge_base_commit": {"sha": merge_sha if contained else BASE},
+                "status": status,
+                "behind_by": behind_by,
+            }
+        if path == f"repos/{REPO}/compare/{CANDIDATE}...{current_base}":
+            return {
+                "merge_base_commit": {"sha": BASE},
+                "status": "diverged",
+                "behind_by": 3,
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(owner_admin, "_public_get", public_get)
+    monkeypatch.setattr(
+        owner_admin, "_branch_head",
+        lambda repository, branch, private: current_base,
+    )
+    target = owner_admin._public_target(finalize_command())
+    return target, requested
+
+
+def test_squash_finalization_proves_exact_gitHub_pr_merge_ancestry(monkeypatch):
+    target, calls = _squash_target(monkeypatch)
+    assert target["candidate_in_current_base"] is True
+    assert f"repos/{REPO}/compare/{'1' * 40}...{'2' * 40}" in calls
+    validate_public_target(finalize_command(), target)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"contained": False},
+        {"status": "diverged"},
+        {"behind_by": 1},
+        {"merged": False},
+        {"merge_sha": BASE},  # integration cannot be the pre-merge base
+        {"pr_head": "3" * 40},  # different PR head than bound candidate
+        {"current_base": BASE},  # target branch did not advance
+    ],
+)
+def test_squash_finalization_rejects_unrelated_or_stale_proof(monkeypatch, overrides):
+    target, _ = _squash_target(monkeypatch, **overrides)
+    with pytest.raises(OwnerAdminError):
+        validate_public_target(finalize_command(), target)
+
+
+def test_normal_merge_original_head_ancestry_remains_supported(monkeypatch):
+    def public_get(path):
+        if path == f"repos/{REPO}":
+            return {"full_name": REPO, "private": False}
+        if path == f"repos/{REPO}/pulls/1":
+            return {
+                "state": "closed",
+                "merged_at": "2026-10-17T14:16:42Z",
+                "merge_commit_sha": None,
+                "head": {"sha": CANDIDATE, "ref": "bootstrap/agent-r1-gap"},
+                "base": {"sha": BASE, "ref": "main"},
+            }
+        if path == f"repos/{REPO}/compare/{CANDIDATE}...{'2' * 40}":
+            return {"merge_base_commit": {"sha": CANDIDATE}, "status": "ahead", "behind_by": 0}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(owner_admin, "_public_get", public_get)
+    monkeypatch.setattr(owner_admin, "_branch_head", lambda *a, **kw: "2" * 40)
+    validate_public_target(finalize_command(), owner_admin._public_target(finalize_command()))
