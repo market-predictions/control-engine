@@ -1012,13 +1012,32 @@ def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     merged = pr.get("merged_at") is not None
     candidate_in_current_base = False
     if command["operation"] in {"FINALIZE_INTEGRATED", "RECONCILE_INTEGRATED"}:
-        comparison = _public_get(f"repos/{repository}/compare/{command['candidate_sha']}...{current_base_sha}")
-        merge_base = ((comparison.get("merge_base_commit") or {}).get("sha")) if isinstance(comparison, Mapping) else None
-        candidate_in_current_base = (
-            merge_base == command["candidate_sha"]
-            and comparison.get("status") in {"ahead", "identical"}
-            and comparison.get("behind_by") == 0
-        )
+        # A squash/rebase merge changes the commit ID, so the original PR
+        # head need not be an ancestor of main. GitHub's PR-bound merge SHA
+        # must itself be an ancestor of the *current* target branch.
+        merge_commit_sha = pr.get("merge_commit_sha")
+        if merged and isinstance(merge_commit_sha, str) and SHA_RE.fullmatch(merge_commit_sha):
+            comparison = _public_get(
+                f"repos/{repository}/compare/{merge_commit_sha}...{current_base_sha}"
+            )
+            candidate_in_current_base = (
+                isinstance(comparison, Mapping)
+                and (comparison.get("merge_base_commit") or {}).get("sha") == merge_commit_sha
+                and comparison.get("status") in {"ahead", "identical"}
+                and comparison.get("behind_by") == 0
+                and merge_commit_sha != command["expected_base_sha"]
+            )
+        # Keep support for historical ordinary merges if GitHub's merge SHA
+        # is temporarily unavailable. Never accept ancestry without a
+        # merged exact PR (validated again by validate_public_target).
+        if not candidate_in_current_base:
+            comparison = _public_get(f"repos/{repository}/compare/{command['candidate_sha']}...{current_base_sha}")
+            candidate_in_current_base = (
+                isinstance(comparison, Mapping)
+                and (comparison.get("merge_base_commit") or {}).get("sha") == command["candidate_sha"]
+                and comparison.get("status") in {"ahead", "identical"}
+                and comparison.get("behind_by") == 0
+            )
     return {
         "repository": repository,
         "state": pr.get("state"),
