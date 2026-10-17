@@ -461,7 +461,8 @@ def test_existing_adoption_workflow_keeps_admin_and_adoption_commands_separate()
 # ancestry of that integration SHA on the current target branch.
 def _squash_target(monkeypatch, *, merge_sha="1" * 40, contained=True,
                    status="ahead", behind_by=0, merged=True, pr_head=CANDIDATE,
-                   current_base="2" * 40):
+                   current_base="2" * 40, reviewed_base_contained=True,
+                   candidate_contained=False):
     requested = []
 
     def public_get(path):
@@ -482,11 +483,17 @@ def _squash_target(monkeypatch, *, merge_sha="1" * 40, contained=True,
                 "status": status,
                 "behind_by": behind_by,
             }
+        if path == f"repos/{REPO}/compare/{BASE}...{merge_sha}":
+            return {
+                "merge_base_commit": {"sha": BASE if reviewed_base_contained else "4" * 40},
+                "status": "ahead",
+                "behind_by": 0 if reviewed_base_contained else 2,
+            }
         if path == f"repos/{REPO}/compare/{CANDIDATE}...{current_base}":
             return {
-                "merge_base_commit": {"sha": BASE},
-                "status": "diverged",
-                "behind_by": 3,
+                "merge_base_commit": {"sha": CANDIDATE if candidate_contained else BASE},
+                "status": "ahead" if candidate_contained else "diverged",
+                "behind_by": 0 if candidate_contained else 3,
             }
         raise AssertionError(path)
 
@@ -509,7 +516,8 @@ def test_squash_finalization_proves_exact_gitHub_pr_merge_ancestry(monkeypatch):
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"contained": False},
+        {"contained": False, "candidate_contained": True},  # no fallback to unrelated PR head
+        {"reviewed_base_contained": False},  # integration onto rewritten target history
         {"status": "diverged"},
         {"behind_by": 1},
         {"merged": False},
@@ -538,6 +546,8 @@ def test_normal_merge_original_head_ancestry_remains_supported(monkeypatch):
             }
         if path == f"repos/{REPO}/compare/{CANDIDATE}...{'2' * 40}":
             return {"merge_base_commit": {"sha": CANDIDATE}, "status": "ahead", "behind_by": 0}
+        if path == f"repos/{REPO}/compare/{BASE}...{CANDIDATE}":
+            return {"merge_base_commit": {"sha": BASE}, "status": "ahead", "behind_by": 0}
         raise AssertionError(path)
 
     monkeypatch.setattr(owner_admin, "_public_get", public_get)
