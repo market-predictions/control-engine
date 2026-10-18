@@ -137,6 +137,16 @@ def test_findings_on_same_head_override_clean_receipt(case):
     with pytest.raises(resume.ReviewPending, match="findings need an engineer"): evidence(case)
 
 
+def test_github_remapped_finding_from_repaired_commit_does_not_block_fresh_pass(case):
+    state, task, routes, request, passed, runs, pr = case
+    # Observed on real Weekly ETF PR #131: commit_id moved to the repaired head,
+    # while original_commit_id still names the commit that actually had the bug.
+    routes[f"repos/{REPO}/pulls/131/comments?per_page=100"].append(
+        dict(user=passed["user"], commit_id=HEAD, original_commit_id="e" * 40,
+             body="Finding on the previous candidate; repaired and re-reviewed"))
+    assert evidence(case)["external_review"]["status"] == "PASS"
+
+
 def test_other_active_holder_is_never_released_or_reused(case):
     state, task, *_ = case
     proof = evidence(case)

@@ -125,7 +125,12 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     external_pass = admin._public_external_review(command, state["queue"])
     for endpoint in (f"pulls/{pr_number}/reviews", f"pulls/{pr_number}/comments"):
         for item in _bounded_list(admin._public_get(f"repos/{repository}/{endpoint}?per_page=100")):
-            if not _bot(item) or item.get("commit_id") != candidate["candidate_sha"]:
+            # GitHub can remap an old inline finding's commit_id after a repair.
+            # original_commit_id identifies the candidate that actually had it.
+            reviewed_commit = item.get("commit_id")
+            if endpoint.endswith("/comments"):
+                reviewed_commit = item.get("original_commit_id") or reviewed_commit
+            if not _bot(item) or reviewed_commit != candidate["candidate_sha"]:
                 continue
             if endpoint.endswith("/comments") or item.get("state") == "CHANGES_REQUESTED":
                 raise ReviewPending("current-candidate review findings need an engineer")
