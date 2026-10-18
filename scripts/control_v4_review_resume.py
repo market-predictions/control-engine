@@ -78,6 +78,8 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     expected_key = f"{task['gap_id']}--{candidate['candidate_sha']}--{candidate['expected_base_branch']}--{candidate['expected_base_sha']}"
     if external.get("request_key") != expected_key:
         raise ReviewPending("pending review request identity drifted")
+    if admin._task_by_public_pr(state["queue"], command) != task:
+        raise ReviewPending("pending review does not resolve to the exact task")
 
     repo = admin._public_get(f"repos/{repository}")
     if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
@@ -98,6 +100,19 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     requested_at = request.get("created_at") if isinstance(request, Mapping) else None
     if not isinstance(requested_at, str):
         raise ReviewPending("review request timestamp missing")
+    author = request.get("user") or {}
+    if (request.get("id") != request_id
+            or request.get("issue_url") != f"{admin.API}/repos/{repository}/issues/{pr_number}"
+            or request.get("html_url") != external["request_ref"]
+            or author.get("login") != admin.PRINCIPAL_LOGIN or author.get("id") != admin.PRINCIPAL_USER_ID
+            or request.get("updated_at") != requested_at):
+        raise ReviewPending("registered review request provenance is invalid")
+    body = request.get("body")
+    if (not isinstance(body, str)
+            or not any(marker in body for marker in ("@codex review", "CONTROL_V4_EXTERNAL_REVIEW_REQUEST"))
+            or any(re.search(r"(?<![0-9A-Za-z])" + re.escape(sha) + r"(?![0-9A-Za-z])", body) is None
+                   for sha in (candidate["candidate_sha"], candidate["expected_base_sha"]))):
+        raise ReviewPending("registered review request does not name the exact head and base")
     try:
         requested_time = datetime.fromisoformat(requested_at.replace("Z", "+00:00"))
         internal_time = datetime.fromisoformat(str(review.get("reviewed_at")).replace("Z", "+00:00"))
@@ -121,8 +136,14 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
         raise ReviewPending("one unambiguous exact-candidate Codex PASS is required")
     evidence = passes[0]
     command.update(external_review_request_comment_id=request_id, external_review_comment_id=evidence["id"])
-    # Existing immutable principal/request and trusted-bot PASS validation.
-    external_pass = admin._public_external_review(command, state["queue"])
+    # The existing private pending record binds task identity. Interactive
+    # requests need not publish private Mission/gap tokens from owner-admin.
+    receipt = admin._public_external_review_receipt(command)
+    evidence_ref = f"https://github.com/{repository}/pull/{pr_number}#issuecomment-{evidence['id']}"
+    if receipt.get("html_url") != evidence_ref:
+        raise ReviewPending("review receipt reference is not bound to the exact PR")
+    external_pass = {**exact_review, "request_key": expected_key, "status": "PASS",
+                     "request_ref": external["request_ref"], "evidence_ref": evidence_ref}
     for endpoint in (f"pulls/{pr_number}/reviews", f"pulls/{pr_number}/comments"):
         for item in _bounded_list(admin._public_get(f"repos/{repository}/{endpoint}?per_page=100")):
             # GitHub can remap an old inline finding's commit_id after a repair.

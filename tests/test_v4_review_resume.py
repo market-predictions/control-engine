@@ -90,6 +90,47 @@ def test_delayed_exact_review_and_required_ci_reach_ready_without_claim(case):
     assert not resume.eligible(result["tasks"][0])
 
 
+def test_registered_interactive_request_uses_private_task_binding(case):
+    state, task, routes, request, passed, runs, pr = case
+    # Real native PR #132 request: full head/base, no owner-admin envelope or
+    # private Mission/gap tokens. EXTERNAL_REQUESTED already registered its ref.
+    request["body"] = f"@codex review\n\nIndependent exact-head review of `{HEAD}` against base `{BASE}`."
+    proof = evidence(case)
+    result = resume.finish_review(state, task, proof, now=NOW)
+    assert result["tasks"][0]["status"] == "READY"
+    assert proof["external_review"]["request_ref"] == task["external_review"]["request_ref"]
+    # Owner-admin imports still require their original canonical envelope.
+    with pytest.raises(admin.OwnerAdminError, match="request identity"):
+        admin._public_external_review(proof["command"], state["queue"])
+
+
+@pytest.mark.parametrize("change", ["author", "issue", "url", "id", "no_head", "no_base",
+                                   "short_head", "embedded_head", "no_request", "before_internal"])
+def test_registered_interactive_request_still_requires_exact_provenance(case, change):
+    state, task, routes, request, passed, runs, pr = case
+    request["body"] = f"@codex review\nReview `{HEAD}` against `{BASE}`."
+    if change == "author": request["user"]["id"] = 99
+    elif change == "issue": request["issue_url"] = request["issue_url"].replace("131", "132")
+    elif change == "url": request["html_url"] += "0"
+    elif change == "id": request["id"] = 99
+    elif change == "no_head": request["body"] = request["body"].replace(HEAD, "e" * 40)
+    elif change == "no_base": request["body"] = request["body"].replace(BASE, "e" * 40)
+    elif change == "short_head": request["body"] = request["body"].replace(HEAD, HEAD[:10])
+    elif change == "embedded_head": request["body"] = request["body"].replace(HEAD, HEAD + "e")
+    elif change == "no_request": request["body"] = request["body"].replace("@codex review", "Code references")
+    elif change == "before_internal": request["created_at"] = request["updated_at"] = "2026-10-18T09:59:00Z"
+    with pytest.raises(admin.OwnerAdminError): evidence(case)
+
+
+def test_registered_request_cannot_resolve_to_multiple_tasks(case):
+    state, task, *_ = case
+    duplicate = deepcopy(task)
+    duplicate.update(task_id="different-task", gap_id="G2")
+    state["queue"]["tasks"].append(duplicate)
+    with pytest.raises(admin.OwnerAdminError, match="resolve exactly"):
+        evidence(case)
+
+
 @pytest.mark.parametrize("change", ["empty", "missing", "red", "running", "wrong_head", "wrong_app", "duplicate", "truncated"])
 def test_required_ci_cannot_be_inferred_or_weakened(case, change):
     state, task, routes, request, passed, runs, pr = case
