@@ -13,13 +13,12 @@ def _job():
     return text.split("\n  interactive-control-start:\n", 1)[1]
 
 
-def test_direct_dispatch_is_default_and_legacy_work_opt_in():
+def test_direct_dispatch_is_default_and_retired_work_pilot_is_removed():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "default: control-go" in workflow
-    old = workflow.split("\n  interactive-resume:\n", 1)[1].split(
-        "\n  interactive-control-start:\n", 1
-    )[0]
-    assert "inputs.mode == 'legacy-work'" in old
+    assert "legacy-work" not in workflow
+    assert "interactive-resume:" not in workflow
+    assert "human-start-probe:" not in workflow
     job = _job()
     assert "inputs.mode == 'control-go'" in job
     assert "github.run_attempt == 1" in job

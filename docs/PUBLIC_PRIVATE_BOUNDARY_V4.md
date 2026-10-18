@@ -31,8 +31,9 @@ Every private queue mutation is prepared from an exact fresh private snapshot an
 - exact private `main` authority SHA;
 - exact `control-runtime-state` SHA;
 - exact current queue blob;
-- current typed command identity;
-- applicable TICK freshness or EVENT holder identity.
+- current typed command identity and applicable TICK freshness/EVENT holder identity
+  for semantic execution; or the narrowly admitted native review-completion job
+  without a live holder, with exact pending request/PASS and required CI evidence.
 
 The carrier creates one descendant runtime commit and submits one atomic non-force GraphQL `updateRefs` mutation containing:
 
@@ -44,6 +45,31 @@ control-runtime-state: expected SHA -> new queue commit
 The no-op `main` update is the authority fence. If either expected ref is stale, the atomic update is rejected.
 
 **A successful `updateRefs` response is the definitive commit acknowledgement.** The carrier performs no fallible Git-ref, branch-projection or queue-content read after that successful CAS. A second network observation cannot strengthen the atomic transaction and previously created the invalid state `durable success + public ERROR`. The next command reloads and validates canonical private truth afresh.
+
+## Native background review completion
+
+The existing runtime workflow has one hourly `:30` deterministic review job,
+also callable as owner `workflow_dispatch` mode `review-resume`. Only trusted
+Engine main receives the existing contents-write capability scoped to the private
+control-plane. Private authority itself remains declarative; no private workflow
+or new token store is introduced.
+
+This job may move only an ACTIVE/REVIEW, HOLD_AFTER_PASS task with no live holder, an
+existing exact internal PASS and pending EXTERNAL request to READY. Immutable
+principal request, trusted exact-commit Codex PASS, absence of current-head findings
+and all explicitly configured required GitHub Actions checks are independently
+read and revalidated before the existing atomic CAS. A matching expired claim
+from an interrupted chat may be cleared using the existing expiry rule only
+inside that same READY transition; foreign claims are never touched. Missing, edited, conflicting
+or incomplete evidence grants no transition. It never claims another task, repairs
+code, merges, changes authority, renews a lease or restarts the semantic engineer.
+No new public comment command is admitted for this path.
+
+The job emits public target/result facts only; queue contents, Mission acceptance
+and authority documents stay private. Existing integration holds and owner-admin
+integrated-task closeout remain unchanged. Cron delays/dropped runs are retried
+by ordinary later state reads, with no replay ledger or Guardian. Public schedules
+may require native GitHub re-enablement after 60 inactive days.
 
 ## TICK
 
@@ -98,7 +124,8 @@ YIELD, REVIEW_UNAVAILABLE, READY, candidate drift and blocked/no-progress outcom
 release the holder. Retention gives no authority to another task or to integration.
 The active chat must YIELD before normal exit or after at most 180 seconds of
 waiting in that invocation. Unexpected termination relies on existing fixed-lease
-expiry/recovery. A new native start is needed after release or expiry. Neither a
+expiry/recovery. Semantic engineering needs a new native start after release or
+expiry; the separate deterministic review-completion job needs no semantic claim. Neither a
 new persistent grant nor a task/queue schema change is involved.
 
 If an EVENT result is missing, read current private queue truth and revalidate the

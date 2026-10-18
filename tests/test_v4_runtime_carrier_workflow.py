@@ -14,7 +14,7 @@ PROTOCOL = Path('control_engine/v4_runtime_protocol.py')
 def test_runtime_carrier_is_owner_main_issue106_with_native_manual_resume() -> None:
     text = WORKFLOW.read_text(encoding='utf-8')
     assert '\n  issue_comment:\n    types: [created]' in text
-    assert '\n  schedule:' not in text
+    assert "\n  schedule:" in text
     assert '\n  workflow_dispatch:\n' in text
     assert 'pull_request_target:' not in text
     assert "github.repository == 'market-predictions/control-engine'" in text
