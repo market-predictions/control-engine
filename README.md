@@ -111,11 +111,12 @@ finishes one already-requested clean EXTERNAL review without waking ChatGPT.
 The initial scheduled runs were blocked: run
 [39159113103](https://github.com/market-predictions/control-engine/actions/runs/39159113103)
 was rejected before job creation because the repository's Actions execution
-policy does not allow `schedule`. On 2026-10-18, policy 4000 allowed only
+policy then omitted `schedule`. On 2026-10-18, policy 4000 initially allowed only
 `issue_comment`, `pull_request`, `push` and `workflow_dispatch`, with actor
 `market-predictions`. Check **Settings → Actions → Policies**, separately from
-Actions General. The proposed repair adds only `schedule` to that event allowlist,
-retaining the actor restriction; it needs explicit owner approval before saving.
+Actions General. After explicit principal approval on 2026-10-18, the owner saved
+only the addition of `schedule`; GitHub confirmed **Policy updated**. The sole
+owner actor restriction, Active enforcement and all other settings were preserved.
 A policy edit, manual run or successful CI alone does not prove a scheduled run
 or productive background completion. Keep the existing implementation and await
 actual scheduled evidence; do not add a substitute clock to bypass this policy.
