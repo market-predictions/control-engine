@@ -934,6 +934,31 @@ def _public_internal_review(command: Mapping[str, Any], queue: Mapping[str, Any]
     }
 
 
+def _public_external_review_receipt(command: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Validate the immutable trusted-bot receipt for one exact public candidate."""
+    evidence_id = _positive_int(command.get("external_review_comment_id"), label="external review comment id")
+    issue_url = f"{API}/repos/{command['repository']}/issues/{command['candidate_pr_number']}"
+    evidence = _public_get(f"repos/{command['repository']}/issues/comments/{evidence_id}")
+    if not isinstance(evidence, Mapping) or evidence.get("issue_url") != issue_url:
+        raise OwnerAdminError("external review evidence is not bound to target PR")
+    evidence_user = evidence.get("user") or {}
+    if (
+        evidence_user.get("login") != EXTERNAL_REVIEW_BOT_LOGIN
+        or evidence_user.get("id") != EXTERNAL_REVIEW_BOT_USER_ID
+    ):
+        raise OwnerAdminError("external review evidence is not authored by the trusted review bot")
+    evidence_created = evidence.get("created_at")
+    if not isinstance(evidence_created, str) or not evidence_created or evidence.get("updated_at") != evidence_created:
+        raise OwnerAdminError("external review evidence was edited")
+    body = evidence.get("body")
+    if not isinstance(body, str) or "Codex Review: Didn't find any major issues." not in body:
+        raise OwnerAdminError("external review evidence is not a canonical PASS")
+    match = re.search(r"(?:\*\*)?Reviewed commit:(?:\*\*)?\s*`([0-9a-f]{10,40})`", body)
+    if match is None or not command["candidate_sha"].startswith(match.group(1)):
+        raise OwnerAdminError("external review evidence candidate identity mismatch")
+    return evidence
+
+
 def _public_external_review(command: Mapping[str, Any], queue: Mapping[str, Any]) -> dict[str, Any]:
     source = _task_by_public_pr(queue, command)
     if source.get("review_policy") != "EXTERNAL":
@@ -941,7 +966,6 @@ def _public_external_review(command: Mapping[str, Any], queue: Mapping[str, Any]
     request_id = _positive_int(
         command.get("external_review_request_comment_id"), label="external review request comment id"
     )
-    evidence_id = _positive_int(command.get("external_review_comment_id"), label="external review comment id")
     repository = command["repository"]
     issue_url = f"{API}/repos/{repository}/issues/{command['candidate_pr_number']}"
 
@@ -965,24 +989,7 @@ def _public_external_review(command: Mapping[str, Any], queue: Mapping[str, Any]
     if not isinstance(request_body, str) or any(token not in request_body for token in required_tokens):
         raise OwnerAdminError("external review request identity does not match target task")
 
-    evidence = _public_get(f"repos/{repository}/issues/comments/{evidence_id}")
-    if not isinstance(evidence, Mapping) or evidence.get("issue_url") != issue_url:
-        raise OwnerAdminError("external review evidence is not bound to target PR")
-    evidence_user = evidence.get("user") or {}
-    if (
-        evidence_user.get("login") != EXTERNAL_REVIEW_BOT_LOGIN
-        or evidence_user.get("id") != EXTERNAL_REVIEW_BOT_USER_ID
-    ):
-        raise OwnerAdminError("external review evidence is not authored by the trusted review bot")
-    evidence_created = evidence.get("created_at")
-    if not isinstance(evidence_created, str) or not evidence_created or evidence.get("updated_at") != evidence_created:
-        raise OwnerAdminError("external review evidence was edited")
-    body = evidence.get("body")
-    if not isinstance(body, str) or "Codex Review: Didn't find any major issues." not in body:
-        raise OwnerAdminError("external review evidence is not a canonical PASS")
-    match = re.search(r"(?:\*\*)?Reviewed commit:(?:\*\*)?\s*`([0-9a-f]{10,40})`", body)
-    if match is None or not command["candidate_sha"].startswith(match.group(1)):
-        raise OwnerAdminError("external review evidence candidate identity mismatch")
+    evidence = _public_external_review_receipt(command)
     request_ref = request.get("html_url")
     evidence_ref = evidence.get("html_url")
     if not all(isinstance(value, str) and value for value in (request_ref, evidence_ref)):

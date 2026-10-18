@@ -132,6 +132,18 @@ main/runtime CAS; duplicates see READY and do nothing. No target writes, repair,
 new work, lease renewal or merge occurs. A real delayed review reaching READY
 with the chat closed is required before claiming productive background liveness.
 
+For an already-registered interactive request, the private pending record binds
+the task and exact request reference. Its immutable owner-authored public comment
+must explicitly request review of the full current head and base after internal
+PASS. It need not repeat private Mission/gap tokens from the separate owner-admin
+import envelope; owner-admin imports retain that envelope requirement. Both paths
+reuse the same immutable trusted-bot exact-candidate PASS validation.
+The manual diagnostic run
+[39165602292](https://github.com/market-predictions/control-engine/actions/runs/39165602292)
+exposed this request-format mismatch on 2026-10-18: a green Actions run returned
+`PENDING` and did not complete the task. Require the actual `READY` result and
+canonical task transition; green workflow status alone is not completion proof.
+
 Private authority remains data only. Cron lives in the existing public Engine;
 GitHub may delay/drop runs or disable public schedules after 60 inactive days.
 The next run reads pending work afresh; use native GitHub re-enablement after
