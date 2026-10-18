@@ -1,6 +1,6 @@
 """Delayed reviews may reach READY, never acquire work or bypass review/CI."""
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -142,7 +142,27 @@ def test_other_active_holder_is_never_released_or_reused(case):
     proof = evidence(case)
     state["queue"]["execution_lock"] = dict(run_id="another-native-run", task_id=task["task_id"],
         started_at="2026-10-18T11:50:00Z", expires_at="2026-10-18T13:20:00Z")
-    with pytest.raises(resume.ReviewPending, match="held"): resume.finish_review(state, task, proof, now=NOW)
+    with pytest.raises(resume.ReviewPending, match="live holder"): resume.finish_review(state, task, proof, now=NOW)
+
+
+def test_interrupted_chat_expired_claim_is_released_only_with_same_task_completion(case):
+    state, task, *_ = case
+    proof = evidence(case)
+    state["queue"]["execution_lock"] = dict(run_id="original-native-run", task_id=task["task_id"],
+        started_at="2026-10-18T09:30:00Z", expires_at="2026-10-18T11:00:00Z")
+    original = deepcopy(state["queue"])
+    result = resume.finish_review(state, task, proof, now=NOW)
+    assert state["queue"] == original
+    assert result["execution_lock"] is None
+    assert result["tasks"][0]["status"] == "READY"
+
+
+def test_expired_foreign_claim_is_never_touched(case):
+    state, task, *_ = case
+    state["queue"]["execution_lock"] = dict(run_id="other-native-run", task_id="different-task",
+        started_at="2026-10-18T09:30:00Z", expires_at="2026-10-18T11:00:00Z")
+    with pytest.raises(resume.ReviewPending, match="another task"):
+        resume._unheld_queue(state["queue"], task, now=NOW)
 
 
 @pytest.mark.parametrize("field,value", [("status", "DONE"), ("phase", "REPAIR"), ("blocker", "HOLD"),
@@ -174,6 +194,51 @@ def test_background_execution_and_duplicate_wake_are_idempotent(case, monkeypatc
     assert resume.main() == 0
     assert "CONTROL_V4_REVIEW_RESUME=NO_WORK" in capsys.readouterr().out
     assert len(writes) == 1
+
+
+def test_waiting_first_eight_tasks_do_not_starve_a_later_clean_review(case, monkeypatch):
+    state, task, *_ = case
+    # Eight genuine waiting states precede the clean review in canonical order.
+    siblings = []
+    for i in range(2, 10):
+        sibling = deepcopy(task)
+        sibling.update(task_id=f"MISSION--M--2026-10-18-r1--G{i}", gap_id=f"G{i}")
+        sibling["candidate"]["candidate_pr_number"] = 131 + i
+        sibling["external_review"]["request_key"] = f"G{i}--{HEAD}--main--{BASE}"
+        gap = deepcopy(state["bundle"].missions[0]["gaps"][0])
+        gap["gap_id"] = f"G{i}"
+        state["bundle"].missions[0]["gaps"].append(gap)
+        siblings.append(sibling)
+    state["queue"]["tasks"] = siblings + [task]
+    native_env(monkeypatch)
+    class Clock(datetime):
+        current = NOW
+        @classmethod
+        def now(cls, tz=None): return cls.current
+    monkeypatch.setattr(resume, "datetime", Clock)
+    monkeypatch.setattr(resume, "_load_state", lambda: state)
+    real_completion = resume.completion_evidence
+    observed = []
+    def complete(current, selected):
+        observed.append(selected["task_id"])
+        if selected["task_id"] != task["task_id"]:
+            raise resume.ReviewPending("stale evidence still awaiting engineering")
+        return real_completion(current, selected)
+    monkeypatch.setattr(resume, "completion_evidence", complete)
+    writes = []
+    def write(old, new, command, *, pre_ref_cas):
+        pre_ref_cas()
+        writes.append(new)
+        state["queue"] = new
+        return "9" * 40
+    monkeypatch.setattr(admin, "_write_queue_exact", write)
+    for hour in range(2):
+        Clock.current = NOW + timedelta(hours=hour)
+        assert resume.main() == 0
+        if writes: break
+    assert len(writes) == 1
+    assert state["queue"]["tasks"][-1]["status"] == "READY"
+    assert all(t["status"] == "ACTIVE" for t in state["queue"]["tasks"][:-1])
 
 
 def test_late_evidence_change_rejects_commit_without_retry(case, monkeypatch, capsys):

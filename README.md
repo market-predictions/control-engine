@@ -2,16 +2,16 @@
 
 Deterministic Control validation, GitHub transport and guarded private-state carrier. **Not an AI programmer or a second Control authority.**
 
-## Current operating policy (adopted 2026-10-13)
+## Current operating policy (2026-10-18)
 
 The principal-approved [Control Operating Model](https://github.com/market-predictions/control-plane/blob/main/control/CONTROL_OPERATING_MODEL.md) in the **private** Control Plane is the canonical human-facing policy:
 
 - **`control-go`** starts work in an active ChatGPT Control project chat. ChatGPT is the **primary developer**, not Codex or Work.
-- Existing **GitHub Actions** performs the applicable project tests/CI.
+- Existing **GitHub Actions** performs applicable project tests/CI and bounded background completion of already-requested reviews.
 - **Codex GitHub Code Review** is the independent exact-head reviewer. Codex Cloud environments for Codex **code implementation** are not a prerequisite for ordinary review; each target repository still needs actual review access.
 - **Work** is optional for specific browser or cross-application requirements. It is not part of the routine critical path.
 - The **Scheduled ChatGPT Runner and retired Guardians are disabled**, and push notifications are off by principal choice. They must not be re-enabled as an assumed fix for earlier unattended GitHub write restrictions.
-- **Interactive Control holder/event path proven (2026-10-15):** native owner run `38712403129` published a handover; the valid `INTERNAL_REPAIR` EVENT atomically transitioned Agent task to `ACTIVE/REPAIR` and released the holder. This proves governed rejection/closeout, **not** accepted end-to-end project delivery.
+- **Scoped productive milestone (2026-10-18):** Weekly ETF PR #131 exercised same-holder phase continuation, an independent finding, repair, exact-head CI/re-review and separately approved integration/owner-admin DONE closeout. It does not prove unattended AI reasoning or productive next-task execution.
 
 
 ### Core-flow scope (Agent/Hermes excluded by default)
@@ -21,27 +21,26 @@ The native `mode: control-go` path is Control engineering/orchestration, **not t
 **This excludes the optional Agent/Hermes product from default task selection; it does not disable legitimate project acceptance checks or claim the Agent project is fixed.**
 
 
-### Native same-task continuation (implementation candidate; live proof pending)
+### Native same-task continuation (adopted; productive milestone 2026-10-18)
 
 New `mode: control-go` starts use `v41:control-go:<GitHub run id>`. A validated
 progress EVENT can return ordinary `WORK` for the next phase of the **same task**,
 retaining the exact original lock, start time and expiry in its one atomic CAS.
 No new acquisition, queue field, permission grant or lease renewal is introduced.
-The new run identity prevents old `v41:gh:` handovers and the optional Work pilot
-from unexpectedly receiving a retained holder; their EVENT release behavior and
-the Scheduled Runner contract are unchanged.
+The distinct run identity preserves historical `v41:gh:` EVENT release behavior
+and the disabled Scheduled Runner compatibility contract.
 
 `YIELD`, `REVIEW_UNAVAILABLE`, `READY`, a blocked/no-progress result and candidate
 drift release the holder. An active chat may briefly observe CI/Codex completion;
 after at most 180 seconds of waiting in that invocation, or before ending the
 turn, it must YIELD while the holder is valid. Original target-effect freshness
 clocks still apply. Public same-run TICKs can revalidate a retained holder, but
-cannot acquire a task after release or expiry. A later invocation therefore uses
-the existing native start and reloads current evidence instead of repeating work.
+cannot acquire a task after release or expiry. Later semantic engineering uses a new native start and current evidence. The
+bounded background review-completion job below needs no new semantic start.
 
-Implementation tests are not production activation evidence. The paired private
-Operating Model defines the reviewed interaction; do not claim live completion
-until a real native start and correlated same-holder phase chain are observed.
+Engine PR #188 adopted the interaction. The scoped PR #131 milestone supplies
+real native start, same-holder phase and authorized closeout evidence; current
+status remains a fresh projection of canonical authority/queue and target facts.
 
 ### Review feedback on the next Control handover
 
@@ -101,11 +100,13 @@ scoped historical proof of same-task finding/repair/re-review and approved close
 
 The same workflow's hourly `:30` **review-resume** job (also manually selectable)
 finishes one already-requested clean EXTERNAL review without waking ChatGPT.
-It reads the existing private queue, requires no holder, exact internal PASS,
+It reads the existing private queue, requires no live holder, exact internal PASS,
 immutable owner request/trusted Codex PASS, no current-head findings and all
 explicitly configured GitHub Actions checks successful on that exact commit.
 Empty check configuration, stale head/base, edited/ambiguous evidence and failures
-stay pending. The final evidence recheck precedes the existing atomic private
+stay pending. A matching expired claim from an interrupted chat is cleared only
+in that same task completion using the existing expiry rule; other claims stay
+untouched. The final evidence recheck precedes the existing atomic private
 main/runtime CAS; duplicates see READY and do nothing. No target writes, repair,
 new work, lease renewal or merge occurs. A real delayed review reaching READY
 with the chat closed is required before claiming productive background liveness.

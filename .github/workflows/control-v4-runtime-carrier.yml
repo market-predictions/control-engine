@@ -251,6 +251,9 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      issues: read
+      pull-requests: read
+      checks: read
     steps:
       - name: Checkout trusted Control Engine main
         uses: actions/checkout@v4

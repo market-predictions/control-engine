@@ -33,7 +33,7 @@ Every private queue mutation is prepared from an exact fresh private snapshot an
 - exact current queue blob;
 - current typed command identity and applicable TICK freshness/EVENT holder identity
   for semantic execution; or the narrowly admitted native review-completion job
-  with no holder, exact pending request/PASS and required CI evidence.
+  without a live holder, with exact pending request/PASS and required CI evidence.
 
 The carrier creates one descendant runtime commit and submits one atomic non-force GraphQL `updateRefs` mutation containing:
 
@@ -54,11 +54,13 @@ Engine main receives the existing contents-write capability scoped to the privat
 control-plane. Private authority itself remains declarative; no private workflow
 or new token store is introduced.
 
-This job may move only an unheld ACTIVE/REVIEW, HOLD_AFTER_PASS task with an
+This job may move only an ACTIVE/REVIEW, HOLD_AFTER_PASS task with no live holder, an
 existing exact internal PASS and pending EXTERNAL request to READY. Immutable
 principal request, trusted exact-commit Codex PASS, absence of current-head findings
 and all explicitly configured required GitHub Actions checks are independently
-read and revalidated before the existing atomic CAS. Missing, edited, conflicting
+read and revalidated before the existing atomic CAS. A matching expired claim
+from an interrupted chat may be cleared using the existing expiry rule only
+inside that same READY transition; foreign claims are never touched. Missing, edited, conflicting
 or incomplete evidence grants no transition. It never claims another task, repairs
 code, merges, changes authority, renews a lease or restarts the semantic engineer.
 No new public comment command is admitted for this path.
@@ -122,7 +124,8 @@ YIELD, REVIEW_UNAVAILABLE, READY, candidate drift and blocked/no-progress outcom
 release the holder. Retention gives no authority to another task or to integration.
 The active chat must YIELD before normal exit or after at most 180 seconds of
 waiting in that invocation. Unexpected termination relies on existing fixed-lease
-expiry/recovery. A new native start is needed after release or expiry. Neither a
+expiry/recovery. Semantic engineering needs a new native start after release or
+expiry; the separate deterministic review-completion job needs no semantic claim. Neither a
 new persistent grant nor a task/queue schema change is involved.
 
 If an EVENT result is missing, read current private queue truth and revalidate the

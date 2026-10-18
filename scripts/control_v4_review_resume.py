@@ -5,6 +5,7 @@ from __future__ import annotations
 Runs only from trusted Engine main. This is not a semantic worker: no claims,
 target writes, repair, replenishment, integration, lease renewal or new queue.
 The original task must already have an internal PASS and pending review request.
+Only its own objectively expired holder may be released in the same READY CAS.
 """
 
 from copy import deepcopy
@@ -20,6 +21,7 @@ from control_engine.v4_runtime_protocol import (
     CORE_EXCLUDED_REPOSITORIES,
     EXTERNAL_REVIEW_BOT_LOGIN,
     EXTERNAL_REVIEW_BOT_USER_ID,
+    recover_expired_lock_v4,
     validate_runtime_binding,
 )
 from scripts import control_v4_owner_admin as admin
@@ -151,14 +153,26 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     return {"command": command, "external_review": external_pass, "checks": checked}
 
 
+def _unheld_queue(queue: Mapping[str, Any], task: Mapping[str, Any], *, now: datetime) -> Mapping[str, Any]:
+    lock = queue.get("execution_lock")
+    if lock is None:
+        return queue
+    if lock.get("task_id") != task["task_id"]:
+        raise ReviewPending("another task is held")
+    recovered, changed = recover_expired_lock_v4(queue, now=now)
+    if not changed:
+        raise ReviewPending("task still has a live holder")
+    return recovered
+
+
 def finish_review(state: Mapping[str, Any], task: Mapping[str, Any], evidence: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
     queue = state["queue"]
     assert_v4_queue_bound_to_authority(queue, state["bundle"])
-    if queue.get("execution_lock") is not None or not eligible(task):
-        raise ReviewPending("task is held or no longer waiting for external review")
+    if not eligible(task):
+        raise ReviewPending("task is no longer waiting for external review")
     if not any(t == task for t in queue["tasks"]):
         raise ReviewPending("task does not belong to the current queue")
-    result = deepcopy(queue)
+    result = deepcopy(_unheld_queue(queue, task, now=now))
     updated = next(t for t in result["tasks"] if t["task_id"] == task["task_id"])
     updated.update(status="READY", phase=None, external_review=dict(evidence["external_review"]),
                    updated_at=now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
@@ -188,11 +202,22 @@ def main() -> int:
                 or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"):
             raise admin.OwnerAdminError("review resume requires trusted native Engine main")
         state = _load_state()
-        if state["queue"].get("execution_lock") is not None:
-            print("CONTROL_V4_REVIEW_RESUME=BUSY")
-            return 0
         pending = [t for t in state["queue"]["tasks"] if eligible(t)]
-        for task in pending[:8]:
+        lock = state["queue"].get("execution_lock")
+        if lock is not None:
+            pending = [t for t in pending if t["task_id"] == lock["task_id"]]
+            try:
+                if not pending:
+                    raise ReviewPending("holder belongs to another scope")
+                _unheld_queue(state["queue"], pending[0], now=datetime.now(timezone.utc))
+            except ReviewPending:
+                print("CONTROL_V4_REVIEW_RESUME=BUSY")
+                return 0
+        # Rotate bounded reads by the native hourly clock. No persistent cursor;
+        # stale early entries cannot indefinitely hide later completed reviews.
+        offset = (int(datetime.now(timezone.utc).timestamp()) // 3600 * 8) % len(pending) if pending else 0
+        batch = (pending[offset:] + pending[:offset])[:8]
+        for task in batch:
             try:
                 evidence = completion_evidence(state, task)
                 result = finish_review(state, task, evidence, now=datetime.now(timezone.utc))
