@@ -133,7 +133,7 @@ def test_v4_runner_object_prompt_and_system_index_are_public_trust_anchors():
     assert "419afc91bc4b1f3fa7f1d624d713077452a3d7ee" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "3e577ae37c46d39b07e8b1bb9a19d59d4bddd242" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
     assert "2cc54e0fbf21b93609d3c4e093bcdacfb566fcb0" in validator.OBSOLETE_RUNNER_PROMPT_BLOB_SHAS
-    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "7d62d2196e87c09fd76e2595f0a23be5c8ede047"
+    assert validator.REVIEWED_SYSTEM_INDEX_BLOB_SHA == "e8c832f490a57a9df589bc9569a7e857c2fa73a4"
     validator.require_reviewed_automation_object_id(validator.REVIEWED_AUTOMATION_OBJECT_ID)
     for value in ("0" * 32, "6a9a7e0b18b08191876c134d83cfbba3", None):
         with pytest.raises(validator.ValidationError, match="exact reviewed V4-30 object"):

@@ -45,7 +45,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from control_engine.v4_authority_io import V4AuthorityBundle, assert_v4_queue_bound_to_authority
 from control_engine.v4_contracts import (
@@ -285,7 +285,7 @@ def validate_public_target(command: Mapping[str, Any], target: Mapping[str, Any]
         raise OwnerAdminError("target candidate base branch drifted")
 
     operation = command["operation"]
-    if operation in {"ACTIVATE_ROOT_CANDIDATE", "REBIND_READY_CANDIDATE"}:
+    if operation in {"ACTIVATE_ROOT_CANDIDATE", "REBIND_READY_CANDIDATE", "RECONCILE_EXTERNAL_REVIEW"}:
         if target.get("base_sha") != exact["expected_base_sha"]:
             raise OwnerAdminError("target candidate base drifted")
         if target.get("state") != "open" or target.get("merged") is not False:
@@ -1061,6 +1061,8 @@ def _write_queue_exact(
     state: Mapping[str, Any],
     queue: Mapping[str, Any],
     command: Mapping[str, Any],
+    *,
+    pre_ref_cas: Callable[[], None] | None = None,
 ) -> str:
     operation = command["operation"]
     validate_queue_v4(queue)
@@ -1138,6 +1140,8 @@ def _write_queue_exact(
             }
         },
     }
+    if pre_ref_cas is not None:
+        pre_ref_cas()
     result = _request_json(
         GRAPHQL,
         headers={**_private_headers(), "Content-Type": "application/json"},

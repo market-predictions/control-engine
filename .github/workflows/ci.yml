@@ -83,7 +83,7 @@ jobs:
           grep -q 'workflow_dispatch:' .github/workflows/control-v4-runtime-carrier.yml
           grep -q "inputs.mode == 'control-go'" .github/workflows/control-v4-runtime-carrier.yml
           grep -q 'python scripts/control_v4_queue_open_gap.py' .github/workflows/control-v4-runtime-carrier.yml
-          ! grep -q '^  schedule:' .github/workflows/control-v4-runtime-carrier.yml
+          grep -q 'python scripts/control_v4_review_resume.py' .github/workflows/control-v4-runtime-carrier.yml
           ! grep -q 'PATCH_QUEUE' .github/workflows/control-v4-runtime-carrier.yml
           grep -q 'replenishment_approval_payload_v4' scripts/control_v4_replenishment_snapshot.py
           ! grep -q '_write_queue_exact' scripts/control_v4_replenishment_snapshot.py

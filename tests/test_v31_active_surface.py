@@ -34,7 +34,7 @@ def test_no_competing_semantic_runtime_writer_remains_after_v31_writer_retiremen
     assert 'RELEASE' not in authority_carrier
 
     runtime_carrier = current['control-v4-runtime-carrier.yml']
-    assert '\n  schedule:' not in runtime_carrier
+    assert 'python scripts/control_v4_review_resume.py' in runtime_carrier
     assert '\n  workflow_dispatch:\n' in runtime_carrier
     assert 'pull_request_target:' not in runtime_carrier
     assert 'CONTROL_V4_RUNTIME_TICK' in runtime_carrier
@@ -74,7 +74,7 @@ def test_v4_authority_carrier_is_manual_principal_main_only_and_least_privilege(
 def test_v4_runtime_carrier_is_principal_main_only_and_private_capability_is_exactly_scoped():
     carrier = workflows()['control-v4-runtime-carrier.yml']
     assert '\n  issue_comment:\n    types: [created]' in carrier
-    assert '\n  schedule:' not in carrier
+    assert 'python scripts/control_v4_review_resume.py' in carrier
     assert '\n  workflow_dispatch:\n' in carrier
     assert 'pull_request_target:' not in carrier
     assert "github.repository == 'market-predictions/control-engine'" in carrier

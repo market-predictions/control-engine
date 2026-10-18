@@ -91,26 +91,31 @@ private-main/runtime atomic CAS and `HOLD_AFTER_PASS` are unchanged.
 GitHub's squash merge is *not* automatic Control task finalization; an explicit
 owner-admin closeout is still required.
 
-### Native owner-started direct handover (start and guarded review rejection verified)
+### Native start and background review completion
 
-The existing **Control V4 Runtime Carrier** GitHub Actions workflow now offers
-`Run workflow → mode: control-go` as the default native owner start.
-It invokes the unchanged guarded V4 carrier exactly once, then publishes a
-`CONTROL_INTERACTIVE_HANDOVER_V1` receipt on Control Engine issue #106.
-ChatGPT Control can read that receipt in the active chat and continue work,
-using the existing governed project PR and Codex review.
+`Control V4 Runtime Carrier → Run workflow → mode: control-go` is the native
+human start. It acquires one governed task and posts the existing handover on
+issue #106. Native `v41:control-go:` progress retains its exact original holder;
+YIELD, READY and drift release it. Engine PR #188 and Weekly ETF PR #131 provide
+scoped historical proof of same-task finding/repair/re-review and approved closeout.
 
-This is a **human-started** flow: a GitHub Actions event cannot wake an
-inactive ChatGPT conversation. The receipt is transport, not a semantic
-review verdict, a permanent claim, or authority to bypass a current lease.
-An accepted Control EVENT still requires the existing live holder,
-candidate and private CAS checks. The job attempts a guarded YIELD if
-handover publication fails. `mode: legacy-work` retains the historical
-optional Work pilot, but is not the default.
+The same workflow's hourly `:30` **review-resume** job (also manually selectable)
+finishes one already-requested clean EXTERNAL review without waking ChatGPT.
+It reads the existing private queue, requires no holder, exact internal PASS,
+immutable owner request/trusted Codex PASS, no current-head findings and all
+explicitly configured GitHub Actions checks successful on that exact commit.
+Empty check configuration, stale head/base, edited/ambiguous evidence and failures
+stay pending. The final evidence recheck precedes the existing atomic private
+main/runtime CAS; duplicates see READY and do nothing. No target writes, repair,
+new work, lease renewal or merge occurs. A real delayed review reaching READY
+with the chat closed is required before claiming productive background liveness.
 
-Do not mark this mode SEMI_AUTONOMOUS_LIVE until exact-head CI,
-independent review, merge, an actual owner-dispatch/receipt readback,
-and a real guarded task transition are proven.
+Private authority remains data only. Cron lives in the existing public Engine;
+GitHub may delay/drop runs or disable public schedules after 60 inactive days.
+The next run reads pending work afresh; use native GitHub re-enablement after
+inactivity. No Guardian or keep-alive commits. Existing push/e-mail settings
+remain off. Read `CONTROL_V4_REVIEW_RESUME` in Actions logs for the actual result.
+The replaced Work handoff, probe and inert PULSE pilot have been removed.
 
 Project-specific stack failures (such as Agent's Hermes/FreeLLMAPI live model check) are not outages of Control infrastructure. A required failing test still blocks **that project's** acceptance; it never justifies a fabricated PASS.
 
@@ -120,7 +125,7 @@ Project-specific stack failures (such as Agent's Hermes/FreeLLMAPI live model ch
 
 Existing V4 guarded transitions enforce exact task/holder, nonrenewable lease, fresh public TICK, authenticated command/result correlation, exact PR/head/base, atomic private-main no-op + runtime-ref GraphQL compare-and-swap and atomic EVENT holder release. `integration_enabled=false` remains a protected merge hold; owner-authorized integration is a separate action. Public issue #106 is transport/audit **only**.
 
-The legacy Scheduled Runner uses typed TICK/EVENT messages when enabled; the currently suspended `workflow_dispatch` interactive-resume job contains an owner-start + Work WAKE/READY/WORK handoff. These are technical capabilities/historical references, **not** instructions to make Work or the Scheduled Runner a required dependency of the adopted interactive operating policy. Their existence does not prove that the unimplemented ChatGPT interactive authority handoff works.
+The legacy Scheduled prompt/configuration stays bound compatibility data for existing V4 validation; the AI Runner remains disabled. The background-review job is deterministic and does not supply unattended ChatGPT reasoning.
 
 V4 replenishment remains bounded by current Mission, repo authority, dependency and exact owner-authored candidate PR eligibility. No phantom BUILD task or synthetic PR is allowed. Never invent a new Mission, bypass an approval or fabricate a queue status for a dashboard.
 
@@ -130,5 +135,4 @@ No parallel Runner/queue/broker/Guardian/retry ledger or duplicate state plane. 
 
 - [Private canonical Control System Index](https://github.com/market-predictions/control-plane/blob/main/control/SYSTEM_INDEX.md) and [Operating Model](https://github.com/market-predictions/control-plane/blob/main/control/CONTROL_OPERATING_MODEL.md): actual user interaction and authority hierarchy.
 - [Public/private boundary](docs/PUBLIC_PRIVATE_BOUNDARY_V4.md): enforced technical trust and CAS controls.
-- [Interactive PULSE pilot](control/CONTROL_V41_INTERACTIVE_PULSE_PILOT.md): **historical, non-adopted pilot**, not the current command.
 - [Replenishment history](docs/CONTROL_V4_REPLENISHMENT_DISCOVERY.md) and [stabilization record](docs/CONTROL_V4_STABILIZATION_2026_09_09.md): technical background; current queue/authority always need live readback.
