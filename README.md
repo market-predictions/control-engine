@@ -98,6 +98,14 @@ issue #106. Native `v41:control-go:` progress retains its exact original holder;
 YIELD, READY and drift release it. Engine PR #188 and Weekly ETF PR #131 provide
 scoped historical proof of same-task finding/repair/re-review and approved closeout.
 
+The optional `repository` input (for example `market-predictions/weekly-etf`)
+narrows both OPEN-gap materialization and the actual task claim to that current
+Mission's repository. Leave it empty to retain queue priority. It grants no new
+Mission scope, never claims unrelated client work, and cannot select Agent through
+the core start. Unknown repositories fail before queue mutation. The input is
+ignored by review-resume and issue-comment continuation; the exact holder still
+controls every continuation.
+
 The same workflow's hourly `:30` **review-resume** job (also manually selectable)
 finishes one already-requested clean EXTERNAL review without waking ChatGPT.
 It reads the existing private queue, requires no live holder, exact internal PASS,

@@ -448,6 +448,7 @@ def select_task_id_v4(
     yielded_task_tokens: Sequence[str] = (),
     integration_enabled: bool,
     excluded_repositories: frozenset[str] = frozenset(),
+    requested_repository: str | None = None,
 ) -> str | None:
     validate_queue_v4(queue)
     if queue.get("execution_lock") is not None:
@@ -457,6 +458,7 @@ def select_task_id_v4(
     def available(task: Mapping[str, Any]) -> bool:
         return (
             task["repository"].lower() not in excluded_repositories
+            and (requested_repository is None or task["repository"].lower() == requested_repository)
             and task_token(task, run_id) not in yielded
         )
 

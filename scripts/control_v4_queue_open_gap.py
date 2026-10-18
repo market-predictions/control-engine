@@ -12,18 +12,24 @@ import os
 
 from control_engine.v4_runtime_protocol import CORE_EXCLUDED_REPOSITORIES
 from control_engine.v4_authority_io import assert_v4_queue_bound_to_authority
-from control_engine.v4_contracts import validate_queue_v4, v4_root_task_id
+from control_engine.v4_contracts import V4ValidationError, validate_queue_v4, v4_root_task_id
 from scripts import control_v4_owner_admin as admin
 from scripts import control_v4_runtime_carrier as carrier
 
 
-def plan_one(queue, bundle, *, now, excluded_repositories=frozenset()):
+def plan_one(queue, bundle, *, now, excluded_repositories=frozenset(), requested_repository=None):
     validate_queue_v4(queue)
     assert_v4_queue_bound_to_authority(queue, bundle)
+    if requested_repository is not None and requested_repository not in {
+        mission["repository"].lower() for mission in bundle.missions
+    }:
+        raise V4ValidationError("requested repository has no current Mission")
     if queue["execution_lock"] is not None:
         return None
     repositories = sorted({m["repository"] for m in bundle.missions})
     for repository in repositories:
+        if requested_repository is not None and repository.lower() != requested_repository:
+            continue
         if repository.lower() in excluded_repositories:
             continue
         eligible = admin.eligible_unmaterialized_gaps_v4(queue, bundle, repository)
@@ -70,6 +76,7 @@ def main():
     bundle = carrier._load_authority_bundle(state["main_sha"])
     proposed = plan_one(
         state["queue"], bundle, now=datetime.now(timezone.utc),
+        requested_repository=carrier._native_start_repository(),
         excluded_repositories=(
             CORE_EXCLUDED_REPOSITORIES
             if os.environ.get("CONTROL_V4_CORE_FLOW") == "true"
