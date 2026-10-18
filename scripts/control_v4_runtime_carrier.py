@@ -26,6 +26,7 @@ from control_engine.v4_runtime_protocol import (
     EXTERNAL_REVIEW_BOT_LOGIN,
     EXTERNAL_REVIEW_BOT_USER_ID,
     INTERACTIVE_RUN_ID_RE,
+    REPOSITORY_RE,
     RESULT_PROTOCOL_ID,
     RuntimeProtocolError,
     StaleEventError,
@@ -650,6 +651,19 @@ def _park_terminal_target(queue: Mapping[str, Any], *, task_id: str, blocker: st
     return result
 
 
+def _native_start_repository() -> str | None:
+    """Narrow only a native core start; public commands cannot select new scope."""
+    if (os.environ.get("CONTROL_V4_CORE_FLOW") != "true"
+            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"):
+        return None
+    repository = os.environ.get("CONTROL_V4_START_REPOSITORY", "").strip().lower()
+    if not repository:
+        return None
+    if not REPOSITORY_RE.fullmatch(repository) or repository in CORE_EXCLUDED_REPOSITORIES:
+        raise RuntimeProtocolError("requested repository is invalid or excluded from core flow")
+    return repository
+
+
 def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
     if state["runtime_enabled"] is not True:
         return state, {"protocol": RESULT_PROTOCOL_ID, "result": "NO_WORK", "run_id": command["run_id"]}
@@ -698,11 +712,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
 
     no_progress_unblocked = False
     terminal_target_parked = False
+    requested_repository = _native_start_repository()
     resumed_live_candidates: dict[str, dict[str, Any]] = {}
     for blocked in list(queue["tasks"]):
         candidate = blocked.get("candidate")
         if (
-            blocked.get("status") != "BLOCKED"
+            (requested_repository is not None and blocked["repository"].lower() != requested_repository)
+            or blocked.get("status") != "BLOCKED"
             or blocked.get("blocker") != NO_PROGRESS_BLOCKER
             or not isinstance(candidate, Mapping)
         ):
@@ -728,6 +744,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             run_id=command["run_id"],
             yielded_task_tokens=command.get("yielded_task_tokens", []),
             integration_enabled=False,
+            requested_repository=requested_repository,
             # Only the principal-started native control-go job narrows scope.
             # Issue-comment TICK/EVENT and historical runners retain their policy.
             excluded_repositories=(

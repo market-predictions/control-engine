@@ -16,6 +16,11 @@ on:
         options:
           - control-go
           - review-resume
+      repository:
+        description: "Optional control-go repository (owner/name); empty uses existing queue priority"
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -298,6 +303,7 @@ jobs:
     # Core engineering is independent of the optional Agent/Hermes project.
     env:
       CONTROL_V4_CORE_FLOW: 'true'
+      CONTROL_V4_START_REPOSITORY: ${{ inputs.repository }}
     permissions:
       contents: read
       issues: write
