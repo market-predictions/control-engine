@@ -207,3 +207,83 @@ def test_no_work_fallback_rejects_private_proposals_even_if_runtime_target_has_t
         replenish._assert_proposal_targets_public({
             "replenishment_proposals": [{"repository": MEMORY}]
         })
+
+
+def test_review_repository_rotation_cannot_starve_one_sparse_project(monkeypatch):
+    """A/B cannot be phase-locked to the older eight-task batch offset."""
+    from datetime import datetime, timedelta, timezone
+    from scripts import control_v4_review_resume as resume
+    a = "market-predictions/private-a"
+    b = "market-predictions/private-b"
+    repositories = [a] * 7 + [b] + [a] * 8
+    queue = {
+        "tasks": [{"task_id": f"task-{index}", "repository": repo}
+                  for index, repo in enumerate(repositories)],
+        "execution_lock": None,
+    }
+    monkeypatch.setattr(resume, "eligible", lambda task: True)
+    start = datetime(2026, 10, 21, 0, tzinfo=timezone.utc)
+    selected = [resume.selected_review_repository(
+        queue, now=start + timedelta(hours=hours)
+    ) for hours in range(2)]
+    assert set(selected) == {a, b}
+    for hours, repository in enumerate(selected):
+        batch = resume.current_review_batch(
+            queue, now=start + timedelta(hours=hours), repository=repository,
+        )
+        assert batch
+        assert all(task["repository"] == repository for task in batch)
+
+
+def test_public_other_owner_remains_supported_without_private_app_token(monkeypatch, tmp_path):
+    external = "other-owner/public-repository"
+    monkeypatch.setattr(
+        scope.carrier, "_load_authority_bundle",
+        lambda sha: SimpleNamespace(missions=[{"repository": external}]),
+    )
+    monkeypatch.setattr(scope.review, "eligible", lambda task: True)
+    monkeypatch.setattr(
+        scope.carrier, "_load_current",
+        lambda: {
+            "main_sha": "a" * 40,
+            "queue": {
+                "tasks": [{"task_id": "one", "repository": external}],
+                "execution_lock": None,
+            },
+        },
+    )
+    monkeypatch.setattr(scope.carrier, "_public_get",
+                        lambda path, allow_404=False: {
+                            "full_name": external, "private": False
+                        })
+    out = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "review")
+    scope.main()
+    assert "has_targets=false" in out.read_text()
+    assert "review_repository=" + external in out.read_text()
+    assert "repository_names<<CONTROL_SCOPE_END\\n\\nCONTROL_SCOPE_END" not in out.read_text()
+
+
+def test_private_external_owner_rejected_without_installed_owner_app(monkeypatch, tmp_path):
+    external = "other-owner/private-repository"
+    monkeypatch.setattr(
+        scope.carrier, "_load_authority_bundle",
+        lambda sha: SimpleNamespace(missions=[{"repository": external}]),
+    )
+    monkeypatch.setattr(scope.review, "eligible", lambda task: True)
+    monkeypatch.setattr(scope.carrier, "_load_current", lambda: {
+        "main_sha": "a" * 40,
+        "queue": {
+            "tasks": [{"task_id": "one", "repository": external}],
+            "execution_lock": None,
+        },
+    })
+    monkeypatch.setattr(scope.carrier, "_public_get",
+                        lambda path, allow_404=False: None)
+    out = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "review")
+    with pytest.raises(ValueError, match="installed owner-scoped App"):
+        scope.main()
+    assert not out.exists()
