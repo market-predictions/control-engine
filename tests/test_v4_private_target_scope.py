@@ -111,3 +111,51 @@ def test_existing_workflows_gate_short_lived_scoped_read_tokens():
         assert "repositories: ${{ steps.target-scope.outputs.repository_names }}" in text
         assert "CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}" in text
         assert "CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}" in text
+
+
+def test_scope_output_mints_token_only_for_private_targets(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        scope.carrier, "_load_authority_bundle",
+        lambda sha: SimpleNamespace(missions=[{"repository": MEMORY}, {"repository": PUBLIC}]),
+    )
+    monkeypatch.setattr(
+        scope.carrier, "_load_current",
+        lambda: {"main_sha": "a" * 40, "queue": {"tasks": [], "execution_lock": None}},
+    )
+    monkeypatch.setattr(
+        scope.carrier, "_public_get",
+        lambda path, allow_404=False: {"full_name": PUBLIC, "private": False}
+        if path == "repos/" + PUBLIC else None,
+    )
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "native")
+    monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", PUBLIC)
+    scope.main()
+    assert "has_targets=false" in output.read_text()
+    output.write_text("")
+    monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", MEMORY)
+    scope.main()
+    assert "has_targets=true" in output.read_text()
+    assert "repository_names<<CONTROL_SCOPE_END\\nmemory\\nCONTROL_SCOPE_END" in output.read_text()
+    assert "market-predictions/control-plane" not in output.read_text()
+
+
+def test_invalid_public_identity_fails_before_token_creation(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        scope.carrier, "_load_authority_bundle",
+        lambda sha: SimpleNamespace(missions=[{"repository": MEMORY}]),
+    )
+    monkeypatch.setattr(
+        scope.carrier, "_load_current",
+        lambda: {"main_sha": "a" * 40, "queue": {"tasks": [], "execution_lock": None}},
+    )
+    monkeypatch.setattr(scope.carrier, "_public_get", lambda path, allow_404=False:
+                        {"full_name": "other/untrusted", "private": False})
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "native")
+    monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", MEMORY)
+    with pytest.raises(ValueError, match="identity mismatch"):
+        scope.main()
+    assert not output.exists()
