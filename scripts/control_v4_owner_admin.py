@@ -47,6 +47,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Mapping
 
+from scripts import control_v4_target_access as target_access
+
 from control_engine.v4_authority_io import V4AuthorityBundle, assert_v4_queue_bound_to_authority
 from control_engine.v4_contracts import (
     V4ValidationError,
@@ -754,7 +756,9 @@ def _private_post(path: str, payload: Mapping[str, Any]) -> Any:
 
 
 def _public_get(path: str) -> Any:
-    return _request_json(f"{API}/{path}", headers=_public_headers())
+    return _request_json(
+        f"{API}/{path}", headers={**_public_headers(), **target_access.target_headers(path)}
+    )
 
 
 def _branch_head(repository: str, branch: str, *, private: bool) -> str:
@@ -1007,9 +1011,10 @@ def _public_external_review(command: Mapping[str, Any], queue: Mapping[str, Any]
 
 def _public_target(command: Mapping[str, Any]) -> dict[str, Any]:
     repository = command["repository"]
-    repo = _public_get(f"repos/{repository}")
-    if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
-        raise OwnerAdminError("target repository must be public and exact")
+    try:
+        target_access.assert_supported_target(repository, _public_get)
+    except target_access.TargetAccessError as exc:
+        raise OwnerAdminError("target repository lacks exact scoped read access") from exc
     pr = _public_get(f"repos/{repository}/pulls/{command['candidate_pr_number']}")
     if not isinstance(pr, Mapping):
         raise OwnerAdminError("target PR unavailable")
