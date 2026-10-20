@@ -51,16 +51,18 @@ def choose(mode: str, state: dict) -> list[str]:
             else:
                 repositories = []
     elif mode == "review":
-        # At most one bounded current review task completes per run. The existing
-        # review-resume still checks every candidate and all exact CI/review facts.
-        repositories = sorted({
-            t["repository"] for t in queue["tasks"] if review.eligible(t)
-        })
+        # One repository per invocation, never all pending private projects.
+        # The existing review job still proves exact candidate/CI/review facts.
+        from datetime import datetime, timezone
+        targets = sorted({t["repository"] for t in queue["tasks"] if review.eligible(t)})
+        repositories = [targets[int(datetime.now(timezone.utc).timestamp()) // 3600 % len(targets)]] if targets else []
     elif mode == "owner-admin":
         command = admin.parse_owner_admin_command(os.environ["CONTROL_V4_OWNER_COMMAND"])
         repositories = [command["repository"]]
     elif mode == "replenish":
-        repositories = sorted(authorized)
+        # Automatic NO_WORK discovery remains public-only. Never grant
+        # access to every private Mission merely to search for candidates.
+        repositories = []
     else:
         raise ValueError("unknown target scope source")
 
