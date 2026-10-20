@@ -25,9 +25,9 @@ The native `mode: control-go` path is Control engineering/orchestration, **not t
 
 The same native `control-go` workflow accepts an **exact** `owner/name`
 repository from current private Mission and repository authority, including
-selected private repositories. For private work use `mode: control-go` and
-supply the exact repository; an empty repository input does **not** grant
-general access to private projects.
+selected private repositories. For a targeted start use `mode: control-go` and supply the exact repository.
+With an empty input, the existing Mission queue selects one current task first;
+only that selected task may receive a short-lived private read token.
 
 Trusted existing GitHub Actions computes at most one exact current-authorized
 target and mints a short-lived GitHub App **read-only target token** only if
