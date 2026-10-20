@@ -21,7 +21,32 @@ def choose(mode: str, state: dict) -> list[str]:
     authorized = {m["repository"].lower() for m in carrier._load_authority_bundle(state["main_sha"]).missions}
     if mode == "native":
         requested = os.environ.get("CONTROL_V4_START_REPOSITORY", "").strip().lower()
-        repositories = [requested] if requested else []
+        if requested:
+            repositories = [requested]
+        else:
+            # Native default selects from the post-materialization current queue
+            # with the SAME existing task priority and Agent exclusion as _tick.
+            # It must not grant a generic all-Mission installation capability.
+            from datetime import datetime, timezone
+            candidate_queue = queue
+            if candidate_queue.get("execution_lock") is not None:
+                candidate_queue, changed = carrier.recover_expired_lock_v4(
+                    candidate_queue, now=datetime.now(timezone.utc),
+                )
+            if candidate_queue.get("execution_lock") is None:
+                run_id = "v41:control-go:" + os.environ["GITHUB_RUN_ID"]
+                task_id = select_task_id_v4(
+                    candidate_queue,
+                    run_id=run_id,
+                    integration_enabled=False,
+                    excluded_repositories=carrier.CORE_EXCLUDED_REPOSITORIES,
+                )
+                repositories = [
+                    next(task["repository"] for task in candidate_queue["tasks"]
+                         if task["task_id"] == task_id)
+                ] if task_id else []
+            else:
+                repositories = []
     elif mode == "event":
         command = parse_public_command(os.environ["CONTROL_V4_PUBLIC_COMMAND"])
         if command["kind"] == "EVENT":
