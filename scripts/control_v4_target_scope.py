@@ -18,7 +18,7 @@ from scripts import control_v4_runtime_carrier as carrier
 
 def choose(mode: str, state: dict) -> list[str]:
     queue = state["queue"]
-    authorized = {m["repository"].lower() for m in state["bundle"].missions}
+    authorized = {m["repository"].lower() for m in carrier._load_authority_bundle(state["main_sha"]).missions}
     if mode == "native":
         requested = os.environ.get("CONTROL_V4_START_REPOSITORY", "").strip().lower()
         repositories = [requested] if requested else []
