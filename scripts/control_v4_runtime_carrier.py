@@ -49,6 +49,8 @@ from control_engine.v4_runtime_protocol import (
     validate_runtime_binding,
     yield_holder_v4,
 )
+from scripts import control_v4_target_access as target_access
+
 from control_engine.v4_safety import (
     NO_PROGRESS_BLOCKER,
     block_no_progress_after_recheck_v4,
@@ -159,6 +161,7 @@ def _public_get(path: str, *, allow_404: bool = False) -> Any:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "control-v4-runtime-carrier-public-read",
+            **target_access.target_headers(path),
         },
         allow_404=allow_404,
     )
@@ -511,14 +514,15 @@ def _write_queue_exact(
     return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": dict(queue)}
 
 
-def _assert_public_target_repository(repository: str) -> None:
-    repo = _public_get(f"repos/{repository}", allow_404=True)
-    if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
-        raise RuntimeProtocolError("target repository is not publicly readable by carrier V1")
+def _assert_target_repository(repository: str) -> None:
+    try:
+        target_access.assert_supported_target(repository, _public_get)
+    except (target_access.TargetAccessError, CarrierError) as exc:
+        raise RuntimeProtocolError("target repository is not readable with exact authorized capability") from exc
 
 
 def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
-    _assert_public_target_repository(repository)
+    _assert_target_repository(repository)
     pr = _public_get(f"repos/{repository}/pulls/{pr_number}", allow_404=True)
     if not isinstance(pr, Mapping) or pr.get("number") != pr_number:
         raise RuntimeProtocolError("target pull request is unavailable")
@@ -783,7 +787,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
             if task.get("phase") == "REPAIR":
                 live_candidate = observed
         else:
-            _assert_public_target_repository(task["repository"])
+            _assert_target_repository(task["repository"])
         break
 
     # Collect only an advisory snapshot before acquisition/CAS, so a later
