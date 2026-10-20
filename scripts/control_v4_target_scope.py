@@ -22,31 +22,38 @@ def choose(mode: str, state: dict) -> list[str]:
     if mode == "native":
         requested = os.environ.get("CONTROL_V4_START_REPOSITORY", "").strip().lower()
         if requested:
+            # Explicit selection is the only way to authorize a private target.
             repositories = [requested]
         else:
-            # Native default selects from the post-materialization current queue
-            # with the SAME existing task priority and Agent exclusion as _tick.
-            # It must not grant a generic all-Mission installation capability.
-            from datetime import datetime, timezone
+            # Retain default PUBLIC engineering selection, even when private
+            # Missions also exist. One anonymous check at a time, never a broad
+            # private installation token and never a second selection policy.
             candidate_queue = queue
             if candidate_queue.get("execution_lock") is not None:
-                candidate_queue, changed = carrier.recover_expired_lock_v4(
-                    candidate_queue, now=datetime.now(timezone.utc),
-                )
-            if candidate_queue.get("execution_lock") is None:
-                run_id = "v41:control-go:" + os.environ["GITHUB_RUN_ID"]
-                task_id = select_task_id_v4(
-                    candidate_queue,
-                    run_id=run_id,
-                    integration_enabled=False,
-                    excluded_repositories=carrier.CORE_EXCLUDED_REPOSITORIES,
-                )
-                repositories = [
-                    next(task["repository"] for task in candidate_queue["tasks"]
-                         if task["task_id"] == task_id)
-                ] if task_id else []
-            else:
                 repositories = []
+            else:
+                run_id = "v41:control-go:" + os.environ["GITHUB_RUN_ID"]
+                excluded = set(carrier.CORE_EXCLUDED_REPOSITORIES)
+                repositories = []
+                while True:
+                    task_id = select_task_id_v4(
+                        candidate_queue, run_id=run_id,
+                        integration_enabled=False,
+                        excluded_repositories=frozenset(excluded),
+                    )
+                    if task_id is None:
+                        break
+                    repository = next(task["repository"] for task in candidate_queue["tasks"]
+                                      if task["task_id"] == task_id)
+                    visible = carrier._public_get(f"repos/{repository}", allow_404=True)
+                    if (isinstance(visible, dict)
+                            and visible.get("full_name") == repository
+                            and visible.get("private") is False):
+                        repositories = [repository]
+                        break
+                    # All tasks in the inaccessible repository are skipped
+                    # until the owner explicitly selects that private repo.
+                    excluded.add(repository.lower())
     elif mode == "event":
         command = parse_public_command(os.environ["CONTROL_V4_PUBLIC_COMMAND"])
         if command["kind"] == "EVENT":
@@ -138,6 +145,7 @@ def main() -> None:
         f.write("full_names<<CONTROL_SCOPE_END\n" + full_names + "\nCONTROL_SCOPE_END\n")
         f.write("has_targets=" + ("true" if private else "false") + "\n")
         f.write("review_repository=" + (selected[0] if mode == "review" and selected else "") + "\n")
+        f.write("native_repository=" + (selected[0] if mode == "native" and selected else "") + "\n")
     print("CONTROL_V4_TARGET_READ_SCOPE=" + ("PRIVATE_SELECTED" if private else "PUBLIC_ONLY"))
 
 
