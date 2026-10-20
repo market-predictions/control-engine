@@ -21,6 +21,30 @@ The native `mode: control-go` path is Control engineering/orchestration, **not t
 **This excludes the optional Agent/Hermes product from default task selection; it does not disable legitimate project acceptance checks or claim the Agent project is fixed.**
 
 
+### Selected private target repositories (Control V4 scoped capability)
+
+The same native `control-go` workflow accepts an **exact** `owner/name`
+repository from current private Mission and repository authority, including
+selected private repositories. For private work use `mode: control-go` and
+supply the exact repository; an empty repository input does **not** grant
+general access to private projects.
+
+Trusted existing GitHub Actions computes at most one exact current-authorized
+target and mints a short-lived GitHub App **read-only target token** only if
+that target is private. Public targets keep the original anonymous GitHub read
+path. The pre-existing `control-plane` contents-write capability remains a
+separate repository-restricted token; it cannot write target code. An ordinary
+ChatGPT engineer needs its own fresh valid Control holder and independently
+authorized project write capability. No target read token is a merge grant.
+
+The existing exact-head PR, CI, Codex-review, holder, lease, CAS and
+`HOLD_AFTER_PASS` controls are unchanged. An inaccessible or unauthorized
+private repository fails closed; no scope expansion by public comments or
+automatic discovery. Unattended NO_WORK replenishment proposals remain
+public-only rather than minting tokens for every registered private Mission.
+Public issue/audit transport may expose repository, PR, commit and status
+metadata, never private file content, tokens, private queue or Mission bodies.
+
 ### Native same-task continuation (adopted; productive milestone 2026-10-18)
 
 New `mode: control-go` starts use `v41:control-go:<GitHub run id>`. A validated
