@@ -267,7 +267,7 @@ def main() -> int:
             print("RUNTIME_COMMIT=" + commit)
             print("TARGET=" + json.dumps(evidence["command"], sort_keys=True))
             return 0
-        print("CONTROL_V4_REVIEW_RESUME=" + ("PENDING" if pending else "NO_WORK"))
+        print("CONTROL_V4_REVIEW_RESUME=" + ("PENDING" if batch else "NO_WORK"))
         return 0
     except (admin.OwnerAdminError, ValueError) as exc:
         print(f"CONTROL_V4_REVIEW_RESUME=REJECTED:{exc}")
