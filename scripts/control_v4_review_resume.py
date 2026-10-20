@@ -222,6 +222,20 @@ def _load_state() -> dict[str, Any]:
     return state
 
 
+def current_review_batch(queue: Mapping[str, Any], *, now: datetime) -> list[Mapping[str, Any]]:
+    """Single source of truth for deterministic review selection and token scope."""
+    pending = [task for task in queue["tasks"] if eligible(task)]
+    lock = queue.get("execution_lock")
+    if lock is not None:
+        pending = [task for task in pending if task["task_id"] == lock["task_id"]]
+        if not pending:
+            raise ReviewPending("holder belongs to another scope")
+        _unheld_queue(queue, pending[0], now=now)
+    # No new cursor or ledger: preserve the existing hourly bounded rotation.
+    offset = (int(now.timestamp()) // 3600 * 8) % len(pending) if pending else 0
+    return (pending[offset:] + pending[:offset])[:8]
+
+
 def main() -> int:
     try:
         if (os.environ.get("GITHUB_REPOSITORY") != admin.PUBLIC_REPOSITORY
@@ -230,21 +244,11 @@ def main() -> int:
                 or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"):
             raise admin.OwnerAdminError("review resume requires trusted native Engine main")
         state = _load_state()
-        pending = [t for t in state["queue"]["tasks"] if eligible(t)]
-        lock = state["queue"].get("execution_lock")
-        if lock is not None:
-            pending = [t for t in pending if t["task_id"] == lock["task_id"]]
-            try:
-                if not pending:
-                    raise ReviewPending("holder belongs to another scope")
-                _unheld_queue(state["queue"], pending[0], now=datetime.now(timezone.utc))
-            except ReviewPending:
-                print("CONTROL_V4_REVIEW_RESUME=BUSY")
-                return 0
-        # Rotate bounded reads by the native hourly clock. No persistent cursor;
-        # stale early entries cannot indefinitely hide later completed reviews.
-        offset = (int(datetime.now(timezone.utc).timestamp()) // 3600 * 8) % len(pending) if pending else 0
-        batch = (pending[offset:] + pending[:offset])[:8]
+        try:
+            batch = current_review_batch(state["queue"], now=datetime.now(timezone.utc))
+        except ReviewPending:
+            print("CONTROL_V4_REVIEW_RESUME=BUSY")
+            return 0
         for task in batch:
             try:
                 evidence = completion_evidence(state, task)
