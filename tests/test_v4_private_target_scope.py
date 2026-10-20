@@ -112,6 +112,8 @@ def test_existing_workflows_gate_short_lived_scoped_read_tokens():
         assert "repositories: ${{ steps.target-scope.outputs.repository_names }}" in text
         assert "CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}" in text
         assert "CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}" in text
+    workflow = (root / "control-v4-runtime-carrier.yml").read_text(encoding="utf-8")
+    assert "CONTROL_REVIEW_TARGET_REPOSITORY: ${{ steps.target-scope.outputs.review_repository }}" in workflow
 
 
 def test_scope_output_mints_token_only_for_private_targets(monkeypatch, tmp_path):
