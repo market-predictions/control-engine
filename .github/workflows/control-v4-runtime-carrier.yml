@@ -122,6 +122,28 @@ jobs:
           owner: market-predictions
           repositories: control-plane
           permission-contents: write
+      - name: Resolve exact target read scope
+        if: ${{ steps.admission.outputs.admitted == 'true' }}
+        id: target-scope
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_TARGET_SCOPE_MODE: event
+          CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
+        run: python scripts/control_v4_target_scope.py
+      - name: Create exact target read-only capability
+        if: ${{ steps.target-scope.outputs.has_targets == 'true' }}
+        id: target-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: ${{ steps.target-scope.outputs.repository_names }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: read
+          permission-checks: read
 
       - name: Execute bounded typed V4 runtime carrier
         if: ${{ steps.admission.outputs.admitted == 'true' }}
@@ -133,6 +155,8 @@ jobs:
           CONTROL_V4_PUBLIC_COMMAND: ${{ github.event.comment.body }}
           CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
+          CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_runtime_carrier.py
 
       - name: Diagnose anonymous REST budget after safe carrier error
@@ -187,6 +211,8 @@ jobs:
           CONTROL_V4_PUBLIC_COMMAND_ID: ${{ github.event.comment.id }}
           CONTROL_V4_PUBLIC_COMMAND_CREATED_AT: ${{ github.event.comment.created_at }}
           CONTROL_V4_CARRIER_RESULT: ${{ steps.carrier.outputs.result_json }}
+          CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_auto_replenish.py
 
       - name: Publish public-safe carrier result
@@ -279,11 +305,34 @@ jobs:
           owner: market-predictions
           repositories: control-plane
           permission-contents: write
+      - name: Resolve exact target read scope
+        if: ${{ true }}
+        id: target-scope
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_TARGET_SCOPE_MODE: review
+        run: python scripts/control_v4_target_scope.py
+      - name: Create exact target read-only capability
+        if: ${{ steps.target-scope.outputs.has_targets == 'true' }}
+        id: target-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: ${{ steps.target-scope.outputs.repository_names }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: read
+          permission-checks: read
       - name: Reconcile one pending exact-candidate review
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
+          CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_review_resume.py
 
   interactive-control-start:
@@ -327,6 +376,28 @@ jobs:
           owner: market-predictions
           repositories: control-plane
           permission-contents: write
+      - name: Resolve exact target read scope
+        if: ${{ true }}
+        id: target-scope
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_TARGET_SCOPE_MODE: native
+          CONTROL_V4_START_REPOSITORY: ${{ inputs.repository }}
+        run: python scripts/control_v4_target_scope.py
+      - name: Create exact target read-only capability
+        if: ${{ steps.target-scope.outputs.has_targets == 'true' }}
+        id: target-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: ${{ steps.target-scope.outputs.repository_names }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: read
+          permission-checks: read
       - name: Bind one native run to one fresh Control task acquisition
         env:
           OWNER_RUN_ID: ${{ github.run_id }}
@@ -367,6 +438,8 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
+          CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_runtime_carrier.py
       - name: Publish bounded handover to ChatGPT Control
         id: handover
