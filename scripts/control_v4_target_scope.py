@@ -78,16 +78,33 @@ def main() -> None:
     state = carrier._load_current()
     mode = os.environ["CONTROL_TARGET_SCOPE_MODE"]
     selected = choose(mode, state)
-    # GitHub create-github-app-token accepts newline-delimited repository names;
-    # all are current Mission-admitted, never arbitrary comment-supplied grants.
-    names = "\n".join(repo.split("/", 1)[1] for repo in selected)
-    full_names = "\n".join(selected)
+    private = []
+    for repository in selected:
+        # Keep every existing public target on the original unauthenticated path.
+        # GitHub intentionally returns 404 for inaccessible private repositories;
+        # only a current-Mission-approved owner/name may then receive a token.
+        observed = carrier._public_get(f"repos/{repository}", allow_404=True)
+        if observed is not None:
+            if not isinstance(observed, dict) or observed.get("full_name") != repository:
+                raise ValueError("target repository public identity mismatch")
+            if observed.get("private") is False:
+                continue
+            if observed.get("private") is not True:
+                raise ValueError("target repository privacy response invalid")
+        if not repository.startswith("market-predictions/"):
+            raise ValueError("private target requires an installed owner-scoped App")
+        private.append(repository)
+
+    # Empty scope must skip token creation entirely. Never mint an unrestricted
+    # installation token when a target was public or no private work exists.
+    names = "\n".join(repo.split("/", 1)[1] for repo in private)
+    full_names = "\n".join(private)
     output = Path(os.environ["GITHUB_OUTPUT"])
     with output.open("a", encoding="utf-8") as f:
         f.write("repository_names<<CONTROL_SCOPE_END\n" + names + "\nCONTROL_SCOPE_END\n")
         f.write("full_names<<CONTROL_SCOPE_END\n" + full_names + "\nCONTROL_SCOPE_END\n")
-        f.write("has_targets=" + ("true" if selected else "false") + "\n")
-    print("CONTROL_V4_TARGET_READ_SCOPE=" + ("SELECTED" if selected else "PUBLIC_ONLY"))
+        f.write("has_targets=" + ("true" if private else "false") + "\n")
+    print("CONTROL_V4_TARGET_READ_SCOPE=" + ("PRIVATE_SELECTED" if private else "PUBLIC_ONLY"))
 
 
 if __name__ == "__main__":
