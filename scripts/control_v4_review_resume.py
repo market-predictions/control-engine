@@ -222,8 +222,7 @@ def _load_state() -> dict[str, Any]:
     return state
 
 
-def current_review_batch(queue: Mapping[str, Any], *, now: datetime) -> list[Mapping[str, Any]]:
-    """Single source of truth for deterministic review selection and token scope."""
+def _pending_review_tasks(queue: Mapping[str, Any], *, now: datetime) -> list[Mapping[str, Any]]:
     pending = [task for task in queue["tasks"] if eligible(task)]
     lock = queue.get("execution_lock")
     if lock is not None:
@@ -231,10 +230,27 @@ def current_review_batch(queue: Mapping[str, Any], *, now: datetime) -> list[Map
         if not pending:
             raise ReviewPending("holder belongs to another scope")
         _unheld_queue(queue, pending[0], now=now)
-    # No new cursor or ledger: preserve the existing hourly bounded rotation.
+    return pending
+
+
+def selected_review_repository(queue: Mapping[str, Any], *, now: datetime) -> str | None:
+    """Rotate over ALL eligible repositories, independent of task-batch offset."""
+    pending = _pending_review_tasks(queue, now=now)
+    repositories = sorted({task["repository"] for task in pending})
+    if not repositories:
+        return None
+    return repositories[(int(now.timestamp()) // 3600) % len(repositories)]
+
+
+def current_review_batch(
+    queue: Mapping[str, Any], *, now: datetime, repository: str | None = None,
+) -> list[Mapping[str, Any]]:
+    """Keep current bounded per-task rotation, narrowed to the selected repository."""
+    pending = _pending_review_tasks(queue, now=now)
+    if repository is not None:
+        pending = [task for task in pending if task["repository"] == repository]
     offset = (int(now.timestamp()) // 3600 * 8) % len(pending) if pending else 0
     return (pending[offset:] + pending[:offset])[:8]
-
 
 def main() -> int:
     try:
@@ -245,15 +261,15 @@ def main() -> int:
             raise admin.OwnerAdminError("review resume requires trusted native Engine main")
         state = _load_state()
         try:
-            batch = current_review_batch(state["queue"], now=datetime.now(timezone.utc))
+            # The existing trusted workflow binds a single exact repository.
+            # With no scope (legacy local invocation), retain existing behavior.
+            selected = os.environ.get("CONTROL_REVIEW_TARGET_REPOSITORY")
+            batch = current_review_batch(
+                state["queue"], now=datetime.now(timezone.utc), repository=selected,
+            )
         except ReviewPending:
             print("CONTROL_V4_REVIEW_RESUME=BUSY")
             return 0
-        if "CONTROL_REVIEW_TARGET_REPOSITORY" in os.environ:
-            # Trusted scope step selects exactly one repository, or none. Never
-            # let the reviewer read a second private repo with the first token.
-            selected = os.environ["CONTROL_REVIEW_TARGET_REPOSITORY"]
-            batch = [task for task in batch if task["repository"] == selected]
         for task in batch:
             try:
                 evidence = completion_evidence(state, task)
