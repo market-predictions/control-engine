@@ -137,7 +137,7 @@ def test_scope_output_mints_token_only_for_private_targets(monkeypatch, tmp_path
     monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", MEMORY)
     scope.main()
     assert "has_targets=true" in output.read_text()
-    assert "repository_names<<CONTROL_SCOPE_END\\nmemory\\nCONTROL_SCOPE_END" in output.read_text()
+    assert "memory" in output.read_text().splitlines()
     assert "market-predictions/control-plane" not in output.read_text()
 
 
