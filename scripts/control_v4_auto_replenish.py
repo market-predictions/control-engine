@@ -26,6 +26,7 @@ from control_engine.v4_runtime_protocol import (
     strict_json_object,
 )
 from scripts import control_v4_owner_admin as owner_admin
+from scripts import control_v4_target_access as target_access
 from scripts import control_v4_replenishment_snapshot as snapshot
 from scripts import control_v4_runtime_carrier as runtime_carrier
 
@@ -44,10 +45,11 @@ def _auto_materialization_policy_enabled(state: Mapping[str, Any]) -> bool:
     return AUTO_MATERIALIZATION_POLICY in text.splitlines()
 
 
-def _exact_public_repository(repository: str) -> None:
-    value = owner_admin._public_get(f"repos/{repository}")
-    if not isinstance(value, Mapping) or value.get("full_name") != repository or value.get("private") is not False:
-        raise AutoReplenishError("replenishment target repository is not exact public repository")
+def _exact_target_repository(repository: str) -> None:
+    try:
+        target_access.assert_supported_target(repository, owner_admin._public_get)
+    except target_access.TargetAccessError as exc:
+        raise AutoReplenishError("replenishment target lacks exact scoped read access") from exc
 
 
 def _candidate_is_trusted_source(item: Mapping[str, Any], repository: str) -> bool:
@@ -59,7 +61,7 @@ def _candidate_is_trusted_source(item: Mapping[str, Any], repository: str) -> bo
         and isinstance(head_repo, Mapping)
         and isinstance(user, Mapping)
         and head_repo.get("full_name") == repository
-        and head_repo.get("private") is False
+        and head_repo.get("private") in (True, False)
         and user.get("login") == PRINCIPAL_LOGIN
     )
 
@@ -70,7 +72,7 @@ def _candidate_command(
     bundle: Any,
 ) -> dict[str, Any] | None:
     repository = gap["repository"]
-    _exact_public_repository(repository)
+    _exact_target_repository(repository)
     pulls = owner_admin._public_get(
         f"repos/{repository}/pulls?state=open&base=main&per_page=100&sort=updated&direction=desc"
     )
@@ -221,7 +223,7 @@ def _assert_proposal_targets_public(result: Mapping[str, Any]) -> None:
         repository = proposal.get("repository")
         if not isinstance(repository, str) or not repository:
             raise AutoReplenishError("replenishment repository identity invalid")
-        _exact_public_repository(repository)
+        _exact_target_repository(repository)
 
 
 def _set_output(result: Mapping[str, Any]) -> None:
