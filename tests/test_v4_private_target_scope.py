@@ -94,7 +94,8 @@ def test_review_scope_never_grants_access_to_all_pending_private_targets(monkeyp
         "main_sha": "a" * 40,
         "queue": {"tasks": [{"repository": t} for t in targets], "execution_lock": None},
     }
-    assert set(scope.choose("review", state)) == set(targets)
+    assert len(scope.choose("review", state)) == 1
+    assert scope.choose("review", state)[0] in targets
     assert scope.choose("replenish", state) == []
 
 
@@ -179,9 +180,9 @@ def test_review_token_scope_matches_exact_shared_batch_and_caps_one_private(monk
     monkeypatch.setattr(scope.carrier, "_public_get", lambda path, allow_404=False: None)
     from datetime import datetime, timezone
     batch = resume.current_review_batch(queue, now=datetime.now(timezone.utc))
-    assert set(scope.choose("review", {"main_sha": "a" * 40, "queue": queue})) == {
-        task["repository"] for task in batch
-    }
+    chosen = scope.choose("review", {"main_sha": "a" * 40, "queue": queue})
+    assert len(chosen) == 1
+    assert chosen[0] in {task["repository"] for task in batch}
     out = tmp_path / "output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "review")
@@ -189,6 +190,7 @@ def test_review_token_scope_matches_exact_shared_batch_and_caps_one_private(monk
     text = out.read_text()
     assert "has_targets=true" in text
     assert sum(name in text for name in targets) == 1
+    assert "review_repository=" + chosen[0] in text
 
 
 def test_no_work_fallback_rejects_private_proposals_even_if_runtime_target_has_token(monkeypatch):
