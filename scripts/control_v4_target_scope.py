@@ -51,17 +51,16 @@ def choose(mode: str, state: dict) -> list[str]:
             else:
                 repositories = []
     elif mode == "review":
-        # Derive from the exact same live-holder-filtered rotating batch as
-        # the reconciler, never independently select an unrelated repository.
+        # Rotate over all eligible repositories BEFORE taking each
+        # repository's bounded task batch; prevents correlated starvation.
         from datetime import datetime, timezone
         try:
-            batch = review.current_review_batch(queue, now=datetime.now(timezone.utc))
+            selected = review.selected_review_repository(
+                queue, now=datetime.now(timezone.utc),
+            )
         except review.ReviewPending:
-            batch = []
-        # One repository per review invocation. Rotate among this existing
-        # exact batch so a permanently pending private task cannot starve peers.
-        targets = sorted({task["repository"] for task in batch})
-        repositories = [targets[int(datetime.now(timezone.utc).timestamp()) // 3600 % len(targets)]] if targets else []
+            selected = None
+        repositories = [selected] if selected else []
     elif mode == "owner-admin":
         command = admin.parse_owner_admin_command(os.environ["CONTROL_V4_OWNER_COMMAND"])
         repositories = [command["repository"]]
@@ -75,9 +74,9 @@ def choose(mode: str, state: dict) -> list[str]:
     result = sorted(set(repositories))
     if any(repository.lower() not in authorized for repository in result):
         raise ValueError("target scope is outside current governed Mission")
-    # The existing GitHub App installation owner is 'market-predictions'. Another
-    # owner's private repo needs its own explicitly authorized installation.
-    return [repository for repository in result if repository.startswith("market-predictions/")]
+    # Public targets from any current Mission owner remain anonymously readable.
+    # Restrict the App owner only AFTER observing that a private token is needed.
+    return result
 
 
 def main() -> None:
