@@ -382,3 +382,21 @@ def test_native_schedule_is_narrow_and_replaces_work_pilot():
     assert "permission-pull-requests: write" not in job
     assert "permission-pull-requests: read" in job
     assert "steps.target-scope.outputs.has_targets == 'true'" in job
+
+
+def test_native_review_job_cannot_read_unselected_private_repository(case, monkeypatch, capsys):
+    state, task, *_ = case
+    native_env(monkeypatch)
+    monkeypatch.setattr(resume, "_load_state", lambda: state)
+    monkeypatch.setenv("CONTROL_REVIEW_TARGET_REPOSITORY", "market-predictions/other-private")
+    monkeypatch.setattr(
+        resume, "completion_evidence",
+        lambda *_args: pytest.fail("must never read outside selected target"),
+    )
+    monkeypatch.setattr(
+        admin, "_write_queue_exact",
+        lambda *_args, **_kwargs: pytest.fail("must never update without selected evidence"),
+    )
+    assert resume.main() == 0
+    assert "CONTROL_V4_REVIEW_RESUME=NO_WORK" in capsys.readouterr().out
+    assert state["queue"]["tasks"][0] == task
