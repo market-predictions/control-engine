@@ -289,7 +289,7 @@ def test_private_external_owner_rejected_without_installed_owner_app(monkeypatch
     assert not out.exists()
 
 
-def test_default_native_start_chooses_one_post_materialization_private_task(monkeypatch):
+def test_default_native_start_preserves_public_path_behind_private_work(monkeypatch):
     from test_v4_terminal_target_recovery import queue as v4_queue, task as v4_task
 
     private = "market-predictions/memory"
@@ -305,7 +305,17 @@ def test_default_native_start_chooses_one_post_materialization_private_task(monk
     )
     monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", "")
     monkeypatch.setenv("GITHUB_RUN_ID", "39505195811")
-    assert scope.choose("native", {"main_sha": "a" * 40, "queue": current}) == [private]
+    monkeypatch.setattr(scope.carrier, "_public_get",
+                        lambda path, allow_404=False: (
+                            {"full_name": public, "private": False}
+                            if path == "repos/" + public else None))
+    state = {"main_sha": "a" * 40, "queue": current}
+    assert scope.choose("native", state) == [public]
+    monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", private)
+    assert scope.choose("native", state) == [private]
+    monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", "")
+    assert scope.choose("native", {"main_sha": "a" * 40,
+                                   "queue": v4_queue(first)}) == []
 
 
 def test_default_native_scope_is_after_gap_queue_append_and_before_carrier():
@@ -315,3 +325,4 @@ def test_default_native_scope_is_after_gap_queue_append_and_before_carrier():
     assert (native.index("Queue one existing authorized Mission gap")
             < native.index("Resolve exact target read scope")
             < native.index("Acquire via existing authority, lease and atomic CAS checks"))
+    assert "CONTROL_V4_START_REPOSITORY: ${{ steps.target-scope.outputs.native_repository }}" in native
