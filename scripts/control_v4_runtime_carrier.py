@@ -788,9 +788,22 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
                 try:
                     observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
                 except TargetCandidateTerminalError as exc:
+                    # A GitHub App token is scoped to the first selected target.
+                    # Commit this terminal park before ending the TICK; selecting
+                    # another repository needs a fresh, separately scoped token.
                     queue = _park_terminal_target(queue, task_id=task_id, blocker=exc.blocker, now=now)
-                    terminal_target_parked = True
-                    continue
+                    reasons = []
+                    if recovery_pending:
+                        reasons.append("expired-lock-recovery")
+                    if no_progress_unblocked:
+                        reasons.append("no-progress-unblock")
+                    reasons.append("terminal-target-park")
+                    state = _write_queue_exact(state, queue, reason="-".join(reasons))
+                    return state, {
+                        "protocol": RESULT_PROTOCOL_ID,
+                        "result": "NO_WORK",
+                        "run_id": command["run_id"],
+                    }
             if task.get("phase") == "REPAIR":
                 live_candidate = observed
         else:
