@@ -48,7 +48,7 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_atomic_cas_as_
     assert '_assert_current_command_fresh_at_ref_cas(source_queue)' in text
 
     write_start = text.index("def _write_queue_exact")
-    write_end = text.index("\ndef _assert_public_target_repository", write_start)
+    write_end = text.index("\ndef _assert_target_repository", write_start)
     write_body = text[write_start:write_end]
     assert "_update_refs_exact(" in write_body
     assert "_await_git_ref_head" not in write_body
@@ -65,10 +65,10 @@ def test_new_acquire_has_no_post_cas_target_network_dependency() -> None:
     before, after = tick_body.split(cas, 1)
 
     assert "_target_pr_candidate(" in before
-    assert "_assert_public_target_repository(" in before
+    assert "_assert_target_repository(" in before
     assert "safe_work_capsule(" in before
     assert "_target_pr_candidate(" not in after
-    assert "_assert_public_target_repository(" not in after
+    assert "_assert_target_repository(" not in after
     assert "safe_work_capsule(" not in after
     assert "return state, work_result" in after
     assert "reconcile_review_candidate_drift_v4(" not in tick_body
