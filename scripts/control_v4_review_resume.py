@@ -249,6 +249,11 @@ def main() -> int:
         except ReviewPending:
             print("CONTROL_V4_REVIEW_RESUME=BUSY")
             return 0
+        if "CONTROL_REVIEW_TARGET_REPOSITORY" in os.environ:
+            # Trusted scope step selects exactly one repository, or none. Never
+            # let the reviewer read a second private repo with the first token.
+            selected = os.environ["CONTROL_REVIEW_TARGET_REPOSITORY"]
+            batch = [task for task in batch if task["repository"] == selected]
         for task in batch:
             try:
                 evidence = completion_evidence(state, task)
