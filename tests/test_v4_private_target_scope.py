@@ -287,3 +287,31 @@ def test_private_external_owner_rejected_without_installed_owner_app(monkeypatch
     with pytest.raises(ValueError, match="installed owner-scoped App"):
         scope.main()
     assert not out.exists()
+
+
+def test_default_native_start_chooses_one_post_materialization_private_task(monkeypatch):
+    from test_v4_terminal_target_recovery import queue as v4_queue, task as v4_task
+
+    private = "market-predictions/memory"
+    public = "market-predictions/control-engine"
+    first = v4_task("MISSION--M--2026-09-22-r1--G1", private, 10)
+    second = v4_task("MISSION--M--2026-09-22-r1--G2", public, 11)
+    current = v4_queue(first, second)
+    monkeypatch.setattr(
+        scope.carrier, "_load_authority_bundle",
+        lambda sha: SimpleNamespace(missions=[
+            {"repository": private}, {"repository": public},
+        ]),
+    )
+    monkeypatch.setenv("CONTROL_V4_START_REPOSITORY", "")
+    monkeypatch.setenv("GITHUB_RUN_ID", "39505195811")
+    assert scope.choose("native", {"main_sha": "a" * 40, "queue": current}) == [private]
+
+
+def test_default_native_scope_is_after_gap_queue_append_and_before_carrier():
+    text = (Path(__file__).resolve().parents[1] /
+            ".github/workflows/control-v4-runtime-carrier.yml").read_text()
+    native = text.split("\n  interactive-control-start:\n", 1)[1]
+    assert (native.index("Queue one existing authorized Mission gap")
+            < native.index("Resolve exact target read scope")
+            < native.index("Acquire via existing authority, lease and atomic CAS checks"))
