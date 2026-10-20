@@ -514,6 +514,13 @@ def _write_queue_exact(
     return {**state, "runtime_sha": new_commit, "queue_blob": new_blob, "queue": dict(queue)}
 
 
+def _assert_public_target_repository(repository: str) -> None:
+    """Keep NO_WORK replenishment proposals publicly verifiable and token-free."""
+    repo = _public_get(f"repos/{repository}", allow_404=True)
+    if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
+        raise RuntimeProtocolError("replenishment proposal target is not publicly readable")
+
+
 def _assert_target_repository(repository: str) -> None:
     try:
         target_access.assert_supported_target(repository, _public_get)
