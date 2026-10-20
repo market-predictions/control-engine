@@ -58,7 +58,10 @@ def choose(mode: str, state: dict) -> list[str]:
             batch = review.current_review_batch(queue, now=datetime.now(timezone.utc))
         except review.ReviewPending:
             batch = []
-        repositories = [task["repository"] for task in batch]
+        # One repository per review invocation. Rotate among this existing
+        # exact batch so a permanently pending private task cannot starve peers.
+        targets = sorted({task["repository"] for task in batch})
+        repositories = [targets[int(datetime.now(timezone.utc).timestamp()) // 3600 % len(targets)]] if targets else []
     elif mode == "owner-admin":
         command = admin.parse_owner_admin_command(os.environ["CONTROL_V4_OWNER_COMMAND"])
         repositories = [command["repository"]]
@@ -110,6 +113,7 @@ def main() -> None:
         f.write("repository_names<<CONTROL_SCOPE_END\n" + names + "\nCONTROL_SCOPE_END\n")
         f.write("full_names<<CONTROL_SCOPE_END\n" + full_names + "\nCONTROL_SCOPE_END\n")
         f.write("has_targets=" + ("true" if private else "false") + "\n")
+        f.write("review_repository=" + (selected[0] if mode == "review" and selected else "") + "\n")
     print("CONTROL_V4_TARGET_READ_SCOPE=" + ("PRIVATE_SELECTED" if private else "PUBLIC_ONLY"))
 
 
