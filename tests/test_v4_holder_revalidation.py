@@ -73,7 +73,7 @@ def test_same_run_holder_revalidation_has_no_target_network_dependency(monkeypat
         raise AssertionError("same-run holder revalidation must not read target network")
 
     monkeypatch.setattr(carrier, "_target_pr_candidate", unexpected_target_read)
-    monkeypatch.setattr(carrier, "_assert_public_target_repository", unexpected_target_read)
+    monkeypatch.setattr(carrier, "_assert_target_repository", unexpected_target_read)
 
     current_state = state(queue)
     returned_state, result = carrier._tick(
