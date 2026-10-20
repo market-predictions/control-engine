@@ -51,11 +51,14 @@ def choose(mode: str, state: dict) -> list[str]:
             else:
                 repositories = []
     elif mode == "review":
-        # One repository per invocation, never all pending private projects.
-        # The existing review job still proves exact candidate/CI/review facts.
+        # Derive from the exact same live-holder-filtered rotating batch as
+        # the reconciler, never independently select an unrelated repository.
         from datetime import datetime, timezone
-        targets = sorted({t["repository"] for t in queue["tasks"] if review.eligible(t)})
-        repositories = [targets[int(datetime.now(timezone.utc).timestamp()) // 3600 % len(targets)]] if targets else []
+        try:
+            batch = review.current_review_batch(queue, now=datetime.now(timezone.utc))
+        except review.ReviewPending:
+            batch = []
+        repositories = [task["repository"] for task in batch]
     elif mode == "owner-admin":
         command = admin.parse_owner_admin_command(os.environ["CONTROL_V4_OWNER_COMMAND"])
         repositories = [command["repository"]]
@@ -94,6 +97,9 @@ def main() -> None:
         if not repository.startswith("market-predictions/"):
             raise ValueError("private target requires an installed owner-scoped App")
         private.append(repository)
+        # The review batch may include several private repositories. Grant only
+        # the first one in that exact batch; later invocations can handle others.
+        break
 
     # Empty scope must skip token creation entirely. Never mint an unrestricted
     # installation token when a target was public or no private work exists.
