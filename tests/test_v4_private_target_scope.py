@@ -94,7 +94,7 @@ def test_review_scope_never_grants_access_to_all_pending_private_targets(monkeyp
         "main_sha": "a" * 40,
         "queue": {"tasks": [{"repository": t} for t in targets], "execution_lock": None},
     }
-    assert len(scope.choose("review", state)) == 1
+    assert set(scope.choose("review", state)) == set(targets)
     assert scope.choose("replenish", state) == []
 
 
@@ -159,3 +159,47 @@ def test_invalid_public_identity_fails_before_token_creation(monkeypatch, tmp_pa
     with pytest.raises(ValueError, match="identity mismatch"):
         scope.main()
     assert not output.exists()
+
+
+def test_review_token_scope_matches_exact_shared_batch_and_caps_one_private(monkeypatch, tmp_path):
+    from scripts import control_v4_review_resume as resume
+
+    targets = [MEMORY, "market-predictions/other-private"]
+    monkeypatch.setattr(
+        scope.carrier, "_load_authority_bundle",
+        lambda sha: SimpleNamespace(missions=[{"repository": name} for name in targets]),
+    )
+    monkeypatch.setattr(resume, "eligible", lambda task: True)
+    queue = {"tasks": [
+        {"task_id": f"task-{i}", "repository": name} for i, name in enumerate(targets)
+    ], "execution_lock": None}
+    monkeypatch.setattr(scope.carrier, "_load_current", lambda: {
+        "main_sha": "a" * 40, "queue": queue
+    })
+    monkeypatch.setattr(scope.carrier, "_public_get", lambda path, allow_404=False: None)
+    from datetime import datetime, timezone
+    batch = resume.current_review_batch(queue, now=datetime.now(timezone.utc))
+    assert set(scope.choose("review", {"main_sha": "a" * 40, "queue": queue})) == {
+        task["repository"] for task in batch
+    }
+    out = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "review")
+    scope.main()
+    text = out.read_text()
+    assert "has_targets=true" in text
+    assert sum(name in text for name in targets) == 1
+
+
+def test_no_work_fallback_rejects_private_proposals_even_if_runtime_target_has_token(monkeypatch):
+    from scripts import control_v4_auto_replenish as replenish
+
+    monkeypatch.setenv("CONTROL_TARGET_REPOSITORIES", MEMORY)
+    monkeypatch.setenv("CONTROL_TARGET_READ_TOKEN", "test-ephemeral-token")
+    monkeypatch.setattr(replenish.owner_admin, "_public_get", lambda path: {
+        "full_name": MEMORY, "private": True
+    })
+    with pytest.raises(replenish.AutoReplenishError):
+        replenish._assert_proposal_targets_public({
+            "replenishment_proposals": [{"repository": MEMORY}]
+        })
