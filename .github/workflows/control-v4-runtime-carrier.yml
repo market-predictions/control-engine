@@ -441,6 +441,7 @@ jobs:
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
           CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
+          CONTROL_V4_START_REPOSITORY: ${{ steps.target-scope.outputs.native_repository }}
         run: python scripts/control_v4_runtime_carrier.py
       - name: Publish bounded handover to ChatGPT Control
         id: handover
