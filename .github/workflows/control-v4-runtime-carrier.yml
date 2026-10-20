@@ -333,6 +333,7 @@ jobs:
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
           CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
+          CONTROL_REVIEW_TARGET_REPOSITORY: ${{ steps.target-scope.outputs.review_repository }}
         run: python scripts/control_v4_review_resume.py
 
   interactive-control-start:
