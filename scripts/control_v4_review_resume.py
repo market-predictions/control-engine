@@ -25,6 +25,7 @@ from control_engine.v4_runtime_protocol import (
     validate_runtime_binding,
 )
 from scripts import control_v4_owner_admin as admin
+from scripts import control_v4_target_access as target_access
 
 
 class ReviewPending(admin.OwnerAdminError):
@@ -81,9 +82,10 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     if admin._task_by_public_pr(state["queue"], command) != task:
         raise ReviewPending("pending review does not resolve to the exact task")
 
-    repo = admin._public_get(f"repos/{repository}")
-    if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
-        raise ReviewPending("review target must be the exact public repository")
+    try:
+        target_access.assert_supported_target(repository, admin._public_get)
+    except (target_access.TargetAccessError, admin.OwnerAdminError) as exc:
+        raise ReviewPending("review target lacks exact scoped read access") from exc
     pr_number = candidate["candidate_pr_number"]
     pr = admin._public_get(f"repos/{repository}/pulls/{pr_number}")
     if not isinstance(pr, Mapping) or pr.get("draft") is not False:
