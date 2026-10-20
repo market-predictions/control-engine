@@ -379,4 +379,6 @@ def test_native_schedule_is_narrow_and_replaces_work_pilot():
     assert "scripts/control_v4_review_resume.py" in job
     assert "legacy-work" not in workflow
     assert "human-start-probe:" not in workflow
-    assert "permission-pull-requests" not in job
+    assert "permission-pull-requests: write" not in job
+    assert "permission-pull-requests: read" in job
+    assert "steps.target-scope.outputs.has_targets == 'true'" in job
