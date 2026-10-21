@@ -521,6 +521,19 @@ def _assert_public_target_repository(repository: str) -> None:
         raise RuntimeProtocolError("replenishment proposal target is not publicly readable")
 
 
+def _public_event_exclusions(queue: Mapping[str, Any]) -> frozenset[str]:
+    """A holderless public TICK may discover only anonymously readable targets."""
+    excluded = set()
+    for repository in sorted({
+        task["repository"] for task in queue["tasks"] if task["status"] != "DONE"
+    }):
+        try:
+            _assert_public_target_repository(repository)
+        except RuntimeProtocolError:
+            excluded.add(repository.lower())
+    return frozenset(excluded)
+
+
 def _assert_target_repository(repository: str) -> None:
     try:
         target_access.assert_supported_target(repository, _public_get)
@@ -721,6 +734,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         )
         return state, work_result
 
+    # Public issue-comment TICKs may continue their exact current holder, but
+    # must never discover a private task without an explicit native start.
+    public_event_exclusions = (
+        _public_event_exclusions(queue)
+        if os.environ.get("GITHUB_EVENT_NAME") == "issue_comment"
+        else frozenset()
+    )
     no_progress_unblocked = False
     terminal_target_parked = False
     requested_repository = _native_start_repository()
@@ -728,7 +748,8 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
     for blocked in list(queue["tasks"]):
         candidate = blocked.get("candidate")
         if (
-            (requested_repository is not None and blocked["repository"].lower() != requested_repository)
+            blocked["repository"].lower() in public_event_exclusions
+            or (requested_repository is not None and blocked["repository"].lower() != requested_repository)
             or blocked.get("status") != "BLOCKED"
             or blocked.get("blocker") != NO_PROGRESS_BLOCKER
             or not isinstance(candidate, Mapping)
@@ -763,7 +784,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
                 if os.environ.get("CONTROL_V4_CORE_FLOW") == "true"
                 and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
                 and command["run_id"].startswith(("v41:gh:", "v41:control-go:"))
-                else frozenset()
+                else public_event_exclusions
             ),
         )
         if task_id is None:
