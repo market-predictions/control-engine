@@ -73,9 +73,12 @@ def choose(mode: str, state: dict) -> list[str]:
             if holder is not None and holder["run_id"] == command["run_id"]:
                 repositories = [next(t["repository"] for t in queue["tasks"] if t["task_id"] == holder["task_id"])]
             elif holder is None:
+                # Reuse the carrier's public-only eligibility fence: an
+                # owner-authored issue-comment TICK is not a private start.
                 selected = select_task_id_v4(
                     queue, run_id=command["run_id"], integration_enabled=False,
                     yielded_task_tokens=command.get("yielded_task_tokens", []),
+                    excluded_repositories=carrier._public_event_exclusions(queue),
                 )
                 repositories = [
                     next(t["repository"] for t in queue["tasks"] if t["task_id"] == selected)
