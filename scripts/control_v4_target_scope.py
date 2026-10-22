@@ -96,7 +96,6 @@ def choose(mode: str, state: dict) -> list[str]:
     elif mode == "review":
         # Rotate over all eligible repositories BEFORE taking each
         # repository's bounded task batch; prevents correlated starvation.
-        from datetime import datetime, timezone
         try:
             selected = review.selected_review_repository(
                 queue, now=datetime.now(timezone.utc),
