@@ -326,3 +326,113 @@ def test_default_native_scope_is_after_gap_queue_append_and_before_carrier():
             < native.index("Resolve exact target read scope")
             < native.index("Acquire via existing authority, lease and atomic CAS checks"))
     assert "CONTROL_V4_START_REPOSITORY: ${{ steps.target-scope.outputs.native_repository }}" in native
+
+
+
+def test_holderless_public_tick_cannot_scope_private_or_hide_public_work(monkeypatch, tmp_path):
+    import json
+    from test_v4_terminal_target_recovery import queue as make_queue, task as make_task
+
+    private_task = make_task("MISSION--M--2026-09-22-r1--G1", MEMORY, 10)
+    public_task = make_task("MISSION--M--2026-09-22-r1--G2", PUBLIC, 11)
+    current = make_queue(private_task, public_task)
+    state = {"main_sha": "a" * 40, "queue": current}
+    monkeypatch.setattr(scope.carrier, "_load_authority_bundle", lambda _: SimpleNamespace(
+        missions=[{"repository": MEMORY}, {"repository": PUBLIC}]
+    ))
+    monkeypatch.setattr(scope.carrier, "_load_current", lambda: state)
+    monkeypatch.setattr(scope.carrier, "_public_get", lambda path, allow_404=False: (
+        {"full_name": PUBLIC, "private": False} if path == "repos/" + PUBLIC else None
+    ))
+    monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", "CONTROL_V4_RUNTIME_TICK " +
+                       json.dumps({"run_id": "v41:control-go:39841658834"}))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "event")
+    output = tmp_path / "scope-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    assert scope.choose("event", state) == [PUBLIC]
+    scope.main()
+    assert "has_targets=false" in output.read_text()
+    output.unlink()
+
+    state["queue"] = make_queue(private_task)
+    assert scope.choose("event", state) == []
+    scope.main()
+    assert "has_targets=false" in output.read_text()
+    assert "repository_names<<CONTROL_SCOPE_END\n\nCONTROL_SCOPE_END" in output.read_text()
+
+
+@pytest.mark.parametrize("kind", ["TICK", "EVENT"])
+def test_private_event_scope_requires_matching_unexpired_holder(monkeypatch, tmp_path, kind):
+    import json
+    from datetime import datetime, timedelta, timezone
+    from test_v4_terminal_target_recovery import queue as make_queue, task as make_task
+
+    run_id = "v41:control-go:39841658834"
+    task = make_task("MISSION--M--2026-09-22-r1--G1", MEMORY, 10)
+    current = make_queue(task)
+    current["execution_lock"] = {
+        "run_id": run_id,
+        "task_id": task["task_id"],
+        "started_at": "2026-10-22T19:37:37Z",
+        "expires_at": "2000-01-01T00:00:00Z",
+    }
+    state = {"main_sha": "a" * 40, "queue": current}
+    monkeypatch.setattr(scope.carrier, "_load_authority_bundle",
+                        lambda _: SimpleNamespace(missions=[{"repository": MEMORY}]))
+    monkeypatch.setattr(scope.carrier, "_load_current", lambda: state)
+    monkeypatch.setattr(scope.carrier, "_public_get", lambda path, allow_404=False: None)
+    if kind == "TICK":
+        command = {"run_id": run_id}
+    else:
+        command = {"run_id": run_id, "task_token": "a" * 64,
+                   "event": "YIELD", "repository": MEMORY, "action": "REPAIR"}
+    monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", "CONTROL_V4_RUNTIME_" +
+                       kind + " " + json.dumps(command))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "event")
+    output = tmp_path / "scope-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert scope.choose("event", state) == []
+    scope.main()
+    assert "has_targets=false" in output.read_text()
+    assert "memory" not in output.read_text()
+    output.unlink()
+
+    current["execution_lock"]["expires_at"] = (
+        datetime.now(timezone.utc) + timedelta(minutes=30)
+    ).isoformat()
+    assert scope.choose("event", state) == [MEMORY]
+    scope.main()
+    assert "has_targets=true" in output.read_text()
+    assert "memory" in output.read_text().splitlines()
+
+
+def test_public_issue_tick_selects_public_task_without_private_candidate_read(monkeypatch):
+    from test_v4_terminal_target_recovery import (
+        NOW, candidate, fake_state, queue as make_queue, task as make_task,
+    )
+
+    private_task = make_task("MISSION--M--2026-09-22-r1--G1", MEMORY, 10)
+    public_task = make_task("MISSION--M--2026-09-22-r1--G2", PUBLIC, 11)
+    current = make_queue(private_task, public_task)
+    seen = []
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
+    monkeypatch.delenv("CONTROL_V4_START_REPOSITORY", raising=False)
+    monkeypatch.setattr(scope.carrier, "_public_get", lambda path, allow_404=False: (
+        {"full_name": PUBLIC, "private": False} if path == "repos/" + PUBLIC else None
+    ))
+    monkeypatch.setattr(scope.carrier, "_target_pr_candidate",
+                        lambda repository, pr: seen.append(repository) or candidate("2" * 40, pr))
+    monkeypatch.setattr(scope.carrier, "_read_review_observation",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(scope.carrier, "_write_queue_exact",
+                        lambda state, q, *, reason: {**state, "queue": q})
+
+    updated, result = scope.carrier._tick(
+        {"kind": "TICK", "run_id": "public-event-test", "yielded_task_tokens": []},
+        fake_state(current), now=NOW,
+    )
+    assert result["result"] == "WORK"
+    assert result["repository"] == PUBLIC
+    assert seen == [PUBLIC]
+    assert updated["queue"]["execution_lock"]["task_id"] == public_task["task_id"]
