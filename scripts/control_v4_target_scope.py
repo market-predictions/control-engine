@@ -7,6 +7,7 @@ capability exists. Emits repository names only; never any queue/task/authority
 contents or secrets. This is a scope selector, NOT a grant or task admission.
 """
 
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 
@@ -56,21 +57,28 @@ def choose(mode: str, state: dict) -> list[str]:
                     excluded.add(repository.lower())
     elif mode == "event":
         command = parse_public_command(os.environ["CONTROL_V4_PUBLIC_COMMAND"])
+        holder = queue["execution_lock"]
+        # A public command cannot grant a private read scope from an expired
+        # lease, even when it names the previous holder run_id.
+        current_holder = (
+            holder is not None
+            and holder["run_id"] == command["run_id"]
+            and datetime.fromisoformat(holder["expires_at"].replace("Z", "+00:00"))
+            > datetime.now(timezone.utc)
+        )
         if command["kind"] == "EVENT":
             repositories = [command["repository"]]
             # Do not mint a capability for an event with no current matching task.
             if not any(
                 t["repository"] == command["repository"]
                 and t["status"] == "ACTIVE"
-                and queue["execution_lock"] is not None
-                and queue["execution_lock"]["task_id"] == t["task_id"]
-                and queue["execution_lock"]["run_id"] == command["run_id"]
+                and current_holder
+                and holder["task_id"] == t["task_id"]
                 for t in queue["tasks"]
             ):
                 repositories = []
         else:
-            holder = queue["execution_lock"]
-            if holder is not None and holder["run_id"] == command["run_id"]:
+            if current_holder:
                 repositories = [next(t["repository"] for t in queue["tasks"] if t["task_id"] == holder["task_id"])]
             elif holder is None:
                 # Reuse the carrier's public-only eligibility fence: an
