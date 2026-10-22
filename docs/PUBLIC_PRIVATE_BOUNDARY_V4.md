@@ -93,7 +93,9 @@ Any public target read needed to prove the target is supported or to supply the 
 
 TICK performs no target-repository or pull-request network verification after durable ownership is acquired. Acquisition must not be followed by fallible network work that can turn a successful holder write into a reported failure. A same-run TICK that merely revalidates an already-held REPAIR task may refresh its read-only compatibility hint because that command performs no holder write.
 
-A live foreign holder returns `BUSY`; no eligible work returns `NO_WORK`. The fixed private lease remains non-renewable. Objectively expired-holder recovery is derived only from canonical private state.
+A live foreign holder returns `BUSY`; no eligible work returns `NO_WORK`. The fixed private lease remains non-renewable.
+
+A holderless public issue-comment `TICK` can select **publicly readable targets only**. Both the scope selector (before GitHub App token creation) and the carrier's actual task selection enforce this same public-only restriction. Private target starts require native owner `control-go` with an explicit exact repository. Public TICK/EVENT continuation may retain the selected private read scope only for an existing **matching, unexpired** holder; an expired or unrelated holder does not mint private access. Token scoping itself is not task admission: canonical holder, lease and CAS checks remain mandatory. Objectively expired-holder recovery is derived only from canonical private state.
 
 ## EVENT
 
