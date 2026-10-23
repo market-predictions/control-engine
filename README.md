@@ -42,6 +42,9 @@ The existing exact-head PR, CI, Codex-review, holder, lease, CAS and
 private repository fails closed; no scope expansion by public comments or
 automatic discovery. Unattended NO_WORK replenishment proposals remain
 public-only rather than minting tokens for every registered private Mission.
+Before issuing a private EVENT read capability, the scope selector reuses the
+carrier's full WORK binding: task token, action, repository, exact PR/head/base,
+and current unexpired holder must all match. A matching run ID alone is insufficient.
 Public issue/audit transport may expose repository, PR, commit and status
 metadata, never private file content, tokens, private queue or Mission bodies.
 

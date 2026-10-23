@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 
-from control_engine.v4_runtime_protocol import parse_public_command, select_task_id_v4
+from control_engine.v4_runtime_protocol import (
+    assert_event_identity,
+    bind_public_event_to_holder,
+    parse_public_command,
+    select_task_id_v4,
+)
 from scripts import control_v4_owner_admin as admin
 from scripts import control_v4_review_resume as review
 from scripts import control_v4_runtime_carrier as carrier
@@ -67,16 +72,14 @@ def choose(mode: str, state: dict) -> list[str]:
             > datetime.now(timezone.utc)
         )
         if command["kind"] == "EVENT":
-            repositories = [command["repository"]]
-            # Do not mint a capability for an event with no current matching task.
-            if not any(
-                t["repository"] == command["repository"]
-                and t["status"] == "ACTIVE"
-                and current_holder
-                and holder["task_id"] == t["task_id"]
-                for t in queue["tasks"]
-            ):
-                repositories = []
+            repositories = []
+            if current_holder:
+                # Fence capability issuance with the carrier's full WORK
+                # identity, before any private token or target read exists.
+                bound = bind_public_event_to_holder(queue, command)
+                task = assert_event_identity(queue, bound, now=datetime.now(timezone.utc))
+                if task["status"] == "ACTIVE":
+                    repositories = [task["repository"]]
         else:
             if current_holder:
                 repositories = [next(t["repository"] for t in queue["tasks"] if t["task_id"] == holder["task_id"])]

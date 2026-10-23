@@ -398,13 +398,88 @@ def test_private_event_scope_requires_matching_unexpired_holder(monkeypatch, tmp
     assert "memory" not in output.read_text()
     output.unlink()
 
-    current["execution_lock"]["expires_at"] = (
-        datetime.now(timezone.utc) + timedelta(minutes=30)
-    ).isoformat()
+    now = datetime.now(timezone.utc)
+    current["execution_lock"]["started_at"] = now.isoformat()
+    current["execution_lock"]["expires_at"] = (now + timedelta(seconds=5400)).isoformat()
+    if kind == "EVENT":
+        from control_engine.v4_runtime_protocol import safe_work_capsule
+        work = safe_work_capsule(current, task_id=task["task_id"], run_id=run_id)
+        command = {key: work[key] for key in (
+            "run_id", "task_token", "repository", "action", "candidate"
+        )}
+        command["event"] = "YIELD"
+        monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", "CONTROL_V4_RUNTIME_EVENT " +
+                           json.dumps(command))
     assert scope.choose("event", state) == [MEMORY]
     scope.main()
     assert "has_targets=true" in output.read_text()
     assert "memory" in output.read_text().splitlines()
+
+
+@pytest.mark.parametrize("mismatch", [
+    "task_token", "action", "repository", "candidate_missing",
+    "candidate_sha", "candidate_pr_number", "candidate_head_branch",
+    "expected_base_branch", "expected_base_sha", "other_task",
+])
+def test_private_event_rejects_full_identity_mismatch_before_scope_output(
+    monkeypatch, tmp_path, mismatch,
+):
+    import json
+    from copy import deepcopy
+    from datetime import datetime, timedelta, timezone
+    from control_engine.v4_runtime_protocol import RuntimeProtocolError, safe_work_capsule
+    from test_v4_terminal_target_recovery import queue as make_queue, task as make_task
+
+    run_id = "v41:control-go:39841658834"
+    held = make_task("MISSION--M--2026-09-22-r1--G1", MEMORY, 10)
+    other = make_task("MISSION--M--2026-09-22-r1--G2", MEMORY, 11)
+    current = make_queue(held, other)
+    now = datetime.now(timezone.utc)
+    current["execution_lock"] = {
+        "run_id": run_id, "task_id": held["task_id"],
+        "started_at": (now - timedelta(minutes=1)).isoformat(),
+        "expires_at": (now - timedelta(minutes=1) + timedelta(seconds=5400)).isoformat(),
+    }
+    work = safe_work_capsule(current, task_id=held["task_id"], run_id=run_id)
+    command = {key: work[key] for key in (
+        "run_id", "task_token", "repository", "action", "candidate"
+    )}
+    command["event"] = "YIELD"
+    if mismatch == "candidate_missing":
+        del command["candidate"]
+    elif mismatch == "other_task":
+        from control_engine.v4_runtime_protocol import task_token
+        command["task_token"] = task_token(other, run_id)
+        command["candidate"] = deepcopy(other["candidate"])
+    elif mismatch in {"task_token", "action", "repository"}:
+        command[mismatch] = {
+            "task_token": "a" * 64, "action": "REPAIR", "repository": PUBLIC,
+        }[mismatch]
+    else:
+        command["candidate"][mismatch] = {
+            "candidate_sha": "f" * 40, "candidate_pr_number": 99,
+            "candidate_head_branch": "stale-head", "expected_base_branch": "stale-base",
+            "expected_base_sha": "e" * 40,
+        }[mismatch]
+    original = deepcopy(current)
+    monkeypatch.setattr(scope.carrier, "_load_authority_bundle", lambda _: SimpleNamespace(
+        missions=[{"repository": MEMORY}, {"repository": PUBLIC}]
+    ))
+    monkeypatch.setattr(scope.carrier, "_load_current", lambda: {
+        "main_sha": "a" * 40, "queue": current,
+    })
+    def forbidden_target_read(*args, **kwargs):
+        pytest.fail("invalid EVENT reached target read before identity validation")
+    monkeypatch.setattr(scope.carrier, "_public_get", forbidden_target_read)
+    monkeypatch.setenv("CONTROL_V4_PUBLIC_COMMAND", "CONTROL_V4_RUNTIME_EVENT " +
+                       json.dumps(command))
+    monkeypatch.setenv("CONTROL_TARGET_SCOPE_MODE", "event")
+    output = tmp_path / "scope-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    with pytest.raises(RuntimeProtocolError):
+        scope.main()
+    assert not output.exists()
+    assert current == original
 
 
 def test_public_issue_tick_selects_public_task_without_private_candidate_read(monkeypatch):
