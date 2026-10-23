@@ -49,6 +49,8 @@ from control_engine.v4_runtime_protocol import (
     validate_runtime_binding,
     yield_holder_v4,
 )
+from scripts import control_v4_target_access as target_access
+
 from control_engine.v4_safety import (
     NO_PROGRESS_BLOCKER,
     block_no_progress_after_recheck_v4,
@@ -159,6 +161,7 @@ def _public_get(path: str, *, allow_404: bool = False) -> Any:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "control-v4-runtime-carrier-public-read",
+            **target_access.target_headers(path),
         },
         allow_404=allow_404,
     )
@@ -512,13 +515,34 @@ def _write_queue_exact(
 
 
 def _assert_public_target_repository(repository: str) -> None:
+    """Keep NO_WORK replenishment proposals publicly verifiable and token-free."""
     repo = _public_get(f"repos/{repository}", allow_404=True)
     if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
-        raise RuntimeProtocolError("target repository is not publicly readable by carrier V1")
+        raise RuntimeProtocolError("replenishment proposal target is not publicly readable")
+
+
+def _public_event_exclusions(queue: Mapping[str, Any]) -> frozenset[str]:
+    """A holderless public TICK may discover only anonymously readable targets."""
+    excluded = set()
+    for repository in sorted({
+        task["repository"] for task in queue["tasks"] if task["status"] != "DONE"
+    }):
+        try:
+            _assert_public_target_repository(repository)
+        except RuntimeProtocolError:
+            excluded.add(repository.lower())
+    return frozenset(excluded)
+
+
+def _assert_target_repository(repository: str) -> None:
+    try:
+        target_access.assert_supported_target(repository, _public_get)
+    except (target_access.TargetAccessError, CarrierError) as exc:
+        raise RuntimeProtocolError("target repository is not readable with exact authorized capability") from exc
 
 
 def _target_pr_candidate(repository: str, pr_number: int) -> dict[str, Any]:
-    _assert_public_target_repository(repository)
+    _assert_target_repository(repository)
     pr = _public_get(f"repos/{repository}/pulls/{pr_number}", allow_404=True)
     if not isinstance(pr, Mapping) or pr.get("number") != pr_number:
         raise RuntimeProtocolError("target pull request is unavailable")
@@ -710,6 +734,13 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
         )
         return state, work_result
 
+    # Public issue-comment TICKs may continue their exact current holder, but
+    # must never discover a private task without an explicit native start.
+    public_event_exclusions = (
+        _public_event_exclusions(queue)
+        if os.environ.get("GITHUB_EVENT_NAME") == "issue_comment"
+        else frozenset()
+    )
     no_progress_unblocked = False
     terminal_target_parked = False
     requested_repository = _native_start_repository()
@@ -717,7 +748,8 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
     for blocked in list(queue["tasks"]):
         candidate = blocked.get("candidate")
         if (
-            (requested_repository is not None and blocked["repository"].lower() != requested_repository)
+            blocked["repository"].lower() in public_event_exclusions
+            or (requested_repository is not None and blocked["repository"].lower() != requested_repository)
             or blocked.get("status") != "BLOCKED"
             or blocked.get("blocker") != NO_PROGRESS_BLOCKER
             or not isinstance(candidate, Mapping)
@@ -752,7 +784,7 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
                 if os.environ.get("CONTROL_V4_CORE_FLOW") == "true"
                 and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
                 and command["run_id"].startswith(("v41:gh:", "v41:control-go:"))
-                else frozenset()
+                else public_event_exclusions
             ),
         )
         if task_id is None:
@@ -777,13 +809,26 @@ def _tick(command: Mapping[str, Any], state: dict[str, Any], *, now: datetime) -
                 try:
                     observed = _target_pr_candidate(task["repository"], candidate["candidate_pr_number"])
                 except TargetCandidateTerminalError as exc:
+                    # A GitHub App token is scoped to the first selected target.
+                    # Commit this terminal park before ending the TICK; selecting
+                    # another repository needs a fresh, separately scoped token.
                     queue = _park_terminal_target(queue, task_id=task_id, blocker=exc.blocker, now=now)
-                    terminal_target_parked = True
-                    continue
+                    reasons = []
+                    if recovery_pending:
+                        reasons.append("expired-lock-recovery")
+                    if no_progress_unblocked:
+                        reasons.append("no-progress-unblock")
+                    reasons.append("terminal-target-park")
+                    state = _write_queue_exact(state, queue, reason="-".join(reasons))
+                    return state, {
+                        "protocol": RESULT_PROTOCOL_ID,
+                        "result": "NO_WORK",
+                        "run_id": command["run_id"],
+                    }
             if task.get("phase") == "REPAIR":
                 live_candidate = observed
         else:
-            _assert_public_target_repository(task["repository"])
+            _assert_target_repository(task["repository"])
         break
 
     # Collect only an advisory snapshot before acquisition/CAS, so a later

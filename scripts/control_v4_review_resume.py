@@ -25,6 +25,7 @@ from control_engine.v4_runtime_protocol import (
     validate_runtime_binding,
 )
 from scripts import control_v4_owner_admin as admin
+from scripts import control_v4_target_access as target_access
 
 
 class ReviewPending(admin.OwnerAdminError):
@@ -81,9 +82,10 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     if admin._task_by_public_pr(state["queue"], command) != task:
         raise ReviewPending("pending review does not resolve to the exact task")
 
-    repo = admin._public_get(f"repos/{repository}")
-    if not isinstance(repo, Mapping) or repo.get("full_name") != repository or repo.get("private") is not False:
-        raise ReviewPending("review target must be the exact public repository")
+    try:
+        target_access.assert_supported_target(repository, admin._public_get)
+    except (target_access.TargetAccessError, admin.OwnerAdminError) as exc:
+        raise ReviewPending("review target lacks exact scoped read access") from exc
     pr_number = candidate["candidate_pr_number"]
     pr = admin._public_get(f"repos/{repository}/pulls/{pr_number}")
     if not isinstance(pr, Mapping) or pr.get("draft") is not False:
@@ -220,6 +222,39 @@ def _load_state() -> dict[str, Any]:
     return state
 
 
+def _pending_review_tasks(queue: Mapping[str, Any], *, now: datetime) -> list[Mapping[str, Any]]:
+    pending = [task for task in queue["tasks"] if eligible(task)]
+    lock = queue.get("execution_lock")
+    if lock is not None:
+        pending = [task for task in pending if task["task_id"] == lock["task_id"]]
+        if not pending:
+            raise ReviewPending("holder belongs to another scope")
+        _unheld_queue(queue, pending[0], now=now)
+    return pending
+
+
+def selected_review_repository(queue: Mapping[str, Any], *, now: datetime) -> str | None:
+    """Rotate over ALL eligible repositories, independent of task-batch offset."""
+    pending = _pending_review_tasks(queue, now=now)
+    repositories = sorted({task["repository"] for task in pending})
+    if not repositories:
+        return None
+    return repositories[(int(now.timestamp()) // 3600) % len(repositories)]
+
+
+def current_review_batch(
+    queue: Mapping[str, Any], *, now: datetime, repository: str | None = None,
+) -> list[Mapping[str, Any]]:
+    """Advance each repository batch once per complete repository rotation."""
+    pending = _pending_review_tasks(queue, now=now)
+    cycle = int(now.timestamp()) // 3600
+    if repository is not None:
+        repository_count = len({task["repository"] for task in pending})
+        cycle //= max(repository_count, 1)
+        pending = [task for task in pending if task["repository"] == repository]
+    offset = (cycle * 8) % len(pending) if pending else 0
+    return (pending[offset:] + pending[:offset])[:8]
+
 def main() -> int:
     try:
         if (os.environ.get("GITHUB_REPOSITORY") != admin.PUBLIC_REPOSITORY
@@ -228,21 +263,16 @@ def main() -> int:
                 or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"):
             raise admin.OwnerAdminError("review resume requires trusted native Engine main")
         state = _load_state()
-        pending = [t for t in state["queue"]["tasks"] if eligible(t)]
-        lock = state["queue"].get("execution_lock")
-        if lock is not None:
-            pending = [t for t in pending if t["task_id"] == lock["task_id"]]
-            try:
-                if not pending:
-                    raise ReviewPending("holder belongs to another scope")
-                _unheld_queue(state["queue"], pending[0], now=datetime.now(timezone.utc))
-            except ReviewPending:
-                print("CONTROL_V4_REVIEW_RESUME=BUSY")
-                return 0
-        # Rotate bounded reads by the native hourly clock. No persistent cursor;
-        # stale early entries cannot indefinitely hide later completed reviews.
-        offset = (int(datetime.now(timezone.utc).timestamp()) // 3600 * 8) % len(pending) if pending else 0
-        batch = (pending[offset:] + pending[:offset])[:8]
+        try:
+            # The existing trusted workflow binds a single exact repository.
+            # With no scope (legacy local invocation), retain existing behavior.
+            selected = os.environ.get("CONTROL_REVIEW_TARGET_REPOSITORY")
+            batch = current_review_batch(
+                state["queue"], now=datetime.now(timezone.utc), repository=selected,
+            )
+        except ReviewPending:
+            print("CONTROL_V4_REVIEW_RESUME=BUSY")
+            return 0
         for task in batch:
             try:
                 evidence = completion_evidence(state, task)
@@ -261,7 +291,7 @@ def main() -> int:
             print("RUNTIME_COMMIT=" + commit)
             print("TARGET=" + json.dumps(evidence["command"], sort_keys=True))
             return 0
-        print("CONTROL_V4_REVIEW_RESUME=" + ("PENDING" if pending else "NO_WORK"))
+        print("CONTROL_V4_REVIEW_RESUME=" + ("PENDING" if batch else "NO_WORK"))
         return 0
     except (admin.OwnerAdminError, ValueError) as exc:
         print(f"CONTROL_V4_REVIEW_RESUME=REJECTED:{exc}")

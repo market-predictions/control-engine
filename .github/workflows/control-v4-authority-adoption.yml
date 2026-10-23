@@ -364,10 +364,35 @@ jobs:
           repositories: control-plane
           permission-contents: write
 
+      - name: Resolve exact owner-admin target scope
+        id: target-scope
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_TARGET_SCOPE_MODE: owner-admin
+          CONTROL_V4_OWNER_COMMAND: ${{ github.event.comment.body }}
+        run: python scripts/control_v4_target_scope.py
+
+      - name: Create exact target read-only capability
+        if: ${{ steps.target-scope.outputs.has_targets == 'true' }}
+        id: target-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: ${{ steps.target-scope.outputs.repository_names }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: read
+          permission-checks: read
+
       - name: Execute bounded owner-approved runtime administration
         env:
           PYTHONPATH: ${{ github.workspace }}
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_V4_OWNER_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
+          CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_owner_admin.py

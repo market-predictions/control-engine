@@ -120,7 +120,7 @@ def test_private_runtime_write_is_one_file_exact_old_ref_cas_with_atomic_commit_
     assert '"path": QUEUE_PATH' in text
     assert '"parents": [state["runtime_sha"]]' in text
 
-    write = text.split('def _write_queue_exact', 1)[1].split('def _assert_public_target_repository', 1)[0]
+    write = text.split('def _write_queue_exact', 1)[1].split('def _assert_target_repository', 1)[0]
     assert '_update_refs_exact(' in write
     assert '_await_git_ref_head' not in write
     assert '_git_ref_head' not in write
@@ -193,10 +193,10 @@ def test_carrier_is_activation_bounded_and_private_targets_fail_closed_before_ac
     script = SCRIPT.read_text(encoding='utf-8')
     assert 'INTEGRATION_ENABLED_REQUIRES_SEPARATE_REVIEWED_CARRIER_EXTENSION' in script
     assert 'carrier V1 requires integration disabled' in script
-    assert 'target repository is not publicly readable by carrier V1' in script
+    assert 'target repository is not readable with exact authorized capability' in script
 
     tick = script.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
-    public_check = '_assert_public_target_repository(task["repository"])'
+    public_check = '_assert_target_repository(task["repository"])'
     cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
     assert public_check in tick
     assert cas in tick
@@ -207,10 +207,10 @@ def test_carrier_is_activation_bounded_and_private_targets_fail_closed_before_ac
 
 def test_candidate_less_build_proves_public_target_before_acquire_and_work_capsule() -> None:
     text = SCRIPT.read_text(encoding='utf-8')
-    assert 'def _assert_public_target_repository(repository: str) -> None:' in text
-    assert '_assert_public_target_repository(repository)' in text.split('def _target_pr_candidate', 1)[1].split('def _tick', 1)[0]
+    assert 'def _assert_target_repository(repository: str) -> None:' in text
+    assert '_assert_target_repository(repository)' in text.split('def _target_pr_candidate', 1)[1].split('def _tick', 1)[0]
     tick = text.split('def _tick', 1)[1].split('def _validate_public_ref_for_task', 1)[0]
-    public_check = '_assert_public_target_repository(task["repository"])'
+    public_check = '_assert_target_repository(task["repository"])'
     cas = 'state = _write_queue_exact(state, acquired, reason=reason)'
     result_build = 'work_result = safe_work_capsule('
     assert public_check in tick

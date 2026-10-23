@@ -54,7 +54,7 @@ def test_selected_native_repository_controls_both_append_and_actual_claim(monkey
     q = writes.pop()
     etf_id = q["tasks"][-1]["task_id"]
     assert q["tasks"][-1]["repository"] == ETF
-    monkeypatch.setattr(carrier, "_assert_public_target_repository", lambda repo: None)
+    monkeypatch.setattr(carrier, "_assert_target_repository", lambda repo: None)
     state = {"queue": q, "runtime_enabled": True, "integration_enabled": False}
     updated, result = carrier._tick({"kind": "TICK", "run_id": "v41:control-go:39130000000"}, state, now=NOW)
     assert result["result"] == "WORK"

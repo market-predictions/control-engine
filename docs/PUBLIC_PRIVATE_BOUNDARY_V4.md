@@ -93,7 +93,9 @@ Any public target read needed to prove the target is supported or to supply the 
 
 TICK performs no target-repository or pull-request network verification after durable ownership is acquired. Acquisition must not be followed by fallible network work that can turn a successful holder write into a reported failure. A same-run TICK that merely revalidates an already-held REPAIR task may refresh its read-only compatibility hint because that command performs no holder write.
 
-A live foreign holder returns `BUSY`; no eligible work returns `NO_WORK`. The fixed private lease remains non-renewable. Objectively expired-holder recovery is derived only from canonical private state.
+A live foreign holder returns `BUSY`; no eligible work returns `NO_WORK`. The fixed private lease remains non-renewable.
+
+A holderless public issue-comment `TICK` can select **publicly readable targets only**. Both the scope selector (before GitHub App token creation) and the carrier's actual task selection enforce this same public-only restriction. Private target starts require native owner `control-go` with an explicit exact repository. Public TICK/EVENT continuation may retain the selected private read scope only for an existing **matching, unexpired** holder; an expired or unrelated holder does not mint private access. Token scoping itself is not task admission: canonical holder, lease and CAS checks remain mandatory. Objectively expired-holder recovery is derived only from canonical private state.
 
 ## EVENT
 
@@ -221,7 +223,7 @@ Rollback is a normal Git revert/adoption of the owner-admin/dashboard-governance
 
 The current carrier is bounded to `integration_enabled=false`. It provides acquisition, review, repair and wait-state transport only; it has no merge/integration authority.
 
-The current carrier also relies on publicly readable target repositories. General private-target credentials are not part of V4 current scope. Unsupported/private target eligibility therefore fails closed before a new holder is acquired; target/candidate EVENT verification remains fail closed at the semantic boundary.
+The carrier supports publicly readable target repositories and individually selected **current-Mission-authorized private targets** via the *existing* Control GitHub App. Native `control-go` requires an explicit exact owner/name repository input for private work. With no repository input, it preserves the publicly readable Mission task path and skips private targets; no broad private token is ever minted. The trusted workflow derives the bounded target from fresh private Mission/queue truth, then requests a short-lived GitHub App **read-only** token scoped to that exact target repository; the separate existing `control-plane` contents-write token remains strictly scoped to the sole private queue/authority repository. The token never grants semantic target writing or integration. Unavailable installation/permissions, mismatched identity, stale/unknown authorization, and inaccessible target/PR/CI evidence fail closed before acquisition or the semantic EVENT transition. Existing public-only automatic NO_WORK replenishment proposals remain anonymously verifiable, and do not grant tokens to all registered Missions. Public issue transport may expose only principal-approved repository, PR/commit and execution/CI/review metadata; it must not emit confidential file content, Mission/acceptance texts, secrets or private queue/holder details.
 
 ## Retired and explicitly absent mechanisms
 

@@ -92,14 +92,21 @@ def fake_state(q: dict) -> dict:
     }
 
 
-def test_tick_parks_integrated_target_and_continues_to_next_task(monkeypatch) -> None:
-    first = task("MISSION--M--2026-09-22-r1--G1", "example/integrated", 10)
-    second = task("MISSION--M--2026-09-22-r1--G2", "example/open", 11)
+def test_tick_commits_terminal_private_park_before_next_repo_scope(monkeypatch) -> None:
+    """First token may read only its exact repository; next TICK gets its own."""
+    first_repo = "market-predictions/private-one"
+    second_repo = "market-predictions/private-two"
+    first = task("MISSION--M--2026-09-22-r1--G1", first_repo, 10)
+    second = task("MISSION--M--2026-09-22-r1--G2", second_repo, 11)
     q = queue(first, second)
     writes: list[tuple[dict, str]] = []
+    reads: list[str] = []
 
     def fake_target(repository: str, pr_number: int):
-        if repository == "example/integrated":
+        reads.append(repository)
+        # Simulate the workflow-minted exact read-only GitHub App token.
+        assert repository == carrier.os.environ["CONTROL_TARGET_REPOSITORIES"]
+        if repository == first_repo:
             raise carrier.TargetCandidateTerminalError(carrier.INTEGRATED_TARGET_BLOCKER)
         return candidate(NEW_SHA, pr_number)
 
@@ -109,21 +116,68 @@ def test_tick_parks_integrated_target_and_continues_to_next_task(monkeypatch) ->
 
     monkeypatch.setattr(carrier, "_target_pr_candidate", fake_target)
     monkeypatch.setattr(carrier, "_write_queue_exact", fake_write)
-
+    monkeypatch.setenv("CONTROL_TARGET_REPOSITORIES", first_repo)
     state, result = carrier._tick(
-        {"kind": "TICK", "run_id": "run-terminal", "yielded_task_tokens": []},
+        {"kind": "TICK", "run_id": "run-terminal-1", "yielded_task_tokens": []},
         fake_state(q),
         now=NOW,
     )
-
     parked = state["queue"]["tasks"][0]
+    assert result["result"] == "NO_WORK"
+    assert reads == [first_repo]
     assert parked["status"] == "BLOCKED"
     assert parked["phase"] is None
     assert parked["blocker"] == carrier.INTEGRATED_TARGET_BLOCKER
-    assert result["result"] == "WORK"
-    assert result["repository"] == "example/open"
-    assert state["queue"]["execution_lock"]["task_id"] == second["task_id"]
-    assert writes
+    assert state["queue"]["execution_lock"] is None
+    assert len(writes) == 1
+    assert writes[0][1] == "terminal-target-park"
+
+    # A later separate TICK can safely mint its own exact second target token.
+    reads.clear()
+    monkeypatch.setenv("CONTROL_TARGET_REPOSITORIES", second_repo)
+    next_state, next_result = carrier._tick(
+        {"kind": "TICK", "run_id": "run-terminal-2", "yielded_task_tokens": []},
+        {**fake_state(q), "queue": state["queue"]},
+        now=NOW,
+    )
+    assert reads == [second_repo]
+    assert next_result["result"] == "WORK"
+    assert next_result["repository"] == second_repo
+    assert next_state["queue"]["execution_lock"]["task_id"] == second["task_id"]
+    assert next_state["queue"]["tasks"][0] == parked
+    assert len(writes) == 2
+
+
+def test_terminal_park_cas_failure_never_reads_second_target(monkeypatch) -> None:
+    first_repo = "market-predictions/private-one"
+    second_repo = "market-predictions/private-two"
+    original = queue(
+        task("MISSION--M--2026-09-22-r1--G1", first_repo, 10),
+        task("MISSION--M--2026-09-22-r1--G2", second_repo, 11),
+    )
+    calls: list[str] = []
+
+    def read(repository: str, _pr: int):
+        calls.append(repository)
+        if repository == first_repo:
+            raise carrier.TargetCandidateTerminalError(carrier.CLOSED_TARGET_BLOCKER)
+        raise AssertionError("second target read must require another TICK/token")
+
+    def reject_cas(*args, **kwargs):
+        raise carrier.StaleWriteError("simulated atomic CAS conflict")
+
+    monkeypatch.setattr(carrier, "_target_pr_candidate", read)
+    monkeypatch.setattr(carrier, "_write_queue_exact", reject_cas)
+    monkeypatch.setenv("CONTROL_TARGET_REPOSITORIES", first_repo)
+    with pytest.raises(carrier.StaleWriteError, match="CAS conflict"):
+        carrier._tick(
+            {"kind": "TICK", "run_id": "run-terminal-cas", "yielded_task_tokens": []},
+            fake_state(original),
+            now=NOW,
+        )
+    assert calls == [first_repo]
+    assert original["execution_lock"] is None
+    assert original["tasks"][0]["status"] == "ACTIVE"
 
 
 def authority_bundle(review_policy: str = "EXTERNAL") -> V4AuthorityBundle:
