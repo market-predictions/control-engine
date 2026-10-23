@@ -511,3 +511,26 @@ def test_public_issue_tick_selects_public_task_without_private_candidate_read(mo
     assert result["repository"] == PUBLIC
     assert seen == [PUBLIC]
     assert updated["queue"]["execution_lock"]["task_id"] == public_task["task_id"]
+
+
+@pytest.mark.parametrize("counts", [(16, 1), (24, 1, 1), (17, 9), (16,)])
+def test_review_rotation_eventually_visits_every_task(monkeypatch, counts):
+    from datetime import datetime, timedelta, timezone
+    from scripts import control_v4_review_resume as resume
+    tasks = [
+        {"task_id": f"task-{repo}-{index}",
+         "repository": f"market-predictions/private-{repo}"}
+        for repo, count in enumerate(counts) for index in range(count)
+    ]
+    queue = {"tasks": tasks, "execution_lock": None}
+    monkeypatch.setattr(resume, "eligible", lambda task: True)
+    start = datetime(2026, 10, 21, tzinfo=timezone.utc)
+    seen = set()
+    for hour in range(len(counts) * max(counts)):
+        now = start + timedelta(hours=hour)
+        repository = resume.selected_review_repository(queue, now=now)
+        batch = resume.current_review_batch(queue, now=now, repository=repository)
+        assert 0 < len(batch) <= 8
+        assert all(task["repository"] == repository for task in batch)
+        seen.update(task["task_id"] for task in batch)
+    assert seen == {task["task_id"] for task in tasks}

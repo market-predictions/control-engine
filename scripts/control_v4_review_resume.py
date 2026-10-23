@@ -245,11 +245,14 @@ def selected_review_repository(queue: Mapping[str, Any], *, now: datetime) -> st
 def current_review_batch(
     queue: Mapping[str, Any], *, now: datetime, repository: str | None = None,
 ) -> list[Mapping[str, Any]]:
-    """Keep current bounded per-task rotation, narrowed to the selected repository."""
+    """Advance each repository batch once per complete repository rotation."""
     pending = _pending_review_tasks(queue, now=now)
+    cycle = int(now.timestamp()) // 3600
     if repository is not None:
+        repository_count = len({task["repository"] for task in pending})
+        cycle //= max(repository_count, 1)
         pending = [task for task in pending if task["repository"] == repository]
-    offset = (int(now.timestamp()) // 3600 * 8) % len(pending) if pending else 0
+    offset = (cycle * 8) % len(pending) if pending else 0
     return (pending[offset:] + pending[:offset])[:8]
 
 def main() -> int:

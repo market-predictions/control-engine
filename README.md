@@ -48,6 +48,10 @@ and current unexpired holder must all match. A matching run ID alone is insuffic
 Public issue/audit transport may expose repository, PR, commit and status
 metadata, never private file content, tokens, private queue or Mission bodies.
 
+Hourly review completion rotates repositories first, then advances each repository’s
+eight-task batch once per full repository cycle. Repository rotation therefore
+cannot permanently starve later batches; no persistent cursor is required.
+
 ### Native same-task continuation (adopted; productive milestone 2026-10-18)
 
 New `mode: control-go` starts use `v41:control-go:<GitHub run id>`. A validated
