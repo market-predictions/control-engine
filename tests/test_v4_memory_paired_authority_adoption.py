@@ -123,3 +123,41 @@ def test_workflow_keeps_owner_gate_and_requires_both_refs_atomically():
     assert '"beforeOid": expected_runtime' in script
     assert '"afterOid": new_runtime' in script
     assert "assert_v4_queue_bound_to_authority(actual_queue, new_bundle)" in script
+
+
+def test_authority_git_tree_mode_enforced(monkeypatch):
+    entry = {"path": paired.MEMORY_PATH, "type": "blob",
+             "mode": "100644", "sha": "a" * 40}
+
+    def fake_private_get(path):
+        if "/git/commits/" in path:
+            return {"tree": {"sha": "d" * 40}}
+        if "/git/trees/" in path:
+            return {"truncated": False, "tree": [entry]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(paired.admin, "_private_get", fake_private_get)
+    paired.assert_regular_authority_file("1" * 40, "a" * 40)
+    entry["mode"] = "100755"
+    with pytest.raises(paired.PairedAdoptionRejected):
+        paired.assert_regular_authority_file("1" * 40, "a" * 40)
+    entry["mode"] = "100644"
+    entry["sha"] = "b" * 40
+    with pytest.raises(paired.PairedAdoptionRejected):
+        paired.assert_regular_authority_file("1" * 40, "a" * 40)
+
+
+def test_memory_semantic_evidence_requires_specific_independent_coverage():
+    from scripts import control_v4_review_resume as resume
+    generic = "Codex Review: Didn't find any major issues.\nReviewed commit: ec6c8fabe2"
+    assert not resume.memory_h6_semantic_coverage(generic, paired.MEMORY_HEAD)
+    evidence = "\n".join(
+        [generic, "MEMORY_H6_V4_SEMANTIC_VERDICT=PASS",
+         f"reviewed_head={paired.MEMORY_HEAD}"]
+        + [f"H6-{i:02d}: PASS; evidence=10-evidence/review-item-{i:02d}.md"
+           for i in range(1, 12)]
+    )
+    assert resume.memory_h6_semantic_coverage(evidence, paired.MEMORY_HEAD)
+    assert not resume.memory_h6_semantic_coverage(evidence, "0" * 40)
+    assert not resume.memory_h6_semantic_coverage(evidence.replace("H6-11: PASS", "H6-11: FAIL"),
+                                                  paired.MEMORY_HEAD)
