@@ -74,6 +74,21 @@ def _assert_minimal_authority_delta(old: V4AuthorityBundle, new: V4AuthorityBund
     return old_shas[MEMORY], new_shas[MEMORY]
 
 
+
+def assert_regular_authority_file(commit_sha: str, expected_blob_sha: str) -> None:
+    """Inspect committed Git mode, not just REST contents and changed filenames."""
+    commit = admin._private_get(f"repos/{admin.PRIVATE_REPOSITORY}/git/commits/{commit_sha}")
+    tree_sha = _sha((commit.get("tree") or {}).get("sha") if isinstance(commit, Mapping) else None)
+    tree = admin._private_get(f"repos/{admin.PRIVATE_REPOSITORY}/git/trees/{tree_sha}?recursive=1")
+    if not isinstance(tree, Mapping) or tree.get("truncated") is not False:
+        raise PairedAdoptionRejected("complete exact authority Git tree unavailable")
+    matches = [entry for entry in tree.get("tree", []) if isinstance(entry, Mapping)
+               and entry.get("path") == MEMORY_PATH]
+    if (len(matches) != 1 or matches[0].get("type") != "blob"
+            or matches[0].get("mode") != "100644"
+            or matches[0].get("sha") != expected_blob_sha):
+        raise PairedAdoptionRejected("Memory authority Git mode/type/blob identity mismatch")
+
 def plan_one_binding(queue: Mapping[str, Any], old: V4AuthorityBundle, new: V4AuthorityBundle) -> dict[str, Any]:
     """Pure plan: existing queue under old authority -> identical queue + one new SHA."""
     validate_queue_v4(queue)
@@ -167,7 +182,9 @@ def adopt_pair(body: str) -> tuple[str, str]:
 
     old_bundle = admin._load_bundle(expected_main)
     new_bundle = admin._load_bundle(candidate_main)
-    _assert_minimal_authority_delta(old_bundle, new_bundle)
+    old_authority_blob, new_authority_blob = _assert_minimal_authority_delta(old_bundle, new_bundle)
+    assert_regular_authority_file(expected_main, old_authority_blob)
+    assert_regular_authority_file(candidate_main, new_authority_blob)
     queue, original_blob = admin._private_json(admin.QUEUE_PATH, expected_runtime)
     planned = plan_one_binding(queue, old_bundle, new_bundle)
     new_runtime = _commit_runtime(planned, expected_runtime, original_blob)
