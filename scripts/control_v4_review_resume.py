@@ -32,6 +32,25 @@ class ReviewPending(admin.OwnerAdminError):
     """Evidence is unavailable, unsafe, incomplete, or needs an engineer."""
 
 
+
+def memory_h6_semantic_coverage(body: object, candidate_sha: str) -> bool:
+    """A generic Codex no-findings receipt cannot independently establish H6.
+
+    The existing trusted reviewer must explicitly record exact-head semantic
+    PASS plus traceable evidence for all eleven successor H6 checks. This adds
+    no reviewer, queue status, or separate approval plane.
+    """
+    if not isinstance(body, str):
+        return False
+    if "MEMORY_H6_V4_SEMANTIC_VERDICT=PASS" not in body:
+        return False
+    if f"reviewed_head={candidate_sha}" not in body:
+        return False
+    return all(
+        re.search(rf"(?m)^H6-{number:02d}: PASS; evidence=[^\n]{{16,}}$", body) is not None
+        for number in range(1, 12)
+    )
+
 def _bot(item: Mapping[str, Any]) -> bool:
     user = item.get("user") or {}
     return isinstance(user, Mapping) and (
@@ -137,6 +156,9 @@ def completion_evidence(state: Mapping[str, Any], task: Mapping[str, Any]) -> di
     if len(passes) != 1:
         raise ReviewPending("one unambiguous exact-candidate Codex PASS is required")
     evidence = passes[0]
+    if repository.lower() == "market-predictions/memory" and not memory_h6_semantic_coverage(
+            evidence.get("body"), candidate["candidate_sha"]):
+        raise ReviewPending("Memory H6 successor semantic PASS lacks independent eleven-check evidence")
     command.update(external_review_request_comment_id=request_id, external_review_comment_id=evidence["id"])
     # The existing private pending record binds task identity. Interactive
     # requests need not publish private Mission/gap tokens from owner-admin.

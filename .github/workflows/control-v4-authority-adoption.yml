@@ -396,3 +396,69 @@ jobs:
           CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
           CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_owner_admin.py
+
+
+  memory-paired-authority-adoption:
+    if: >-
+      ${{
+        github.repository == 'market-predictions/control-engine' &&
+        github.ref == 'refs/heads/main' &&
+        github.actor == 'market-predictions' &&
+        github.triggering_actor == 'market-predictions' &&
+        github.event_name == 'issue_comment' &&
+        github.event.action == 'created' &&
+        github.event.issue.number == 106 &&
+        github.event.issue.pull_request == null &&
+        startsWith(github.event.comment.body, 'CONTROL_PRIVATE_V4_ADOPT_PAIR ')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Parse exact owner command before private capability
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          parts = os.environ.get("COMMENT_BODY", "").split()
+          if (len(parts) != 5
+                  or parts[0] != "CONTROL_PRIVATE_V4_ADOPT_PAIR"
+                  or any(re.fullmatch(r"[0-9a-f]{40}", x) is None for x in parts[1:4])
+                  or len(set(parts[1:4])) != 3
+                  or parts[4] != "ADOPT_REVIEWED_PRIVATE_MAIN_AND_RUNTIME"):
+              raise SystemExit("invalid exact old-main/new-main/old-runtime paired adoption command")
+          print("CONTROL_V4_PAIRED_COMMAND_ADMITTED=true")
+          PY
+
+      - name: Checkout trusted Control Engine main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deterministic validator dependency
+        run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+
+      - name: Create exact private authority + runtime write capability
+        id: private-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.CONTROL_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CONTROL_GITHUB_APP_PRIVATE_KEY }}
+          owner: market-predictions
+          repositories: control-plane
+          permission-contents: write
+
+      - name: Validate full queue and atomically adopt exact paired refs
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
+          CONTROL_V4_PAIRED_ADOPT_COMMAND: ${{ github.event.comment.body }}
+        run: python scripts/control_v4_paired_authority_adoption.py
