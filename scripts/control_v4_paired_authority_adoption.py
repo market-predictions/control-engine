@@ -221,13 +221,24 @@ def adopt_pair(body: str) -> tuple[str, str]:
             or not isinstance((response.get("data") or {}).get("updateRefs"), Mapping)):
         raise PairedAdoptionRejected("atomic GraphQL updateRefs rejected")
 
-    # Do not report PASS if either ref or the new canonical queue fails readback.
-    if _current_ref("main") != candidate_main or _current_ref(admin.RUNTIME_BRANCH) != new_runtime:
-        raise PairedAdoptionRejected("mandatory paired ref readback failed")
-    actual_queue, actual_blob = admin._private_json(admin.QUEUE_PATH, new_runtime)
-    if actual_queue != planned:
-        raise PairedAdoptionRejected("mandatory canonical queue readback failed")
-    assert_v4_queue_bound_to_authority(actual_queue, new_bundle)
+    # Successful GraphQL updateRefs is the atomic commit boundary. Later REST
+    # readback may fail or observe a legitimate subsequent runtime commit.
+    # Record diagnostic proof separately; never turn committed success into
+    # a retryable pre-commit rejection (owner-admin follows the same rule).
+    try:
+        actual_main = _current_ref("main")
+        actual_runtime = _current_ref(admin.RUNTIME_BRANCH)
+        actual_queue, actual_blob = admin._private_json(admin.QUEUE_PATH, new_runtime)
+        if actual_queue != planned:
+            print("CONTROL_V4_MEMORY_PAIRED_READBACK=DRIFTED_QUEUE")
+        else:
+            assert_v4_queue_bound_to_authority(actual_queue, new_bundle)
+            if actual_main == candidate_main and actual_runtime == new_runtime:
+                print("CONTROL_V4_MEMORY_PAIRED_READBACK=PASS")
+            else:
+                print("CONTROL_V4_MEMORY_PAIRED_READBACK=REF_MOVED_AFTER_CAS")
+    except (admin.OwnerAdminError, V4ValidationError, PairedAdoptionRejected):
+        print("CONTROL_V4_MEMORY_PAIRED_READBACK=UNAVAILABLE_AFTER_COMMIT")
     return candidate_main, new_runtime
 
 
