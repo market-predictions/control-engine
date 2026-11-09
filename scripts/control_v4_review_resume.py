@@ -47,7 +47,7 @@ def memory_h6_semantic_coverage(body: object, candidate_sha: str) -> bool:
     if f"reviewed_head={candidate_sha}" not in body:
         return False
     return all(
-        re.search(rf"(?m)^H6-{number:02d}: PASS; evidence=[^\\n]{{16,}}$", body) is not None
+        re.search(rf"(?m)^H6-{number:02d}: PASS; evidence=[^\n]{{16,}}$", body) is not None
         for number in range(1, 12)
     )
 
