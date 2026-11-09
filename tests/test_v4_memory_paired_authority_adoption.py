@@ -161,3 +161,47 @@ def test_memory_semantic_evidence_requires_specific_independent_coverage():
     assert not resume.memory_h6_semantic_coverage(evidence, "0" * 40)
     assert not resume.memory_h6_semantic_coverage(evidence.replace("H6-11: PASS", "H6-11: FAIL"),
                                                   paired.MEMORY_HEAD)
+
+
+def test_committed_pair_is_not_reported_rejected_on_late_ref_drift(monkeypatch, capsys):
+    old_bundle, new_bundle = _bundles()
+    queue = _queue()
+    planned = deepcopy(queue)
+    planned["tasks"][5]["repository_authority_blob_sha"] = "b" * 40
+    new_runtime = "4" * 40
+    later_runtime = "5" * 40
+    reads = {"main": 0, paired.admin.RUNTIME_BRANCH: 0}
+
+    def current(branch):
+        reads[branch] += 1
+        if branch == "main":
+            return OLD_MAIN if reads[branch] < 3 else NEW_MAIN
+        return OLD_RUNTIME if reads[branch] < 3 else later_runtime
+
+    def get(path):
+        if path == f"repos/{paired.admin.PRIVATE_REPOSITORY}":
+            return {"node_id": "R_private", "full_name": paired.admin.PRIVATE_REPOSITORY,
+                    "private": True}
+        if "/compare/" in path:
+            return {"status": "ahead", "behind_by": 0, "ahead_by": 1,
+                    "merge_base_commit": {"sha": OLD_MAIN},
+                    "files": [{"filename": paired.MEMORY_PATH}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(paired, "_current_ref", current)
+    monkeypatch.setattr(paired.admin, "_private_get", get)
+    monkeypatch.setattr(paired.admin, "_load_bundle",
+                        lambda sha: old_bundle if sha == OLD_MAIN else new_bundle)
+    monkeypatch.setattr(paired, "assert_regular_authority_file", lambda *args: None)
+    monkeypatch.setattr(paired, "plan_one_binding", lambda *args: planned)
+    monkeypatch.setattr(paired, "_commit_runtime", lambda *args: new_runtime)
+    monkeypatch.setattr(paired.admin, "_private_json",
+                        lambda path, ref: (queue, "7" * 40) if ref == OLD_RUNTIME
+                        else (planned, "8" * 40))
+    monkeypatch.setattr(paired.admin, "_private_headers", lambda: {})
+    monkeypatch.setattr(paired.admin, "_request_json",
+                        lambda *args, **kwargs: {"data": {"updateRefs": {}}})
+    monkeypatch.setattr(paired, "assert_v4_queue_bound_to_authority", lambda *args: None)
+
+    assert paired.adopt_pair(COMMAND) == (NEW_MAIN, new_runtime)
+    assert "CONTROL_V4_MEMORY_PAIRED_READBACK=REF_MOVED_AFTER_CAS" in capsys.readouterr().out
