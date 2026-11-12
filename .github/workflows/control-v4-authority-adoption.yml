@@ -393,6 +393,7 @@ jobs:
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_V4_OWNER_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_OWNER_COMMENT_ID: ${{ github.event.comment.id }}
           CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
           CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_owner_admin.py
@@ -428,7 +429,7 @@ jobs:
                   or parts[0] != "CONTROL_PRIVATE_V4_ADOPT_PAIR"
                   or any(re.fullmatch(r"[0-9a-f]{40}", x) is None for x in parts[1:4])
                   or len(set(parts[1:4])) != 3
-                  or parts[4] != "ADOPT_REVIEWED_PRIVATE_MAIN_AND_RUNTIME"):
+                  or parts[4] not in {"ADOPT_REVIEWED_PRIVATE_MAIN_AND_RUNTIME", "ADOPT_REVIEWED_MEMORY_R0_RISK_MISSION"}):
               raise SystemExit("invalid exact old-main/new-main/old-runtime paired adoption command")
           print("CONTROL_V4_PAIRED_COMMAND_ADMITTED=true")
           PY

@@ -86,6 +86,7 @@ OPERATIONS = {
     "ACTIVATE_ROOT_CANDIDATE",
     "REBIND_READY_CANDIDATE",
     "RECONCILE_INTEGRATED",
+    "OWNER_ACCEPT_MEMORY_R0_RISK",
 }
 TARGET_KEYS = {
     "repository",
@@ -113,6 +114,10 @@ ACTIVATE_COMMAND_KEYS = {
     *TARGET_KEYS,
 }
 APPROVAL_KEYS = {"repository", "authority_key", "eligible_activation_keys"}
+RISK_COMMAND_KEYS = {"operation", *TARGET_KEYS, "risk_acknowledgement"}
+RISK_ACK = "SEMANTIC_ASSURANCE_NOT_ESTABLISHED"
+MEMORY_R0_POLICY_BLOB = "4a3373c441827531e96a5fbb9f09d5d0257f6f09"
+MEMORY_R0_RECEIPTS = (6626067758, 6832862746)
 
 
 class OwnerAdminError(RuntimeError):
@@ -174,6 +179,8 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
             raise OwnerAdminError("owner-admin command fields invalid")
     elif operation == "REBIND_READY_CANDIDATE":
         expected_keys = REBIND_COMMAND_KEYS
+    elif operation == "OWNER_ACCEPT_MEMORY_R0_RISK":
+        expected_keys = RISK_COMMAND_KEYS
     else:
         expected_keys = FINALIZE_COMMAND_KEYS
     if set(payload) != expected_keys:
@@ -184,6 +191,9 @@ def parse_owner_admin_command(raw: str) -> dict[str, Any]:
     payload["candidate_head_branch"] = _branch(payload["candidate_head_branch"])
     payload["expected_base_branch"] = _branch(payload["expected_base_branch"])
     payload["expected_base_sha"] = _sha(payload["expected_base_sha"])
+    if operation == "OWNER_ACCEPT_MEMORY_R0_RISK":
+        if payload["risk_acknowledgement"] != RISK_ACK:
+            raise OwnerAdminError("owner-risk acknowledgement must admit absent independent semantic assurance")
     if operation == "ACTIVATE_ROOT_CANDIDATE":
         payload["approval_comment_id"] = _positive_int(payload["approval_comment_id"], label="approval comment id")
         payload["approval_body_sha256"] = _opaque_key(payload["approval_body_sha256"], label="approval body SHA-256")
@@ -287,7 +297,7 @@ def validate_public_target(command: Mapping[str, Any], target: Mapping[str, Any]
         raise OwnerAdminError("target candidate base branch drifted")
 
     operation = command["operation"]
-    if operation in {"ACTIVATE_ROOT_CANDIDATE", "REBIND_READY_CANDIDATE", "RECONCILE_EXTERNAL_REVIEW"}:
+    if operation in {"ACTIVATE_ROOT_CANDIDATE", "REBIND_READY_CANDIDATE", "RECONCILE_EXTERNAL_REVIEW", "OWNER_ACCEPT_MEMORY_R0_RISK"}:
         if target.get("base_sha") != exact["expected_base_sha"]:
             raise OwnerAdminError("target candidate base drifted")
         if target.get("state") != "open" or target.get("merged") is not False:
@@ -672,6 +682,168 @@ def activate_root_candidate_v4(
     return result
 
 
+
+def _memory_r0_owner_risk_evidence(
+    command: Mapping[str, Any],
+    state: Mapping[str, Any],
+) -> dict[str, str]:
+    """Fail-closed original-owner audit, exact-policy, technical review and CI.
+
+    This is expressly NOT a semantic review and does not manufacture PASS.
+    """
+    from control_engine.v4_contracts import _exact_memory_r0_owner_risk_accepted
+
+    if command.get("risk_acknowledgement") != RISK_ACK:
+        raise OwnerAdminError("explicit owner-risk acknowledgement absent")
+    if command.get("repository") != "market-predictions/memory" or command.get("candidate_pr_number") != 2:
+        raise OwnerAdminError("owner-risk exception is Memory PR #2 only")
+    if command.get("candidate_sha") != "ec6c8fabe2f35927e7f6f3e11e3f496e49e26cf6":
+        raise OwnerAdminError("owner-risk candidate SHA mismatch")
+    if (command.get("expected_base_sha") != "c407a9c8dfc5617f1a0adc6997a40ddd602ac011"
+            or command.get("expected_base_branch") != "main"
+            or command.get("candidate_head_branch") != "import/historical-context-phase-1"):
+        raise OwnerAdminError("owner-risk candidate branch/base mismatch")
+
+    policy_text, policy_blob = _private_file("control/CONTROL_OPERATING_MODEL.md", state["main_sha"])
+    if policy_blob != MEMORY_R0_POLICY_BLOB or "### 6.2 One-time Memory R0 owner-risk acceptance" not in policy_text:
+        raise OwnerAdminError("reviewed exact Memory risk exception policy is not adopted")
+
+    raw_id = os.environ.get("CONTROL_V4_OWNER_COMMENT_ID", "")
+    if not raw_id.isdecimal():
+        raise OwnerAdminError("owner-risk audit comment ID missing")
+    comment_id = _positive_int(int(raw_id), label="owner-risk audit comment ID")
+    comment = _public_get(f"repos/{PUBLIC_REPOSITORY}/issues/comments/{comment_id}")
+    if not isinstance(comment, Mapping) or comment.get("id") != comment_id:
+        raise OwnerAdminError("owner-risk original audit comment unavailable")
+    user = comment.get("user") or {}
+    if (comment.get("issue_url") != f"{API}/repos/{PUBLIC_REPOSITORY}/issues/{PUBLIC_AUDIT_ISSUE}"
+            or user.get("login") != PRINCIPAL_LOGIN or user.get("id") != PRINCIPAL_USER_ID
+            or comment.get("author_association") != "OWNER"
+            or not isinstance(comment.get("created_at"), str)
+            or comment.get("created_at") != comment.get("updated_at")
+            or comment.get("body") != os.environ.get("CONTROL_V4_OWNER_COMMAND")):
+        raise OwnerAdminError("risk-acceptance owner command provenance invalid")
+
+    source = _task_by_public_pr(state["queue"], command)
+    candidate = candidate_identity(command)
+    existing_external = source.get("external_review") or {}
+    if (source.get("task_id") != "MISSION--MEMORY_SECOND_BRAIN--2026-11-12-r2--MEM-R0-RECOVER"
+            or source.get("status") != "ACTIVE" or source.get("phase") != "REVIEW"
+            or source.get("review_policy") != "EXTERNAL" or source.get("integration_policy") != "HOLD_AFTER_PASS"
+            or source.get("candidate") != candidate
+            or (source.get("last_review") or {}).get("verdict") != "PASS"
+            or any((source.get("last_review") or {}).get(k) != candidate[k]
+                   for k in ("candidate_sha", "expected_base_branch", "expected_base_sha"))
+            or existing_external.get("status") != "PENDING"
+            or existing_external.get("request_ref") !=
+                "https://github.com/market-predictions/memory/pull/2#issuecomment-6625962600"
+            or state["queue"].get("execution_lock") is not None):
+        raise OwnerAdminError("current Memory R0 task is not eligible for one-time risk acceptance")
+
+    for receipt_id in MEMORY_R0_RECEIPTS:
+        _public_external_review_receipt({**dict(command), "external_review_comment_id": receipt_id})
+
+    # Re-check the entire bounded issue-comment review stream. The normal
+    # resumer rejects current-head findings here; the exceptional path must
+    # never waive technical objections in addition to missing H6 semantics.
+    issue_comments = _public_get("repos/market-predictions/memory/issues/2/comments?per_page=100")
+    if not isinstance(issue_comments, list) or len(issue_comments) >= 100:
+        raise OwnerAdminError("Memory complete issue review evidence unavailable")
+    seen_receipts = set()
+    for item in issue_comments:
+        if not isinstance(item, Mapping):
+            raise OwnerAdminError("Memory issue review item invalid")
+        author = item.get("user") or {}
+        if author.get("login") != EXTERNAL_REVIEW_BOT_LOGIN or author.get("id") != EXTERNAL_REVIEW_BOT_USER_ID:
+            continue
+        text = item.get("body") or ""
+        if not isinstance(text, str):
+            raise OwnerAdminError("Memory review comment body invalid")
+        if "<!-- codex-code-review-finding:v1 -->" in text:
+            raise OwnerAdminError("independent Memory technical finding still requires an engineer")
+        found = re.search(r"(?:\*\*)?Reviewed commit:(?:\*\*)?\s*`([0-9a-f]{10,40})`", text)
+        if found is None or not command["candidate_sha"].startswith(found.group(1)):
+            continue
+        if ("Codex Review: Didn't find any major issues." not in text
+                or item.get("id") not in MEMORY_R0_RECEIPTS
+                or item.get("updated_at") != item.get("created_at")):
+            raise OwnerAdminError("unexpected exact-head Codex issue review finding or altered receipt")
+        seen_receipts.add(item["id"])
+    if seen_receipts != set(MEMORY_R0_RECEIPTS):
+        raise OwnerAdminError("expected historical no-findings technical receipts missing")
+
+    # Never accept an outstanding current-head technical finding.
+    for endpoint in (
+        f"repos/market-predictions/memory/pulls/2/reviews?per_page=100",
+        f"repos/market-predictions/memory/pulls/2/comments?per_page=100",
+    ):
+        items = _public_get(endpoint)
+        if not isinstance(items, list) or len(items) >= 100:
+            raise OwnerAdminError("Memory technical review listing incomplete")
+        for review in items:
+            if not isinstance(review, Mapping):
+                raise OwnerAdminError("Memory review listing invalid")
+            author = review.get("user") or {}
+            if author.get("login") != EXTERNAL_REVIEW_BOT_LOGIN or author.get("id") != EXTERNAL_REVIEW_BOT_USER_ID:
+                continue
+            actual = review.get("original_commit_id") or review.get("commit_id")
+            if actual != command["candidate_sha"]:
+                continue
+            if (endpoint.endswith("/comments?per_page=100")
+                    or review.get("state") == "CHANGES_REQUESTED"
+                    or (review.get("body") and "Didn't find any major issues." not in review["body"])):
+                raise OwnerAdminError("current Memory exact-head technical finding unresolved")
+
+    checks = _public_get(f"repos/market-predictions/memory/commits/{command['candidate_sha']}/check-runs?filter=latest&per_page=100")
+    runs = checks.get("check_runs") if isinstance(checks, Mapping) else None
+    if (not isinstance(runs, list) or checks.get("total_count") != len(runs) or len(runs) >= 100):
+        raise OwnerAdminError("Memory exact-head CI listing unavailable")
+    validate = [run for run in runs if isinstance(run, Mapping) and run.get("name") == "validate"]
+    if len(validate) != 1:
+        raise OwnerAdminError("Memory required CI validate check ambiguous")
+    check = validate[0]
+    app = check.get("app") or {}
+    if (check.get("head_sha") != command["candidate_sha"] or check.get("status") != "completed"
+            or check.get("conclusion") != "success" or app.get("id") != 15368 or app.get("slug") != "github-actions"):
+        raise OwnerAdminError("Memory required exact-head CI is not successful")
+
+    evidence_ref = f"https://github.com/{PUBLIC_REPOSITORY}/issues/{PUBLIC_AUDIT_ISSUE}#issuecomment-{comment_id}"
+    simulated = dict(source)
+    simulated["status"] = "READY"
+    simulated["phase"] = None
+    simulated["external_review"] = {**existing_external, "status": "OWNER_RISK_ACCEPTED", "evidence_ref": evidence_ref}
+    if not _exact_memory_r0_owner_risk_accepted(simulated):
+        raise OwnerAdminError("owner-risk evidence cannot satisfy exact Memory R0 schema binding")
+    return {"evidence_ref": evidence_ref}
+
+
+def accept_memory_r0_owner_risk_v4(
+    queue: Mapping[str, Any], bundle: V4AuthorityBundle,
+    command: Mapping[str, Any], approval: Mapping[str, str], *,
+    now: datetime,
+) -> dict[str, Any]:
+    validate_queue_v4(queue)
+    assert_v4_queue_bound_to_authority(queue, bundle)
+    if queue.get("execution_lock") is not None or not isinstance(approval.get("evidence_ref"), str):
+        raise OwnerAdminError("owner-risk protected queue admission invalid")
+    source = _task_by_public_pr(queue, command)
+    if source.get("status") != "ACTIVE" or source.get("phase") != "REVIEW":
+        raise OwnerAdminError("owner-risk exception already consumed or state drifted")
+    result = deepcopy(queue)
+    task = next(t for t in result["tasks"] if t["task_id"] == source["task_id"])
+    task["external_review"] = {
+        **task["external_review"],
+        "status": "OWNER_RISK_ACCEPTED",
+        "evidence_ref": approval["evidence_ref"],
+    }
+    task["status"] = "READY"
+    task["phase"] = None
+    task["updated_at"] = _ts(now)
+    validate_queue_v4(result)
+    assert_v4_queue_bound_to_authority(result, bundle)
+    return result
+
+
 def plan_owner_admin_transition(
     queue: Mapping[str, Any],
     bundle: V4AuthorityBundle,
@@ -687,6 +859,10 @@ def plan_owner_admin_transition(
     operation = command["operation"]
     if operation == "FINALIZE_INTEGRATED":
         return finalize_integrated_v4(queue, bundle, command, now=now)
+    if operation == "OWNER_ACCEPT_MEMORY_R0_RISK":
+        if approval is None:
+            raise OwnerAdminError("exact owner-risk approval evidence missing")
+        return accept_memory_r0_owner_risk_v4(queue, bundle, command, approval, now=now)
     if operation == "ACTIVATE_ROOT_CANDIDATE":
         if approval is None:
             raise OwnerAdminError("activation requires exact replenishment approval evidence")
@@ -1112,6 +1288,8 @@ def _write_queue_exact(
 
     if operation == "ACTIVATE_ROOT_CANDIDATE":
         _public_replenishment_approval(command["approval_comment_id"], command["approval_body_sha256"])
+    elif operation == "OWNER_ACCEPT_MEMORY_R0_RISK":
+        _memory_r0_owner_risk_evidence(command, state)
     elif operation == "RECONCILE_INTEGRATED":
         fresh_review = _public_internal_review(command, state["queue"])
         fresh_external = None
@@ -1179,7 +1357,9 @@ def main() -> int:
         approval = None
         internal_review = None
         external_review = None
-        if command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
+        if command["operation"] == "OWNER_ACCEPT_MEMORY_R0_RISK":
+            approval = _memory_r0_owner_risk_evidence(command, state)
+        elif command["operation"] == "ACTIVATE_ROOT_CANDIDATE":
             approval = _public_replenishment_approval(
                 command["approval_comment_id"], command["approval_body_sha256"]
             )

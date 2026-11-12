@@ -212,6 +212,55 @@ def _review_matches_candidate(review: Mapping[str, Any], candidate: Mapping[str,
     )
 
 
+
+def _exact_memory_r0_owner_risk_accepted(task: Mapping[str, Any]) -> bool:
+    """One exact owner-risk release, NEVER an independent semantic review PASS.
+
+    The owner-admin gate authenticates the linked original owner audit comment,
+    the control policy and current exact-head CI before persisting this record.
+    This passive validator limits the otherwise broadly shared schema enum.
+    """
+    candidate = task.get("candidate")
+    review = task.get("last_review")
+    external = task.get("external_review")
+    if not all(isinstance(v, Mapping) for v in (candidate, review, external)):
+        return False
+    exact_sha = "ec6c8fabe2f35927e7f6f3e11e3f496e49e26cf6"
+    base_sha = "c407a9c8dfc5617f1a0adc6997a40ddd602ac011"
+    expected_candidate = {
+        "candidate_sha": exact_sha,
+        "candidate_pr_number": 2,
+        "candidate_head_branch": "import/historical-context-phase-1",
+        "expected_base_branch": "main",
+        "expected_base_sha": base_sha,
+    }
+    evidence_ref = external.get("evidence_ref")
+    return (
+        task.get("task_id") == "MISSION--MEMORY_SECOND_BRAIN--2026-11-12-r2--MEM-R0-RECOVER"
+        and task.get("repository") == "market-predictions/memory"
+        and task.get("mission_id") == "MEMORY_SECOND_BRAIN"
+        and task.get("mission_revision") == "2026-11-12-r2"
+        and task.get("gap_id") == "MEM-R0-RECOVER"
+        and task.get("review_policy") == "EXTERNAL"
+        and task.get("integration_policy") == "HOLD_AFTER_PASS"
+        and task.get("status") in {"READY", "DONE"}
+        and task.get("phase") is None
+        and dict(candidate) == expected_candidate
+        and review.get("verdict") == "PASS"
+        and _review_matches_candidate(review, candidate)
+        and external.get("status") == "OWNER_RISK_ACCEPTED"
+        and _review_matches_candidate(external, candidate)
+        and external.get("request_key") == f"MEM-R0-RECOVER--{exact_sha}--main--{base_sha}"
+        and external.get("request_ref") ==
+            "https://github.com/market-predictions/memory/pull/2#issuecomment-6625962600"
+        and isinstance(evidence_ref, str)
+        and re.fullmatch(
+            r"https://github.com/market-predictions/control-engine/issues/106#issuecomment-[1-9][0-9]*",
+            evidence_ref,
+        ) is not None
+    )
+
+
 def _task_review_passed(task: Mapping[str, Any]) -> bool:
     candidate = task.get("candidate")
     review = task.get("last_review")
@@ -274,8 +323,13 @@ def validate_queue_v4(queue: Mapping[str, Any]) -> None:
             if task.get("status") != "ACTIVE" or task.get("phase") != "REVIEW":
                 raise V4ValidationError("pending Mission-drift marker requires ACTIVE/REVIEW")
 
-        if task.get("status") in {"READY", "DONE"} and not _task_review_passed(task):
-            raise V4ValidationError("READY/DONE task lacks exact PASS evidence")
+        if isinstance(external, Mapping) and external.get("status") == "OWNER_RISK_ACCEPTED":
+            if not _exact_memory_r0_owner_risk_accepted(task):
+                raise V4ValidationError("owner-risk status outside exact Memory R0 exception")
+        if task.get("status") in {"READY", "DONE"} and not (
+            _task_review_passed(task) or _exact_memory_r0_owner_risk_accepted(task)
+        ):
+            raise V4ValidationError("READY/DONE task lacks exact review or scoped owner-risk release")
         if task.get("status") == "ACTIVE" and task.get("phase") in {"INTEGRATE", "CONVERGE"} and not _task_review_passed(task):
             raise V4ValidationError("integration/convergence task lacks exact PASS evidence")
 
@@ -319,7 +373,9 @@ def validate_carry_forward_evidence(mission: Mapping[str, Any], queue: Mapping[s
             and task["repository"].lower() == target_repo
             and task["status"] == "DONE"
         ]
-        if len(matches) != 1 or not _task_review_passed(matches[0]):
+        if len(matches) != 1 or not (
+            _task_review_passed(matches[0]) or _exact_memory_r0_owner_risk_accepted(matches[0])
+        ):
             raise V4ValidationError("V4_DONE carry-forward evidence does not resolve exactly")
         if canonical_task_sha256(matches[0]) != item.get("source_task_sha256"):
             raise V4ValidationError("V4_DONE carry-forward digest mismatch")
