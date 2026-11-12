@@ -180,3 +180,91 @@ def test_workflow_binds_existing_owner_identity_and_private_cas():
     assert '"beforeOid": state["runtime_sha"]' in source
     assert '"force": False' in source
     assert "MEMORY_R0_POLICY_BLOB" in source
+
+
+def _mission_pair():
+    from control_engine.v4_authority_io import V4AuthorityBundle
+    from scripts import control_v4_paired_authority_adoption as paired
+    gaps = [
+        {"gap_id": "MEM-R0-RECOVER", "acceptance": ["old semantic review"],
+         "description": "historic H6", "integration_policy": "HOLD_AFTER_PASS",
+         "review_policy": "EXTERNAL", "gap_state": "OPEN", "depends_on": [],
+         "repository": "market-predictions/memory"},
+    ] + [
+        {"gap_id": f"MEM-R{i}-GAP", "acceptance": ["stable"],
+         "integration_policy": "HOLD_AFTER_PASS", "review_policy": "EXTERNAL",
+         "gap_state": "OPEN", "depends_on": [], "repository": "market-predictions/memory"}
+        for i in range(1, 6)
+    ]
+    base = {"mission_id": "MEMORY_SECOND_BRAIN", "mission_revision": "2026-10-20-r1",
+            "repository": "market-predictions/memory", "gaps": gaps,
+            "authority_boundaries": ["strict H6"], "terminal_conditions": ["H6 complete"],
+            "principal_manual_relay_count": 0}
+    amended = deepcopy(base)
+    amended["supersedes_revision"] = base["mission_revision"]
+    amended["mission_revision"] = "2026-11-12-r2"
+    amended["gaps"][0]["acceptance"] = ["OWNER_RISK_ACCEPTED is not a semantic PASS"]
+    amended["gaps"][0]["description"] = "one-time owner risk"
+    amended["authority_boundaries"] = ["risk accepted narrowly"]
+    amended["terminal_conditions"] = ["owner exception verified"]
+    old = V4AuthorityBundle(
+        missions=(base,), authorities=(), mission_blob_shas={"MEMORY_SECOND_BRAIN": "a" * 40},
+        authority_blob_shas={"market-predictions/memory": "2" * 40})
+    new = V4AuthorityBundle(
+        missions=(amended,), authorities=(), mission_blob_shas={"MEMORY_SECOND_BRAIN": "b" * 40},
+        authority_blob_shas={"market-predictions/memory": "2" * 40})
+    return old, new
+
+
+def test_risk_mission_pair_rebinds_single_task_without_touching_others(monkeypatch):
+    from scripts import control_v4_paired_authority_adoption as paired
+    old, new = _mission_pair()
+    monkeypatch.setattr(paired, "validate_queue_v4", lambda q: None)
+    monkeypatch.setattr(paired, "assert_v4_queue_bound_to_authority", lambda *args: None)
+    task = _task()
+    task["task_id"] = paired.MEMORY_TASK
+    task["mission_revision"] = paired.MEMORY_R1_REVISION
+    task["mission_contract_blob_sha"] = "a" * 40
+    task["acceptance"] = ["old semantic review"]
+    others = [{"task_id": f"unrelated-{i}", "preserve": i} for i in range(21)]
+    source = {"version": "4.0", "tasks": others + [task], "execution_lock": None,
+              "principal_manual_relay_count": 0, "migration_facts": []}
+    result = paired.plan_risk_mission_binding(source, old, new)
+    assert len(result["tasks"]) == 22
+    assert result["tasks"][:21] == others
+    assert source["tasks"][-1]["task_id"] == paired.MEMORY_TASK
+    assert result["tasks"][-1]["task_id"] == paired.MEMORY_R2_TASK
+    assert result["tasks"][-1]["mission_contract_blob_sha"] == "b" * 40
+    assert result["tasks"][-1]["acceptance"] == ["OWNER_RISK_ACCEPTED is not a semantic PASS"]
+    assert result["tasks"][-1]["external_review"] == source["tasks"][-1]["external_review"]
+
+
+def test_risk_mission_pair_rejects_unrelated_mission_and_queue_drift(monkeypatch):
+    from scripts import control_v4_paired_authority_adoption as paired
+    old, new = _mission_pair()
+    monkeypatch.setattr(paired, "validate_queue_v4", lambda q: None)
+    monkeypatch.setattr(paired, "assert_v4_queue_bound_to_authority", lambda *args: None)
+    bad_mission = deepcopy(new.missions[0])
+    bad_mission["gaps"][2]["acceptance"] = ["quietly changed"]
+    from control_engine.v4_authority_io import V4AuthorityBundle
+    bad_new = V4AuthorityBundle(missions=(bad_mission,), authorities=new.authorities,
+        mission_blob_shas=new.mission_blob_shas, authority_blob_shas=new.authority_blob_shas)
+    with pytest.raises(paired.PairedAdoptionRejected):
+        paired._assert_risk_mission_delta(old, bad_new)
+    task = _task()
+    task["task_id"] = paired.MEMORY_TASK
+    task["mission_revision"] = paired.MEMORY_R1_REVISION
+    q = {"version": "4.0", "execution_lock": {"do_not_change": True},
+         "tasks": [{"task_id": f"other-{i}"} for i in range(21)] + [task]}
+    with pytest.raises(paired.PairedAdoptionRejected):
+        paired.plan_risk_mission_binding(q, old, new)
+
+
+def test_risk_adoption_command_is_distinct_and_existing_command_retained():
+    from scripts import control_v4_paired_authority_adoption as paired
+    suffix = "1" * 40 + " " + "2" * 40 + " " + "3" * 40
+    cmd1 = f"{paired.COMMAND} {suffix} {paired.CONFIRM}"
+    cmd2 = f"{paired.COMMAND} {suffix} {paired.RISK_CONFIRM}"
+    assert paired.parse_command(cmd1) == paired.parse_command(cmd2)
+    with pytest.raises(paired.PairedAdoptionRejected):
+        paired.parse_command(cmd2.replace(paired.RISK_CONFIRM, "ADOPT_UNVERIFIED"))
