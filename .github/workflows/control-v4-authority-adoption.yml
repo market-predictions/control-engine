@@ -393,6 +393,7 @@ jobs:
           CONTROL_PLANE_TOKEN: ${{ steps.private-token.outputs.token }}
           CONTROL_ENGINE_TOKEN: ${{ github.token }}
           CONTROL_V4_OWNER_COMMAND: ${{ github.event.comment.body }}
+          CONTROL_V4_OWNER_COMMENT_ID: ${{ github.event.comment.id }}
           CONTROL_TARGET_READ_TOKEN: ${{ steps.target-token.outputs.token }}
           CONTROL_TARGET_REPOSITORIES: ${{ steps.target-scope.outputs.full_names }}
         run: python scripts/control_v4_owner_admin.py
