@@ -19,14 +19,14 @@ from scripts import control_v4_review_resume as review
 HEAD = "ec6c8fabe2f35927e7f6f3e11e3f496e49e26cf6"
 BASE = "c407a9c8dfc5617f1a0adc6997a40ddd602ac011"
 OWNER_REF = "https://github.com/market-predictions/control-engine/issues/106#issuecomment-6836000001"
-TASK_ID = "MISSION--MEMORY_SECOND_BRAIN--2026-10-20-r1--MEM-R0-RECOVER"
+TASK_ID = "MISSION--MEMORY_SECOND_BRAIN--2026-11-12-r2--MEM-R0-RECOVER"
 
 
 def _task():
     return {
         "task_id": TASK_ID,
         "mission_id": "MEMORY_SECOND_BRAIN",
-        "mission_revision": "2026-10-20-r1",
+        "mission_revision": "2026-11-12-r2",
         "mission_contract_blob_sha": "1" * 40,
         "repository_authority_blob_sha": "2" * 40,
         "gap_id": "MEM-R0-RECOVER",
