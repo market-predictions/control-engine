@@ -22,6 +22,12 @@ from scripts import control_v4_owner_admin as admin
 
 COMMAND = "CONTROL_PRIVATE_V4_ADOPT_PAIR"
 CONFIRM = "ADOPT_REVIEWED_PRIVATE_MAIN_AND_RUNTIME"
+RISK_CONFIRM = "ADOPT_REVIEWED_MEMORY_R0_RISK_MISSION"
+MEMORY_MISSION_PATH = "control/missions/MEMORY_SECOND_BRAIN.mission.json"
+MEMORY_POLICY_PATH = "control/CONTROL_OPERATING_MODEL.md"
+MEMORY_R2_TASK = "MISSION--MEMORY_SECOND_BRAIN--2026-11-12-r2--MEM-R0-RECOVER"
+MEMORY_R2_REVISION = "2026-11-12-r2"
+MEMORY_R1_REVISION = "2026-10-20-r1"
 MEMORY = "market-predictions/memory"
 MEMORY_TASK = "MISSION--MEMORY_SECOND_BRAIN--2026-10-20-r1--MEM-R0-RECOVER"
 MEMORY_HEAD = "ec6c8fabe2f35927e7f6f3e11e3f496e49e26cf6"
@@ -38,7 +44,7 @@ def parse_command(body: str) -> tuple[str, str, str]:
     if not isinstance(body, str):
         raise PairedAdoptionRejected("paired adoption command absent")
     parts = body.split()
-    if len(parts) != 5 or parts[0] != COMMAND or parts[-1] != CONFIRM:
+    if len(parts) != 5 or parts[0] != COMMAND or parts[-1] not in {CONFIRM, RISK_CONFIRM}:
         raise PairedAdoptionRejected("paired adoption command/confirmation invalid")
     old_main, candidate_main, old_runtime = parts[1:4]
     if any(re.fullmatch(r"[0-9a-f]{40}", x) is None for x in (old_main, candidate_main, old_runtime)):
@@ -75,7 +81,7 @@ def _assert_minimal_authority_delta(old: V4AuthorityBundle, new: V4AuthorityBund
 
 
 
-def assert_regular_authority_file(commit_sha: str, expected_blob_sha: str) -> None:
+def assert_regular_authority_file(commit_sha: str, expected_blob_sha: str, *, path: str = MEMORY_PATH) -> None:
     """Inspect committed Git mode, not just REST contents and changed filenames."""
     commit = admin._private_get(f"repos/{admin.PRIVATE_REPOSITORY}/git/commits/{commit_sha}")
     tree_sha = _sha((commit.get("tree") or {}).get("sha") if isinstance(commit, Mapping) else None)
@@ -83,7 +89,7 @@ def assert_regular_authority_file(commit_sha: str, expected_blob_sha: str) -> No
     if not isinstance(tree, Mapping) or tree.get("truncated") is not False:
         raise PairedAdoptionRejected("complete exact authority Git tree unavailable")
     matches = [entry for entry in tree.get("tree", []) if isinstance(entry, Mapping)
-               and entry.get("path") == MEMORY_PATH]
+               and entry.get("path") == path]
     if (len(matches) != 1 or matches[0].get("type") != "blob"
             or matches[0].get("mode") != "100644"
             or matches[0].get("sha") != expected_blob_sha):
@@ -117,6 +123,88 @@ def plan_one_binding(queue: Mapping[str, Any], old: V4AuthorityBundle, new: V4Au
     comparison["tasks"][indices[0]]["repository_authority_blob_sha"] = original_sha
     if comparison != queue:
         raise PairedAdoptionRejected("unexpected queue mutation beyond the one task binding")
+    return result
+
+
+
+def _memory_mission(bundle: V4AuthorityBundle) -> Mapping[str, Any]:
+    matches = [m for m in bundle.missions if m.get("mission_id") == "MEMORY_SECOND_BRAIN"]
+    if len(matches) != 1:
+        raise PairedAdoptionRejected("Memory Mission missing/ambiguous")
+    return matches[0]
+
+
+def _assert_risk_mission_delta(old: V4AuthorityBundle, new: V4AuthorityBundle) -> tuple[str, str]:
+    if dict(old.authority_blob_shas) != dict(new.authority_blob_shas):
+        raise PairedAdoptionRejected("risk adoption may not change any repository authority")
+    old_shas, new_shas = dict(old.mission_blob_shas), dict(new.mission_blob_shas)
+    if set(old_shas) != set(new_shas):
+        raise PairedAdoptionRejected("risk adoption changed Mission registry")
+    changed = [name for name in old_shas if old_shas[name] != new_shas[name]]
+    if changed != ["MEMORY_SECOND_BRAIN"]:
+        raise PairedAdoptionRejected("risk adoption must change exactly the Memory Mission blob")
+    m0, m1 = deepcopy(_memory_mission(old)), deepcopy(_memory_mission(new))
+    if (m0.get("mission_revision") != MEMORY_R1_REVISION
+            or m1.get("mission_revision") != MEMORY_R2_REVISION
+            or m1.get("supersedes_revision") != MEMORY_R1_REVISION):
+        raise PairedAdoptionRejected("risk Mission revision ancestry mismatch")
+    if len(m0.get("gaps", [])) != 6 or len(m1.get("gaps", [])) != 6:
+        raise PairedAdoptionRejected("risk Mission gap cardinality changed")
+    old_r0 = next((g for g in m0["gaps"] if g.get("gap_id") == "MEM-R0-RECOVER"), None)
+    new_r0 = next((g for g in m1["gaps"] if g.get("gap_id") == "MEM-R0-RECOVER"), None)
+    if not isinstance(old_r0, dict) or not isinstance(new_r0, dict):
+        raise PairedAdoptionRejected("risk R0 Mission gap missing")
+    if "OWNER_RISK_ACCEPTED" not in " ".join(new_r0.get("acceptance", [])):
+        raise PairedAdoptionRejected("risk Mission does not explicitly distinguish owner-risk")
+    if new_r0.get("integration_policy") != "HOLD_AFTER_PASS" or new_r0.get("review_policy") != "EXTERNAL":
+        raise PairedAdoptionRejected("risk Mission weakened integration/review boundary")
+    if {k: v for k, v in old_r0.items() if k not in {"acceptance", "description"}} != {
+            k: v for k, v in new_r0.items() if k not in {"acceptance", "description"}}:
+        raise PairedAdoptionRejected("risk R0 gap changed outside acceptance and description")
+    if m0["gaps"][1:] != m1["gaps"][1:]:
+        raise PairedAdoptionRejected("risk Mission changed a downstream gap")
+    for key in ("mission_revision", "supersedes_revision", "gaps", "authority_boundaries", "terminal_conditions"):
+        m0.pop(key, None)
+        m1.pop(key, None)
+    if m0 != m1:
+        raise PairedAdoptionRejected("risk Mission changed unrelated identity, scope or business outcomes")
+    return old_shas["MEMORY_SECOND_BRAIN"], new_shas["MEMORY_SECOND_BRAIN"]
+
+
+def plan_risk_mission_binding(
+    queue: Mapping[str, Any], old: V4AuthorityBundle, new: V4AuthorityBundle,
+) -> dict[str, Any]:
+    """Atomically move only the existing R0 task into the authorized new Mission."""
+    validate_queue_v4(queue)
+    assert_v4_queue_bound_to_authority(queue, old)
+    _old_blob, new_blob = _assert_risk_mission_delta(old, new)
+    if queue.get("execution_lock") is not None or len(queue["tasks"]) != EXPECTED_TASK_COUNT:
+        raise PairedAdoptionRejected("risk Mission queue locked or task cardinality drifted")
+    matches = [i for i, t in enumerate(queue["tasks"]) if t.get("task_id") == MEMORY_TASK]
+    if len(matches) != 1:
+        raise PairedAdoptionRejected("risk R0 original task is missing/ambiguous")
+    index = matches[0]
+    source = queue["tasks"][index]
+    if (source.get("mission_revision") != MEMORY_R1_REVISION
+            or source.get("status") != "ACTIVE" or source.get("phase") != "REVIEW"
+            or (source.get("candidate") or {}).get("candidate_sha") != MEMORY_HEAD
+            or (source.get("candidate") or {}).get("expected_base_sha") != MEMORY_BASE
+            or (source.get("external_review") or {}).get("status") != "PENDING"
+            or source.get("integration_policy") != "HOLD_AFTER_PASS"):
+        raise PairedAdoptionRejected("risk R0 source task drifted from documented exact head/base/review")
+    result = deepcopy(queue)
+    task = result["tasks"][index]
+    task["task_id"] = MEMORY_R2_TASK
+    task["mission_revision"] = MEMORY_R2_REVISION
+    task["mission_contract_blob_sha"] = new_blob
+    task["acceptance"] = list(next(g for g in _memory_mission(new)["gaps"] if g["gap_id"] == "MEM-R0-RECOVER")["acceptance"])
+    validate_queue_v4(result)
+    assert_v4_queue_bound_to_authority(result, new)
+    comparison = deepcopy(result)
+    old_task = deepcopy(source)
+    comparison["tasks"][index] = old_task
+    if comparison != queue or len(result["tasks"]) != EXPECTED_TASK_COUNT:
+        raise PairedAdoptionRejected("risk Mission changed unrelated queue fields")
     return result
 
 
@@ -158,6 +246,7 @@ def _commit_runtime(queue: Mapping[str, Any], old_runtime: str, current_queue_bl
 
 def adopt_pair(body: str) -> tuple[str, str]:
     expected_main, candidate_main, expected_runtime = parse_command(body)
+    risk_mission = body.split()[-1] == RISK_CONFIRM
     repository = admin._private_get(f"repos/{admin.PRIVATE_REPOSITORY}")
     node_id = repository.get("node_id") if isinstance(repository, Mapping) else None
     if (not isinstance(repository, Mapping)
@@ -171,22 +260,38 @@ def adopt_pair(body: str) -> tuple[str, str]:
     comparison = admin._private_get(
         f"repos/{admin.PRIVATE_REPOSITORY}/compare/{expected_main}...{candidate_main}"
     )
+    changed_paths = sorted(x.get("filename") for x in comparison.get("files", []))
+    expected_paths = sorted([MEMORY_MISSION_PATH, MEMORY_POLICY_PATH]) if risk_mission else [MEMORY_PATH]
     if (not isinstance(comparison, Mapping)
             or comparison.get("status") != "ahead"
             or comparison.get("behind_by") != 0
             or (comparison.get("merge_base_commit") or {}).get("sha") != expected_main
             or not isinstance(comparison.get("ahead_by"), int)
             or comparison["ahead_by"] < 1
-            or [x.get("filename") for x in comparison.get("files", [])] != [MEMORY_PATH]):
-        raise PairedAdoptionRejected("candidate not an exact one-file descendant")
+            or changed_paths != expected_paths):
+        raise PairedAdoptionRejected("candidate does not match exact approved authority file scope")
 
     old_bundle = admin._load_bundle(expected_main)
     new_bundle = admin._load_bundle(candidate_main)
-    old_authority_blob, new_authority_blob = _assert_minimal_authority_delta(old_bundle, new_bundle)
-    assert_regular_authority_file(expected_main, old_authority_blob)
-    assert_regular_authority_file(candidate_main, new_authority_blob)
+    if risk_mission:
+        old_mission_blob, new_mission_blob = _assert_risk_mission_delta(old_bundle, new_bundle)
+        assert_regular_authority_file(expected_main, old_mission_blob, path=MEMORY_MISSION_PATH)
+        assert_regular_authority_file(candidate_main, new_mission_blob, path=MEMORY_MISSION_PATH)
+        old_policy, old_policy_blob = admin._private_file(MEMORY_POLICY_PATH, expected_main)
+        new_policy, new_policy_blob = admin._private_file(MEMORY_POLICY_PATH, candidate_main)
+        if (old_policy_blob == new_policy_blob
+                or "### 6.2 One-time Memory R0 owner-risk acceptance" not in new_policy
+                or "MEMORY_SECOND_BRAIN@2026-11-12-r2" not in new_policy
+                or "SEMANTIC_ASSURANCE_NOT_ESTABLISHED" not in new_policy):
+            raise PairedAdoptionRejected("revised risk policy missing exact scope and truthful risk semantics")
+        assert_regular_authority_file(candidate_main, new_policy_blob, path=MEMORY_POLICY_PATH)
+    else:
+        old_authority_blob, new_authority_blob = _assert_minimal_authority_delta(old_bundle, new_bundle)
+        assert_regular_authority_file(expected_main, old_authority_blob)
+        assert_regular_authority_file(candidate_main, new_authority_blob)
     queue, original_blob = admin._private_json(admin.QUEUE_PATH, expected_runtime)
-    planned = plan_one_binding(queue, old_bundle, new_bundle)
+    planned = (plan_risk_mission_binding(queue, old_bundle, new_bundle) if risk_mission
+               else plan_one_binding(queue, old_bundle, new_bundle))
     new_runtime = _commit_runtime(planned, expected_runtime, original_blob)
 
     # Final two-reference old-SHA check. Inert Git objects above have no runtime effect.
