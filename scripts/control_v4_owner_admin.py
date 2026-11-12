@@ -742,6 +742,36 @@ def _memory_r0_owner_risk_evidence(
 
     for receipt_id in MEMORY_R0_RECEIPTS:
         _public_external_review_receipt({**dict(command), "external_review_comment_id": receipt_id})
+
+    # Re-check the entire bounded issue-comment review stream. The normal
+    # resumer rejects current-head findings here; the exceptional path must
+    # never waive technical objections in addition to missing H6 semantics.
+    issue_comments = _public_get("repos/market-predictions/memory/issues/2/comments?per_page=100")
+    if not isinstance(issue_comments, list) or len(issue_comments) >= 100:
+        raise OwnerAdminError("Memory complete issue review evidence unavailable")
+    seen_receipts = set()
+    for item in issue_comments:
+        if not isinstance(item, Mapping):
+            raise OwnerAdminError("Memory issue review item invalid")
+        author = item.get("user") or {}
+        if author.get("login") != EXTERNAL_REVIEW_BOT_LOGIN or author.get("id") != EXTERNAL_REVIEW_BOT_USER_ID:
+            continue
+        text = item.get("body") or ""
+        if not isinstance(text, str):
+            raise OwnerAdminError("Memory review comment body invalid")
+        if "<!-- codex-code-review-finding:v1 -->" in text:
+            raise OwnerAdminError("independent Memory technical finding still requires an engineer")
+        found = re.search(r"(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`([0-9a-f]{10,40})`", text)
+        if found is None or not command["candidate_sha"].startswith(found.group(1)):
+            continue
+        if ("Codex Review: Didn't find any major issues." not in text
+                or item.get("id") not in MEMORY_R0_RECEIPTS
+                or item.get("updated_at") != item.get("created_at")):
+            raise OwnerAdminError("unexpected exact-head Codex issue review finding or altered receipt")
+        seen_receipts.add(item["id"])
+    if seen_receipts != set(MEMORY_R0_RECEIPTS):
+        raise OwnerAdminError("expected historical no-findings technical receipts missing")
+
     # Never accept an outstanding current-head technical finding.
     for endpoint in (
         f"repos/market-predictions/memory/pulls/2/reviews?per_page=100",
@@ -759,7 +789,9 @@ def _memory_r0_owner_risk_evidence(
             actual = review.get("original_commit_id") or review.get("commit_id")
             if actual != command["candidate_sha"]:
                 continue
-            if endpoint.endswith("/comments?per_page=100") or review.get("state") == "CHANGES_REQUESTED":
+            if (endpoint.endswith("/comments?per_page=100")
+                    or review.get("state") == "CHANGES_REQUESTED"
+                    or (review.get("body") and "Didn't find any major issues." not in review["body"])):
                 raise OwnerAdminError("current Memory exact-head technical finding unresolved")
 
     checks = _public_get(f"repos/market-predictions/memory/commits/{command['candidate_sha']}/check-runs?filter=latest&per_page=100")
