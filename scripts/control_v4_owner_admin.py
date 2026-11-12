@@ -761,7 +761,7 @@ def _memory_r0_owner_risk_evidence(
             raise OwnerAdminError("Memory review comment body invalid")
         if "<!-- codex-code-review-finding:v1 -->" in text:
             raise OwnerAdminError("independent Memory technical finding still requires an engineer")
-        found = re.search(r"(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`([0-9a-f]{10,40})`", text)
+        found = re.search(r"(?:\*\*)?Reviewed commit:(?:\*\*)?\s*`([0-9a-f]{10,40})`", text)
         if found is None or not command["candidate_sha"].startswith(found.group(1)):
             continue
         if ("Codex Review: Didn't find any major issues." not in text
