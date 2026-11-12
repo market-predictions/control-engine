@@ -116,7 +116,7 @@ ACTIVATE_COMMAND_KEYS = {
 APPROVAL_KEYS = {"repository", "authority_key", "eligible_activation_keys"}
 RISK_COMMAND_KEYS = {"operation", *TARGET_KEYS, "risk_acknowledgement"}
 RISK_ACK = "SEMANTIC_ASSURANCE_NOT_ESTABLISHED"
-MEMORY_R0_POLICY_BLOB = "c041b2016544af3a16851842424d1e91fa6a76df"
+MEMORY_R0_POLICY_BLOB = "4a3373c441827531e96a5fbb9f09d5d0257f6f09"
 MEMORY_R0_RECEIPTS = (6626067758, 6832862746)
 
 
@@ -727,7 +727,7 @@ def _memory_r0_owner_risk_evidence(
     source = _task_by_public_pr(state["queue"], command)
     candidate = candidate_identity(command)
     existing_external = source.get("external_review") or {}
-    if (source.get("task_id") != "MISSION--MEMORY_SECOND_BRAIN--2026-10-20-r1--MEM-R0-RECOVER"
+    if (source.get("task_id") != "MISSION--MEMORY_SECOND_BRAIN--2026-11-12-r2--MEM-R0-RECOVER"
             or source.get("status") != "ACTIVE" or source.get("phase") != "REVIEW"
             or source.get("review_policy") != "EXTERNAL" or source.get("integration_policy") != "HOLD_AFTER_PASS"
             or source.get("candidate") != candidate
