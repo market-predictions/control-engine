@@ -268,3 +268,73 @@ def test_risk_adoption_command_is_distinct_and_existing_command_retained():
     assert paired.parse_command(cmd1) == paired.parse_command(cmd2)
     with pytest.raises(paired.PairedAdoptionRejected):
         paired.parse_command(cmd2.replace(paired.RISK_CONFIRM, "ADOPT_UNVERIFIED"))
+
+
+@pytest.mark.parametrize("injection", [
+    "new_issue_finding",
+    "new_issue_without_reviewed_head",
+    "commented_review_finding",
+    "inline_finding",
+    "ci_failed",
+    "policy_not_adopted",
+    "owner_comment_edited",
+])
+def test_owner_risk_evidence_fails_closed_on_review_and_authority_drift(monkeypatch, injection):
+    task = _task()
+    command = admin.parse_owner_admin_command(admin.PREFIX + json.dumps({
+        "operation": "OWNER_ACCEPT_MEMORY_R0_RISK",
+        "repository": task["repository"], **task["candidate"],
+        "risk_acknowledgement": "SEMANTIC_ASSURANCE_NOT_ESTABLISHED",
+    }))
+    raw = admin.PREFIX + json.dumps(command, separators=(",", ":"))
+    monkeypatch.setenv("CONTROL_V4_OWNER_COMMENT_ID", "900")
+    monkeypatch.setenv("CONTROL_V4_OWNER_COMMAND", raw)
+    policy_blob = admin.MEMORY_R0_POLICY_BLOB if injection != "policy_not_adopted" else "0" * 40
+    monkeypatch.setattr(admin, "_private_file",
+        lambda path, ref: ("### 6.2 One-time Memory R0 owner-risk acceptance", policy_blob))
+    monkeypatch.setattr(admin, "_public_external_review_receipt", lambda c: {"id": c["external_review_comment_id"]})
+    bot = {"login": admin.EXTERNAL_REVIEW_BOT_LOGIN, "id": admin.EXTERNAL_REVIEW_BOT_USER_ID}
+    receipts = [
+        {"id": rid, "user": bot, "created_at": "2026-11-12T18:50:00Z",
+         "updated_at": "2026-11-12T18:50:00Z",
+         "body": f"Codex Review: Didn't find any major issues.\nReviewed commit: `ec6c8fabe2`"}
+        for rid in admin.MEMORY_R0_RECEIPTS
+    ]
+    if injection == "new_issue_finding":
+        receipts.append({"id": 9991, "user": bot, "created_at": "2026-11-12T18:51:00Z",
+                         "updated_at": "2026-11-12T18:51:00Z",
+                         "body": "Reviewed commit: `ec6c8fabe2`\nP1 unresolved"})
+    if injection == "new_issue_without_reviewed_head":
+        receipts.append({"id": 9992, "user": bot, "created_at": "2026-11-12T18:51:00Z",
+                         "updated_at": "2026-11-12T18:51:00Z",
+                         "body": "<!-- codex-code-review-finding:v1 --> P1"})
+    reviews = []
+    inline = []
+    if injection == "commented_review_finding":
+        reviews = [{"user": bot, "commit_id": HEAD, "state": "COMMENTED", "body": "P1 issue found"}]
+    if injection == "inline_finding":
+        inline = [{"user": bot, "original_commit_id": HEAD, "body": "P1 issue found"}]
+    owner = {"id": 900, "issue_url": f"{admin.API}/repos/{admin.PUBLIC_REPOSITORY}/issues/106",
+             "user": {"login": admin.PRINCIPAL_LOGIN, "id": admin.PRINCIPAL_USER_ID},
+             "author_association": "OWNER", "created_at": "2026-11-12T21:25:00Z",
+             "updated_at": "2026-11-12T21:25:00Z", "body": raw}
+    if injection == "owner_comment_edited":
+        owner["updated_at"] = "2026-11-12T21:25:01Z"
+    check = {"name": "validate", "head_sha": HEAD, "status": "completed",
+             "conclusion": "failure" if injection == "ci_failed" else "success",
+             "app": {"id": 15368, "slug": "github-actions"}}
+    def public(path):
+        if path.endswith("/issues/comments/900"):
+            return owner
+        if path.endswith("/issues/2/comments?per_page=100"):
+            return receipts
+        if path.endswith("/pulls/2/reviews?per_page=100"):
+            return reviews
+        if path.endswith("/pulls/2/comments?per_page=100"):
+            return inline
+        if "/check-runs?" in path:
+            return {"total_count": 1, "check_runs": [check]}
+        raise AssertionError(path)
+    monkeypatch.setattr(admin, "_public_get", public)
+    with pytest.raises(admin.OwnerAdminError):
+        admin._memory_r0_owner_risk_evidence(command, {"main_sha": "f" * 40, "queue": _queue(task)})
