@@ -236,10 +236,10 @@ def _exact_memory_r0_owner_risk_accepted(task: Mapping[str, Any]) -> bool:
     }
     evidence_ref = external.get("evidence_ref")
     return (
-        task.get("task_id") == "MISSION--MEMORY_SECOND_BRAIN--2026-10-20-r1--MEM-R0-RECOVER"
+        task.get("task_id") == "MISSION--MEMORY_SECOND_BRAIN--2026-11-12-r2--MEM-R0-RECOVER"
         and task.get("repository") == "market-predictions/memory"
         and task.get("mission_id") == "MEMORY_SECOND_BRAIN"
-        and task.get("mission_revision") == "2026-10-20-r1"
+        and task.get("mission_revision") == "2026-11-12-r2"
         and task.get("gap_id") == "MEM-R0-RECOVER"
         and task.get("review_policy") == "EXTERNAL"
         and task.get("integration_policy") == "HOLD_AFTER_PASS"
