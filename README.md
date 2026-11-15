@@ -1,3 +1,17 @@
+# Control Engine — FROZEN (2026-11-15)
+
+**This repository is frozen.** The owner replaced the Control Autonomy V4 model with an
+outcome-first model: each project has one `OUTCOME.md` (goal, definition of done, what
+needs the owner) and one `AGENTS.md` (working rules for any AI), and is checked by
+acceptance tests on its product. See `market-predictions/control-plane` → `README.md`.
+
+- All workflows here are **disabled** (incl. the hourly runtime carrier). Nothing in this
+  repository acts on other repositories any more.
+- The code is kept unchanged for reference. Do not re-enable workflows or extend this
+  engine; new work goes into the products themselves.
+
+---
+
 # Control Engine
 
 Deterministic Control validation, GitHub transport and guarded private-state carrier. **Not an AI programmer or a second Control authority.**
